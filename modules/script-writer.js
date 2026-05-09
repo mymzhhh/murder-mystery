@@ -113,12 +113,18 @@ async function writeScript(userInput, onProgress) {
     };
   }
 
-  // 3. 构建增强的 prompt（注入去重约束）
+  // 3. 构建增强的 prompt
   let enhancedInput = userInput;
+  const isPVE = /NPC|PVE|对抗|嫌疑人|侦探|探案|推理者/.test(userInput);
+
   if (playerCount > 0) {
-    enhancedInput += `\n\n【硬性要求：角色数量必须精确为 ${playerCount} 人，不能多也不能少】`;
+    if (isPVE) {
+      enhancedInput += `\n\n【硬性要求】这是一个 ${playerCount} 人游玩的PVE剧本。剧本中只有 ${playerCount} 个玩家角色（侦探/调查员），其余为NPC嫌疑人。所有角色（玩家+NPC）总数不得超过 ${MAX_PLAYERS} 人。`;
+    } else {
+      enhancedInput += `\n\n【硬性要求：角色总数必须精确为 ${playerCount} 人，不能多也不能少。每增加一个角色都会导致剧本无法使用！】`;
+    }
   } else {
-    enhancedInput += `\n\n【硬性要求：角色数量不能超过 ${MAX_PLAYERS} 人】`;
+    enhancedInput += `\n\n【硬性要求：角色总数不能超过 ${MAX_PLAYERS} 人，且必须包含至少2个角色。】`;
   }
 
   if (existing.length > 0) {
@@ -145,9 +151,31 @@ async function writeScript(userInput, onProgress) {
   const contentToSave = result.fullScript.substring(0, 50000);
   await addMessage(session.sessionId, "assistant", contentToSave);
 
-  // 7. 解析并缓存元数据
+  // 7. 验证角色数量
   const parsed = parseScript(result.fullScript);
   const characterNames = parsed.characters?.map(c => c.name) || [];
+  const actualCount = characterNames.length;
+
+  // 非PVE模式：角色数必须匹配
+  if (playerCount > 0 && !isPVE && actualCount > 0 && actualCount !== playerCount) {
+    // 删除不合格会话
+    await deleteSession(session.sessionId);
+    return {
+      ok: false,
+      error: `剧本生成的角色数为 ${actualCount} 人，但您要求的是 ${playerCount} 人。请重新生成并明确指定角色数量。`,
+      actualCount, expectedCount: playerCount,
+    };
+  }
+
+  // PVE模式：总角色数不能超限
+  if (isPVE && actualCount > MAX_PLAYERS) {
+    await deleteSession(session.sessionId);
+    return {
+      ok: false,
+      error: `剧本生成了 ${actualCount} 个角色，超过最大限制 ${MAX_PLAYERS} 人。请尝试重新生成。`,
+      actualCount, maxPlayers: MAX_PLAYERS,
+    };
+  }
 
   return {
     ok: true,
