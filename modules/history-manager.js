@@ -9,18 +9,23 @@ let redis = null;
 
 function getRedis() {
   if (!redis) {
-    redis = new Redis(REDIS_URL, {
+    var opts = {
       maxRetriesPerRequest: 2,
-      retryStrategy(times) {
+      retryStrategy: function(times) {
         if (times > 10) return null;
         return Math.min(times * 500, 5000);
       },
       lazyConnect: true,
       enableOfflineQueue: false,
-    });
+    };
+    // Railway Redis 需要 TLS
+    if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) {
+      opts.tls = { rejectUnauthorized: false };
+    }
+    redis = new Redis(REDIS_URL, opts);
 
-    redis.on("error", (err) => {
-      // 非致命：Redis 不可用时静默处理
+    redis.on("error", function(err) {
+      console.error("Redis:", err.message);
     });
 
     redis.on("connect", () => {

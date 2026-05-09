@@ -8,12 +8,9 @@ let redis = null;
 
 function getRedis() {
   if (!redis) {
-    redis = new Redis(REDIS_URL, {
-      maxRetriesPerRequest: 2,
-      retryStrategy(t) { if (t > 10) return null; return Math.min(t * 500, 5000); },
-      lazyConnect: true,
-      enableOfflineQueue: false,
-    });
+    var opts = { maxRetriesPerRequest: 2, retryStrategy: function(t) { return t > 10 ? null : Math.min(t * 500, 5000); }, lazyConnect: true, enableOfflineQueue: false };
+    if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) opts.tls = { rejectUnauthorized: false };
+    redis = new Redis(REDIS_URL, opts);
     redis.on("error", function() {});
   }
   return redis;

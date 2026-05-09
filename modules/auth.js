@@ -8,7 +8,9 @@ let redis = null;
 
 function getRedis() {
   if (!redis) {
-    redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 2, retryStrategy(t) { return t > 10 ? null : Math.min(t * 500, 5000); }, enableOfflineQueue: false });
+    var opts = { lazyConnect: true, maxRetriesPerRequest: 2, retryStrategy: function(t) { return t > 10 ? null : Math.min(t * 500, 5000); }, enableOfflineQueue: false };
+    if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) opts.tls = { rejectUnauthorized: false };
+    redis = new Redis(REDIS_URL, opts);
     redis.on("error", function() {});
   }
   return redis;
