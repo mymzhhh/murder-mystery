@@ -27,14 +27,27 @@ async function buildMurderMystery(userInput, onProgress) {
   // 解析角色名称（调用模型以结构化格式输出）
   onProgress("extract", "正在解析角色列表...");
   const characterNames = await extractCharacterNames(report.framework);
-  onProgress("characters", `即将撰写 ${characterNames.length} 个角色的个人剧本...`);
-  const frameworkSummary = summarizeFramework(report.framework);
+  // 检测每个角色的类型（玩家/NPC）
+  const charTypes = {};
+  for (const name of characterNames) {
+    // 在框架中搜索该角色附近的NPC/玩家标记
+    const idx = report.framework.indexOf(name);
+    const ctx = idx >= 0 ? report.framework.substring(Math.max(0, idx - 200), Math.min(report.framework.length, idx + 500)) : "";
+    charTypes[name] = /【NPC】|NPC嫌疑人/.test(ctx) ? "npc" : "player";
+  }
+
+  const playerChars = characterNames.filter(n => charTypes[n] === "player");
+  const npcChars = characterNames.filter(n => charTypes[n] === "npc");
+  onProgress("characters", `即将撰写 ${playerChars.length} 个玩家剧本 + ${npcChars.length} 个NPC剧本...`);
 
   const characterScripts = {};
-  // 逐个生成（避免 API 限流）
-  for (let i = 0; i < characterNames.length; i++) {
-    const name = characterNames[i];
-    onProgress("characters", `正在撰写角色剧本 (${i + 1}/${characterNames.length}): ${name}`);
+  const allChars = [...playerChars, ...npcChars]; // 先玩家后NPC
+  for (let i = 0; i < allChars.length; i++) {
+    const name = allChars[i];
+    const type = charTypes[name];
+    const icon = type === "npc" ? "[NPC]" : "[玩家]";
+    onProgress(type === "npc" ? "npc_script" : "player_script",
+      `撰写${icon}角色剧本 (${i + 1}/${allChars.length}): ${name}`);
     const charPrompt = stages.characterScript
       .replace("{characterName}", name)
       .replace("{frameworkSummary}", frameworkSummary);
