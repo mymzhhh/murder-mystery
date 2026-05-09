@@ -124,11 +124,15 @@ async function splitScript(sessionId, onProgress) {
     dm: {},
   };
 
-  // 1. 切分角色剧本
+  // 1. 切分角色剧本（区分玩家/NPC）
   const characters = parsed.characters || [];
-  for (let i = 0; i < characters.length; i++) {
-    const char = characters[i];
-    onProgress("character", `纯化角色剧本 (${i + 1}/${characters.length}): ${char.name}`);
+  const playerChars = characters.filter(c => c.roleType !== "npc");
+  const npcChars = characters.filter(c => c.roleType === "npc");
+
+  // 先处理玩家角色
+  for (let i = 0; i < playerChars.length; i++) {
+    const char = playerChars[i];
+    onProgress("player_script", `纯化玩家剧本 (${i + 1}/${playerChars.length}): ${char.name}`);
     const rawScript = char.script?.fullScript || char.script?.story || JSON.stringify(char);
     const purified = await purifyPlayerScript(char.name, rawScript, char.isMurderer);
 
@@ -138,7 +142,26 @@ async function splitScript(sessionId, onProgress) {
       isMurderer: char.isMurderer || false,
       occupation: char.occupation || "",
       age: char.age || "",
+      roleType: "player",
     };
+  }
+
+  // 再处理NPC（简化版本）
+  for (let i = 0; i < npcChars.length; i++) {
+    const char = npcChars[i];
+    onProgress("npc_script", `纯化NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
+    const rawScript = char.script?.fullScript || char.script?.story || JSON.stringify(char);
+    const purified = await purifyPlayerScript(char.name, rawScript, char.isMurderer);
+
+    result.characters[char.name] = {
+      playerScript: purified.substring(0, 2000), // NPC剧本精简
+      secret: char.script?.secret || char.secret || "",
+      isMurderer: char.isMurderer || false,
+      occupation: char.occupation || "",
+      age: char.age || "",
+      roleType: "npc",
+    };
+  }
   }
 
   // 2. 切分线索
@@ -193,9 +216,10 @@ async function saveToRedis(sessionId, result) {
   for (const [name, data] of Object.entries(result.characters)) {
     pipeline.hset(`split:${sessionId}:char:${name}`, {
       name,
-      playerScript: data.playerScript,
-      secret: data.secret,
+      playerScript: data.playerScript || "",
+      secret: data.secret || "",
       isMurderer: data.isMurderer ? "1" : "0",
+      roleType: data.roleType || "player",
       occupation: data.occupation || "",
       age: data.age || "",
     });

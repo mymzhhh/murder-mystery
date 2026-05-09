@@ -77,13 +77,41 @@ async function reviewScript(sessionId) {
 
   const parsed = parseScript(markdown);
 
+  // 统计角色类型
+  const chars = parsed.characters || [];
+  const playerCount = chars.filter(c => c.roleType !== "npc").length;
+  const npcCount = chars.filter(c => c.roleType === "npc").length;
+  const totalCount = chars.length;
+
+  // 硬性约束检查
+  const constraintErrors = [];
+  if (totalCount > 9) constraintErrors.push(`总角色数超限(${totalCount}/9)`);
+  if (playerCount > 6) constraintErrors.push(`玩家角色数超限(${playerCount}/6)`);
+  if (npcCount > 3) constraintErrors.push(`NPC数超限(${npcCount}/3)`);
+
+  if (constraintErrors.length > 0) {
+    return {
+      ok: true,
+      review: {
+        sessionId, parsed,
+        totalScore: 20,
+        passed: false,
+        scores: { storyCompleteness: 20, murdererDesign: 20, clueSystem: 20, characterDesign: 20, playability: 20 },
+        strengths: [],
+        weaknesses: [],
+        revisionAdvice: `角色数量违反硬性约束：${constraintErrors.join("；")}。玩家≤6、NPC≤3、总计≤9。请重新生成。`,
+      }
+    };
+  }
+
   // 构建评测上下文
   const context = `## 剧本基本信息
 - 标题：《${parsed.title || "未知"}》
 - 时代背景：${parsed.setting?.era || "未知"}
 - 地点：${parsed.setting?.location || "未知"}
-- 角色数量：${parsed.characters?.length || 0}
-- 角色：${parsed.characters?.map(c => c.name).join("、") || "未知"}
+- 玩家角色：${playerCount}人 / NPC嫌疑人：${npcCount}人 / 总计：${totalCount}人
+- 玩家角色列表：${chars.filter(c => c.roleType !== "npc").map(c => c.name).join("、") || "未知"}
+- NPC嫌疑人：${chars.filter(c => c.roleType === "npc").map(c => c.name).join("、") || "无"}
 - 凶手：${parsed.murderer?.name || "未知"}
 - 动机：${(parsed.murderer?.motive || "").substring(0, 500)}
 - 手法：${(parsed.murderer?.method || "").substring(0, 500)}
