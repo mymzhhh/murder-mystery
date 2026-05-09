@@ -207,6 +207,9 @@
         var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
         while (true) {
           var rd = await reader.read(); if (rd.done) break;
+          buf += dec.decode(rd.value, { stream: true });
+          var lines = buf.split("\n"); buf = lines.pop() || ""; var et = "";
+          for (var i = 0; i < lines.length; i++) {
             if (lines[i].startsWith("event: ")) et = lines[i].slice(7);
             else if (lines[i].startsWith("data: ")) {
               try {
