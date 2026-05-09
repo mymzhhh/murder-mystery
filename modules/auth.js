@@ -9,7 +9,7 @@ let redis = null;
 function getRedis() {
   if (!redis) {
     var opts = { lazyConnect: true, maxRetriesPerRequest: null, retryStrategy: function(t) { return Math.min(t * 1000, 10000); }, enableOfflineQueue: true };
-    if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) opts.tls = { rejectUnauthorized: false };
+    if (REDIS_URL.startsWith("rediss://")) opts.tls = { rejectUnauthorized: false };
     redis = new Redis(REDIS_URL, opts);
     redis.on("error", function() {});
   }

@@ -18,7 +18,7 @@ function getRedis() {
       enableOfflineQueue: true,
     };
     // Railway Redis 需要 TLS
-    if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) {
+    if (REDIS_URL.startsWith("rediss://")) {
       opts.tls = { rejectUnauthorized: false };
     }
     redis = new Redis(REDIS_URL, opts);
