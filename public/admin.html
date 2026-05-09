@@ -178,6 +178,14 @@
     }
 
     // Step 2-5: 生成→评测→切分
+    var _abortController = null;
+
+    function cancelPipeline() {
+      if (_abortController) { _abortController.abort(); _abortController = null; }
+      pipeActive(1);
+      renderPipeline();
+    }
+
     async function step2Generate() {
       var input = document.getElementById("optimizedInput").value.trim();
       if (!input) return alert("请输入剧本需求");
@@ -185,18 +193,20 @@
       pipeActive(3);
       var el = document.getElementById("pipelineContent");
       el.innerHTML = '<div class="progress-steps"></div>';
+      el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-danger btn-sm" onclick="cancelPipeline()">取消生成</button></div>';
+
+      _abortController = new AbortController();
+      var cancelled = false;
 
       try {
         var res = await fetch("/api/admin/pipeline/run", {
           method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
           body: JSON.stringify({ input: input }),
+          signal: _abortController.signal,
         });
         var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
         while (true) {
           var rd = await reader.read(); if (rd.done) break;
-          buf += dec.decode(rd.value, { stream: true });
-          var lines = buf.split("\n"); buf = lines.pop() || ""; var et = "";
-          for (var i = 0; i < lines.length; i++) {
             if (lines[i].startsWith("event: ")) et = lines[i].slice(7);
             else if (lines[i].startsWith("data: ")) {
               try {
@@ -231,7 +241,15 @@
             }
           }
         }
-      } catch (e) { el.innerHTML += '<span style="color:var(--danger);">流水线失败: ' + e.message + '</span>'; pipeActive(1); }
+      } catch (e) {
+        if (e.name === "AbortError") {
+          el.innerHTML = '<div style="color:var(--warning);padding:12px;">已取消生成</div>';
+          el.innerHTML += '<div class="pipeline-buttons"><button class="btn btn-primary" onclick="renderPipeline()">重新开始</button></div>';
+        } else {
+          el.innerHTML += '<span style="color:var(--danger);">流水线失败: ' + e.message + '</span>';
+        }
+        pipeActive(1);
+      } finally { _abortController = null; }
     }
 
     async function loadScripts() {
