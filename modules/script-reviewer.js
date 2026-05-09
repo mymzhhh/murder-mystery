@@ -30,7 +30,7 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
 2. **凶手设计 (25%)**：
    - 凶手的动机是否充分且深刻？（不能是简单的仇杀或财杀）
    - 作案手法是否新颖且符合世界观？
-   - 手法在故事背景下是否真实可行？`;
+   - 手法在故事背景下是否真实可行？
 
 3. **线索系统 (20%)**：
    - 线索是否分层清晰？（表面→深入→关键）
@@ -40,28 +40,19 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
 4. **角色设计 (15%)**：
    - 每个角色是否都有独立的故事和秘密？
    - 角色之间是否有复杂的利益纠葛？
-   - 是否每个角色都有作案动机（增加推理难度）？
 
 5. **可玩性 (15%)**：
    - 玩家能否通过线索推理出凶手？
-   - 推理难度是否合适？（不能太简单也不能不可能）
-   - 剧本流程设计是否合理？
+   - 推理难度是否合适？
 
-## 输出格式（必须严格遵循JSON格式）
-
+## 输出格式（JSON）
 {
   "totalScore": 85,
   "passed": true,
-  "scores": {
-    "storyCompleteness": 90,
-    "murdererDesign": 85,
-    "clueSystem": 80,
-    "characterDesign": 85,
-    "playability": 85
-  },
-  "strengths": ["故事背景设定很有沉浸感", "凶手动机层次丰富"],
-  "weaknesses": ["第三轮线索数量不足", "角色C的秘密与其他角色关联较弱"],
-  "revisionAdvice": "请重点改进以下方面：\n1. 补充第三轮关键线索，确保至少有8-10条\n2. 加强角色C与其他角色的秘密关联\n3. ..."
+  "scores": {"storyCompleteness":90,"murdererDesign":85,"clueSystem":80,"characterDesign":85,"playability":85},
+  "strengths": ["优点1", "优点2"],
+  "weaknesses": ["问题1", "问题2"],
+  "revisionAdvice": "具体的修改建议"
 }`;
 
 /**
