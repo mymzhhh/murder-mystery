@@ -117,7 +117,18 @@ function extractCharacters(text, murdererName) {
   while ((match = headingPattern.exec(text)) !== null) {
     const name = match[1].trim();
     if (name && name.length >= 2 && name.length <= 6 && !/凶手|死者|角色|未知|年龄|性别/.test(name)) {
-      chars.push({ name, age: "", gender: "", occupation: "", personality: "", relationshipToVictim: "", isMurderer: false });
+      // 检测角色类型：在该角色块中搜索NPC/玩家标记
+      const blockStart = match.index;
+      const nextBlock = text.indexOf("\n###", blockStart + 1);
+      const block = text.substring(blockStart, nextBlock > 0 ? nextBlock : blockStart + 2000);
+      const isNPC = /【NPC】|NPC嫌疑人/.test(block);
+      const isPlayer = /【玩家】|玩家角色/.test(block);
+
+      chars.push({
+        name, age: "", gender: "", occupation: "", personality: "",
+        relationshipToVictim: "", isMurderer: false,
+        roleType: isNPC ? "npc" : isPlayer ? "player" : "player"
+      });
     }
   }
 

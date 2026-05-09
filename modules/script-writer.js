@@ -5,6 +5,7 @@ const { createSession, addMessage, listSessions, getSession, deleteSession } = r
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
 const MAX_PLAYERS = 6;
+const MAX_NPC = 3;
 
 /**
  * 提取已有剧本的特征摘要用于查重
@@ -117,16 +118,22 @@ async function writeScript(userInput, onProgress) {
   let enhancedInput = userInput;
   const isPVE = /NPC|PVE|对抗|嫌疑人|侦探|探案|推理者/.test(userInput);
 
-  // 人数约束前置到 system prompt 级别
+  // 人数约束
+  const actualPlayerCount = playerCount > 0 ? Math.min(playerCount, MAX_PLAYERS) : MAX_PLAYERS;
   let countOverride = "";
-  if (playerCount > 0) {
-    if (isPVE) {
-      countOverride = `【核心约束：这是一个仅限 ${playerCount} 名玩家游玩的PVE剧本。剧本设计 ${playerCount} 个侦探角色，可额外设计3-4名NPC嫌疑人辅助剧情。所有角色（侦探+NPC）合计不得超过${MAX_PLAYERS}人。角色设定章节中只能列出恰好${playerCount}个侦探角色+NPC嫌疑人。】`;
-    } else {
-      countOverride = `【核心约束：角色设定章节中必须恰好列出 ${playerCount} 个角色。不得多写任何额外角色，也不得少写。如果超过${playerCount}个角色，这个剧本将被拒绝。】`;
-    }
+  if (isPVE) {
+    countOverride = `【核心约束 — 角色结构】
+- 玩家可操控的侦探角色：恰好 ${actualPlayerCount} 人
+- NPC嫌疑人（非玩家角色）：2-${MAX_NPC} 人
+- 在角色设定中必须将"玩家角色"和"NPC嫌疑人"分为两个独立的表格列出
+- 玩家角色标注为【玩家】，NPC嫌疑人标注为【NPC】
+- 总人数（玩家+NPC）：${actualPlayerCount + 2} 到 ${actualPlayerCount + MAX_NPC} 人
+- 违反此约束的剧本将被自动拒绝！`;
   } else {
-    countOverride = `【核心约束：角色设定章节中不能超过 ${MAX_PLAYERS} 个角色。】`;
+    countOverride = `【核心约束 — 角色数量】
+- 角色设定中必须恰好列出 ${actualPlayerCount} 个可玩角色
+- 不得多写任何角色，也不得少写。总角色数必须等于 ${actualPlayerCount}
+- 违反此约束的剧本将被自动拒绝！`;
   }
 
   enhancedInput = countOverride + "\n\n" + enhancedInput;
@@ -159,24 +166,17 @@ async function writeScript(userInput, onProgress) {
     actualCount = characterNames.length;
 
     // 检查人数
-    if (playerCount > 0 && !isPVE && actualCount !== playerCount) {
-      if (attempt < MAX_GEN_RETRIES) {
-        await deleteSession(session.sessionId);
-        onProgress("retry", `角色数不匹配（期望${playerCount}，实际${actualCount}），重新生成...`);
-        continue;
-      }
-      await deleteSession(session.sessionId);
-      return { ok: false, error: `经过${MAX_GEN_RETRIES+1}次尝试，剧本角色数仍为 ${actualCount} 人（期望 ${playerCount} 人）。请手动修改需求后重试。`, actualCount, expectedCount: playerCount };
-    }
+    const maxTotal = isPVE ? (actualPlayerCount + MAX_NPC) : actualPlayerCount;
+    const minTotal = isPVE ? (actualPlayerCount + 2) : actualPlayerCount;
 
-    if (isPVE && actualCount > MAX_PLAYERS) {
+    if (actualCount > maxTotal || actualCount < minTotal) {
       if (attempt < MAX_GEN_RETRIES) {
         await deleteSession(session.sessionId);
-        onProgress("retry", `角色数超限（${actualCount}>${MAX_PLAYERS}），重新生成...`);
+        onProgress("retry", `角色数不符合要求（${actualCount}人，期望${minTotal}-${maxTotal}人），重新生成...`);
         continue;
       }
       await deleteSession(session.sessionId);
-      return { ok: false, error: `经过${MAX_GEN_RETRIES+1}次尝试，剧本角色数仍超限。请简化需求后重试。`, actualCount };
+      return { ok: false, error: `经过${MAX_GEN_RETRIES+1}次尝试，剧本角色数仍为 ${actualCount} 人（期望 ${minTotal}-${maxTotal} 人）。请修改需求后重试。`, actualCount, expectedMin: minTotal, expectedMax: maxTotal };
     }
 
     // 检查通过
