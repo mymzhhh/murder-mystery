@@ -162,7 +162,6 @@ async function splitScript(sessionId, onProgress) {
       roleType: "npc",
     };
   }
-  }
 
   // 2. 切分线索
   const allClues = [
