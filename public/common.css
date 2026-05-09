@@ -300,6 +300,48 @@ body::before {
   line-height: 2; font-size: 15px;
 }
 
+/* ===================== 流水线步骤 ===================== */
+.pipeline-steps {
+  display: flex; align-items: center; justify-content: center;
+  gap: 8px; margin-bottom: 24px; padding: 16px;
+  background: var(--bg2); border-radius: 12px; flex-wrap: wrap;
+}
+.pipe-step {
+  padding: 10px 18px; border-radius: 10px;
+  font-size: 14px; color: var(--text-dim);
+  background: var(--surface); border: 1px solid var(--border);
+  transition: all 0.3s; white-space: nowrap;
+}
+.pipe-step.active {
+  background: linear-gradient(135deg, rgba(201,169,110,0.15), rgba(201,169,110,0.05));
+  border-color: var(--gold); color: var(--gold);
+  animation: pulse 2s ease-in-out infinite;
+}
+.pipe-step.done {
+  background: rgba(74,222,128,0.1); border-color: var(--success); color: #4ade80;
+}
+.pipe-step.error {
+  background: rgba(239,68,68,0.1); border-color: var(--danger); color: #f87171;
+}
+.pipe-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 50%;
+  background: var(--border); color: var(--text-dim);
+  font-size: 12px; font-weight: 700; margin-right: 6px;
+}
+.pipe-step.active .pipe-num { background: var(--gold); color: #1a1a2e; }
+.pipe-step.done .pipe-num { background: var(--success); color: #fff; }
+.pipe-arrow { color: var(--text-dim); font-size: 18px; }
+
+.pipeline-content textarea {
+  width: 100%; padding: 14px; background: var(--bg2);
+  border: 1px solid var(--border); border-radius: 10px;
+  color: var(--text); font-family: var(--font); font-size: 14px; resize: vertical;
+}
+.pipeline-content textarea:focus { border-color: var(--gold); outline: none; }
+.pipeline-buttons { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
+.pipeline-buttons .btn { width: auto; }
+
 /* ===================== 响应式 ===================== */
 @media (max-width: 768px) {
   .game-layout { grid-template-columns: 1fr; }

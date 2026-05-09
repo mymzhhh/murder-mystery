@@ -6,6 +6,7 @@ const { listUsers, setRole, deleteUser } = require("../modules/auth");
 const { writeScript } = require("../modules/script-writer");
 const { reviewScript, reviewAndRevise } = require("../modules/script-reviewer");
 const { splitScript, getSplitData } = require("../modules/script-splitter");
+const { optimizePrompt } = require("../modules/prompt-agent");
 const { createRoom, getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, removePlayer, loadClues } = require("../modules/game-manager");
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
@@ -35,6 +36,63 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
     if (!(await deleteSession(req.params.id))) return res.status(404).json({ error: "剧本不存在" });
     res.json({ success: true });
+  });
+
+  // ===== 流水线 API =====
+
+  // Step 1: 优化提示词
+  app.post("/api/admin/pipeline/optimize", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { input } = req.body;
+      if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
+      const result = await optimizePrompt(input);
+      res.json(result.data);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // Step 2-5: 完整流水线（生成→评测→切分，SSE）
+  app.post("/api/admin/pipeline/run", authMiddleware, adminMiddleware, async (req, res) => {
+    const { input } = req.body;
+    if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
+
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+
+    let currentSessionId = null;
+
+    try {
+      // Step 2: 生成
+      send("phase", { phase: "write", message: "正在生成剧本..." });
+      const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }));
+
+      if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write" }); return res.end(); }
+      currentSessionId = writeResult.sessionId;
+      send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
+
+      // Step 3: 评测 + 修复
+      send("phase", { phase: "review", message: "正在评测剧本..." });
+      const reviewResult = await reviewAndRevise(currentSessionId, (stage, msg) => {
+        send("progress", { stage: "review_" + stage, message: msg });
+        // 追踪最新的 sessionId（重生成会更新）
+        if (stage === "passed" || stage === "failed") {
+          // reviewAndRevise 在内部更新 currentSessionId
+        }
+      });
+
+      if (!reviewResult.ok) { send("error", { message: reviewResult.error, phase: "review" }); return res.end(); }
+      send("phase", { phase: "review_done", passed: reviewResult.passed, score: reviewResult.finalScore, rounds: reviewResult.totalRounds });
+
+      if (!reviewResult.passed) {
+        send("complete", { status: "review_failed", message: `${reviewResult.totalRounds}轮评测后仍未通过（${reviewResult.finalScore}分）` });
+        return res.end();
+      }
+
+      // Step 4: 切分（reviewAndRevise 已自动切分）
+      send("phase", { phase: "split", message: "剧本已评测通过并完成切分！" });
+      send("complete", { status: "done", sessionId: reviewResult.sessionId });
+
+    } catch (e) { send("error", { message: e.message }); }
+    res.end();
   });
 
   // 评测剧本（单次）
