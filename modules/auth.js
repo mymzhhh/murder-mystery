@@ -8,7 +8,8 @@ let redis = null;
 
 function getRedis() {
   if (!redis) {
-    redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 3, retryStrategy(t) { return t > 5 ? null : Math.min(t * 200, 2000); } });
+    redis = new Redis(REDIS_URL, { lazyConnect: true, maxRetriesPerRequest: 2, retryStrategy(t) { return t > 10 ? null : Math.min(t * 500, 5000); }, enableOfflineQueue: false });
+    redis.on("error", function() {});
   }
   return redis;
 }

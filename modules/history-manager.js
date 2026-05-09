@@ -10,16 +10,17 @@ let redis = null;
 function getRedis() {
   if (!redis) {
     redis = new Redis(REDIS_URL, {
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest: 2,
       retryStrategy(times) {
-        if (times > 5) return null;
-        return Math.min(times * 200, 2000);
+        if (times > 10) return null;
+        return Math.min(times * 500, 5000);
       },
       lazyConnect: true,
+      enableOfflineQueue: false,
     });
 
     redis.on("error", (err) => {
-      console.error("Redis 连接错误：", err.message);
+      // 非致命：Redis 不可用时静默处理
     });
 
     redis.on("connect", () => {
