@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>剧本杀 — 管理端</title>
+  <link rel="stylesheet" href="/common.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>剧本杀管理端</h1>
+    <div class="nav-tabs">
+      <button class="nav-tab active" onclick="switchPage('scripts')">剧本管理</button>
+      <button class="nav-tab" onclick="switchPage('users')">用户管理</button>
+      <button class="nav-tab" onclick="switchPage('rooms')">房间管理</button>
+    </div>
+    <span class="user-info" id="userInfo"></span>
+    <button class="btn btn-outline btn-sm" onclick="doLogout()">退出</button>
+  </header>
+
+  <div class="main-content">
+
+    <!-- 剧本管理 -->
+    <div id="page-scripts" class="page active">
+      <div class="grid-2">
+        <div class="panel">
+          <h3>生成新剧本</h3>
+          <div class="form-group">
+            <label>剧本需求描述</label>
+            <textarea id="scriptInput" rows="3" style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:inherit;font-size:14px;resize:vertical;" placeholder="例如：民国上海滩，富商生日宴会被毒杀，6人参加..."></textarea>
+          </div>
+          <button class="btn btn-primary" onclick="generateScript()" id="btnGenerate">开始生成</button>
+          <div id="genProgress" style="display:none;margin-top:12px;"></div>
+        </div>
+
+        <div class="panel">
+          <h3>玩家剧本请求</h3>
+          <div id="requestList"><span style="color:var(--text2);">加载中...</span></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>剧本库</h3>
+        <table class="table" id="scriptTable">
+          <thead><tr><th>主题</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody><tr><td colspan="3" style="color:var(--text2);">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 用户管理 -->
+    <div id="page-users" class="page">
+      <div class="panel">
+        <h3>用户列表</h3>
+        <table class="table" id="userTable">
+          <thead><tr><th>用户名</th><th>角色</th><th>注册时间</th><th>操作</th></tr></thead>
+          <tbody><tr><td colspan="4" style="color:var(--text2);">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 房间管理 -->
+    <div id="page-rooms" class="page">
+      <div class="grid-2">
+        <div class="panel">
+          <h3>创建房间</h3>
+          <div class="form-group">
+            <label>选择剧本</label>
+            <select id="roomScriptSelect" style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;">
+              <option value="">-- 选择剧本 --</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>最大玩家数</label>
+            <input type="number" id="roomMaxPlayers" value="6" min="3" max="8" style="width:100%;" />
+          </div>
+          <button class="btn btn-success" onclick="createRoom()">创建房间</button>
+          <div id="roomCreated" style="margin-top:12px;display:none;"></div>
+        </div>
+
+        <div class="panel">
+          <h3>活跃房间</h3>
+          <div id="activeRooms"><span style="color:var(--text2);">加载中...</span></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const token = localStorage.getItem("token");
+    const username = localStorage.getItem("username");
+    const role = localStorage.getItem("role");
+
+    if (!token || role !== "admin") { location.href = "/login.html"; }
+
+    document.getElementById("userInfo").textContent = "管理员: " + username;
+
+    function checkAuth(res) { if (res.status === 401) { localStorage.clear(); location.href = "/login.html"; } }
+
+    function api(path, opts = {}) {
+      return fetch(path, { headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }, ...opts })
+        .then(res => { checkAuth(res); return res; });
+    }
+
+    function switchPage(p) {
+      document.querySelectorAll(".nav-tab").forEach((el, i) => {
+        el.classList.toggle("active", el.textContent.includes(p === "scripts" ? "剧本" : p === "users" ? "用户" : "房间"));
+      });
+      document.querySelectorAll(".page").forEach(el => el.classList.remove("active"));
+      document.getElementById("page-" + p).classList.add("active");
+      if (p === "scripts") loadScripts();
+      if (p === "users") loadUsers();
+      if (p === "rooms") loadRooms();
+    }
+
+    async function doLogout() {
+      await api("/api/auth/logout", { method: "POST" });
+      localStorage.clear(); location.href = "/login.html";
+    }
+
+    // === 剧本 ===
+    async function loadScripts() {
+      try {
+        const res = await api("/api/admin/scripts");
+        const data = await res.json();
+        const tbody = document.querySelector("#scriptTable tbody");
+        if (data.scripts.length === 0) { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text2);">暂无剧本</td></tr>'; return; }
+        tbody.innerHTML = data.scripts.map(s => `
+          <tr>
+            <td>${esc(s.topic)}</td>
+            <td>${new Date(s.createdAt).toLocaleString()}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="createRoomFromScript('${s.sessionId}')">创建房间</button>
+              <button class="btn btn-outline btn-sm" onclick="reviewScript('${s.sessionId}')" style="margin-left:4px;">评测</button>
+              <button class="btn btn-outline btn-sm" onclick="reviewAndReviseScript('${s.sessionId}')" style="margin-left:4px;">评测+修复</button>
+              <button class="btn btn-outline btn-sm" onclick="splitScriptBtn('${s.sessionId}')" style="margin-left:4px;">切分</button>
+              <button class="btn btn-outline btn-sm" onclick="deleteScript('${s.sessionId}')" style="margin-left:4px;">删除</button>
+            </td>
+          </tr>`).join("");
+        // 填充房间创建下拉框
+        const sel = document.getElementById("roomScriptSelect");
+        sel.innerHTML = '<option value="">-- 选择剧本 --</option>' + data.scripts.map(s => `<option value="${s.sessionId}">${esc(s.topic.substring(0,40))}</option>`).join("");
+        // 请求列表
+        loadRequests();
+      } catch (e) { /* ignore */ }
+    }
+
+    async function generateScript() {
+      const input = document.getElementById("scriptInput").value.trim();
+      if (!input) return alert("请输入剧本需求");
+
+      document.getElementById("btnGenerate").disabled = true;
+      const prog = document.getElementById("genProgress");
+      prog.style.display = "block";
+      prog.innerHTML = '<div class="progress-steps"></div>';
+
+      try {
+        const res = await fetch("/api/admin/scripts/generate", {
+          method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+          body: JSON.stringify({ input }),
+        });
+        const reader = res.body.getReader();
+        const dec = new TextDecoder(); let buf = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n"); buf = lines.pop() || "";
+          let et = "";
+          for (const l of lines) {
+            if (l.startsWith("event: ")) et = l.slice(7);
+            else if (l.startsWith("data: ")) {
+              try {
+                const d = JSON.parse(l.slice(6));
+                if (et === "progress") {
+                  var steps = prog.querySelector(".progress-steps");
+                  if (steps) steps.innerHTML += '<div style="font-size:12px;color:var(--text2);padding:2px 0;">' + d.stage + ': ' + d.message + '</div>';
+                } else if (et === "error") {
+                  prog.innerHTML += '<div style="color:var(--danger);margin-top:8px;padding:8px;background:rgba(239,68,68,0.1);border-radius:8px;">' + esc(d.message || '生成失败') + '</div>';
+                } else if (et === "complete") {
+                  var sum = d.summary || {};
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;">生成完成！</div>';
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="margin-top:8px;padding:8px;background:rgba(16,185,129,0.1);border-radius:8px;font-size:13px;">' +
+                    '<div>剧本：《' + esc(sum.title || '') + '》</div>' +
+                    '<div>角色数：' + (sum.characterCount || 0) + '人（' + (sum.characterNames || []).join('、') + '）</div>' +
+                    '<div>时代：' + esc(sum.era || '') + ' | 线索：' + (sum.clueCount || 0) + '条</div>' +
+                    '<div style="margin-top:4px;">SessionId: ' + d.sessionId + '</div>' +
+                  '</div>';
+                  loadScripts();
+                }
+              } catch (e) { /* skip */ }
+            }
+          }
+        }
+      } catch (e) { prog.innerHTML = `<span style="color:var(--danger);">生成失败: ${e.message}</span>`; }
+      document.getElementById("btnGenerate").disabled = false;
+    }
+
+    async function splitScriptBtn(id) {
+      if (!confirm("切分将解析剧本并用AI纯化角色剧本和线索，可能需要数分钟。继续？")) return;
+      var prog = document.getElementById("genProgress");
+      prog.style.display = "block";
+      prog.innerHTML = '<div class="progress-steps"></div>';
+      try {
+        var res = await fetch("/api/admin/scripts/" + id + "/split", {
+          method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }
+        });
+        var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
+        while (true) {
+          var rd = await reader.read(); if (rd.done) break;
+          buf += dec.decode(rd.value, { stream: true });
+          var lines = buf.split("\n"); buf = lines.pop() || ""; var et = "";
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith("event: ")) et = lines[i].slice(7);
+            else if (lines[i].startsWith("data: ")) {
+              try {
+                var d = JSON.parse(lines[i].slice(6));
+                if (et === "progress") { prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:var(--text2);padding:2px 0;">' + d.stage + ': ' + d.message + '</div>'; }
+                else if (et === "complete") {
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;">切分完成！' + d.meta.characterNames.length + '个角色、' + d.meta.clueCount + '条线索已存入Redis (split:* 命名空间)</div>';
+                }
+              } catch (e) { /* skip */ }
+            }
+          }
+        }
+      } catch (e) { prog.innerHTML += '<span style="color:var(--danger);">切分失败: ' + e.message + '</span>'; }
+    }
+
+    async function deleteScript(id) {
+      if (!confirm("确定删除？")) return;
+      await api("/api/admin/scripts/" + id, { method: "DELETE" });
+      loadScripts();
+    }
+
+    async function reviewScript(id) {
+      var prog = document.getElementById("genProgress");
+      prog.style.display = "block";
+      prog.innerHTML = '<div class="progress-steps"><div>评测中...</div></div>';
+      try {
+        var res = await api("/api/admin/scripts/" + id + "/review", { method: "POST" });
+        var data = await res.json();
+        if (!res.ok) { prog.innerHTML = '<span style="color:var(--danger);">' + esc(data.error || '评测失败') + '</span>'; return; }
+        var scores = data.scores || {};
+        var passed = data.totalScore >= 75;
+        prog.innerHTML = '<div style="padding:12px;background:' + (passed ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)') + ';border-radius:8px;margin-top:8px;">' +
+          '<h4 style="margin-bottom:8px;">' + (passed ? '✅ 评测通过 (' : '⚠️ 评测未通过 (') + data.totalScore + '分)</h4>' +
+          '<div style="font-size:12px;margin:4px 0;">故事: ' + (scores.storyCompleteness||'-') + ' | 凶手: ' + (scores.murdererDesign||'-') + ' | 线索: ' + (scores.clueSystem||'-') + ' | 角色: ' + (scores.characterDesign||'-') + ' | 可玩性: ' + (scores.playability||'-') + '</div>' +
+          (data.strengths ? '<div style="font-size:12px;color:var(--success);margin-top:4px;">优点: ' + esc(data.strengths.join('、')) + '</div>' : '') +
+          (data.weaknesses ? '<div style="font-size:12px;color:var(--warning);margin-top:4px;">问题: ' + esc(data.weaknesses.join('、')) + '</div>' : '') +
+          (data.revisionAdvice ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;white-space:pre-wrap;">修改建议: ' + esc(data.revisionAdvice) + '</div>' : '') +
+          '</div>';
+      } catch (e) { prog.innerHTML = '<span style="color:var(--danger);">评测失败: ' + e.message + '</span>'; }
+    }
+
+    async function reviewAndReviseScript(id) {
+      if (!confirm("评测+修复将进行最多3轮评测和重新生成，每轮可能需要数分钟。确定继续？")) return;
+      var prog = document.getElementById("genProgress");
+      prog.style.display = "block";
+      prog.innerHTML = '<div class="progress-steps"></div>';
+      try {
+        var res = await fetch("/api/admin/scripts/" + id + "/review-revise", {
+          method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }
+        });
+        var reader = res.body.getReader();
+        var dec = new TextDecoder(); var buf = "";
+        while (true) {
+          var r = await reader.read();
+          if (r.done) break;
+          buf += dec.decode(r.value, { stream: true });
+          var lines = buf.split("\n"); buf = lines.pop() || "";
+          var et = "";
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith("event: ")) et = lines[i].slice(7);
+            else if (lines[i].startsWith("data: ")) {
+              try {
+                var d = JSON.parse(lines[i].slice(6));
+                if (et === "progress") {
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:var(--text2);padding:2px 0;">' + d.stage + ': ' + d.message + '</div>';
+                } else if (et === "complete") {
+                  var result = d;
+                  var pts = result.passed ? '✅ 通过！最终分数: ' + result.finalScore : '⚠️ ' + result.totalRounds + '轮后未通过，最终分数: ' + result.finalScore;
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:' + (result.passed ? 'var(--success)' : 'var(--warning)') + ';margin-top:8px;font-weight:600;">' + pts + '</div>';
+                  if (result.rounds) {
+                    result.rounds.forEach(function(r) {
+                      prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:11px;color:var(--text2);">第' + r.round + '轮: ' + r.totalScore + '分</div>';
+                    });
+                  }
+                  if (result.sessionId) {
+                    prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;margin-top:4px;">新剧本SessionId: ' + result.sessionId + '</div>';
+                  }
+                  loadScripts();
+                }
+              } catch (e) { /* skip */ }
+            }
+          }
+        }
+      } catch (e) { prog.innerHTML += '<span style="color:var(--danger);">评测修复失败: ' + e.message + '</span>'; }
+    }
+
+    async function loadRequests() {
+      try {
+        const r = await require("./modules/game-manager").getRedis();
+        // ... requests stored in Redis
+        document.getElementById("requestList").innerHTML = '<span style="color:var(--text2);">暂无待处理请求</span>';
+      } catch (e) { /* ignore */ }
+    }
+
+    // === 用户 ===
+    async function loadUsers() {
+      try {
+        const res = await api("/api/admin/users");
+        const data = await res.json();
+        document.querySelector("#userTable tbody").innerHTML = data.users.map(u => `
+          <tr>
+            <td>${esc(u.username)}</td>
+            <td><span class="tag ${u.role==='admin'?'tag-admin':'tag-player'}">${u.role}</span></td>
+            <td>${u.createdAt ? new Date(u.createdAt).toLocaleString() : ''}</td>
+            <td>
+              <button class="btn btn-outline btn-sm" onclick="toggleRole('${esc(u.username)}','${u.role==='admin'?'player':'admin'}')">设为${u.role==='admin'?'玩家':'管理员'}</button>
+              ${u.username !== username ? `<button class="btn btn-outline btn-sm" onclick="delUser('${esc(u.username)}')" style="margin-left:4px;">删除</button>` : ''}
+            </td>
+          </tr>`).join("");
+      } catch (e) { /* ignore */ }
+    }
+
+    async function toggleRole(name, role) {
+      await api("/api/admin/users/" + name + "/role", { method: "PUT", body: JSON.stringify({ role }) });
+      loadUsers();
+    }
+    async function delUser(name) {
+      if (!confirm("确定删除用户 " + name + "？")) return;
+      await api("/api/admin/users/" + name, { method: "DELETE" });
+      loadUsers();
+    }
+
+    // === 房间 ===
+    async function loadRooms() {
+      try {
+        const res = await api("/api/admin/rooms");
+        const data = await res.json();
+        const el = document.getElementById("activeRooms");
+        if (data.rooms.length === 0) { el.innerHTML = '<span style="color:var(--text2);">暂无活跃房间</span>'; return; }
+        el.innerHTML = data.rooms.map(r => `
+          <div class="card" style="margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <div>
+                <strong>${esc(r.scriptTitle||'未命名')}</strong>
+                <span class="tag">${r.roomCode}</span>
+                <span style="font-size:12px;color:var(--text2);">${r.playerCount}人 | ${r.phase}</span>
+              </div>
+              <button class="btn btn-outline btn-sm" onclick="closeRoom('${r.roomCode}')">关闭</button>
+            </div>
+          </div>`).join("");
+      } catch (e) { /* ignore */ }
+    }
+
+    async function createRoom() {
+      const sid = document.getElementById("roomScriptSelect").value;
+      const max = document.getElementById("roomMaxPlayers").value;
+      if (!sid) return alert("请选择剧本");
+      try {
+        const res = await api("/api/admin/rooms", { method: "POST", body: JSON.stringify({ scriptSessionId: sid, maxPlayers: max }) });
+        const data = await res.json();
+        const el = document.getElementById("roomCreated");
+        el.style.display = "block";
+        el.innerHTML = `<div style="padding:16px;background:var(--surface2);border-radius:8px;text-align:center;">
+          <p>房间已创建</p>
+          <div class="room-code-lg">${data.roomCode}</div>
+          <p style="margin-top:8px;color:var(--text2);">${data.characterCount}个角色 | 分享房间码给玩家</p>
+        </div>`;
+        loadRooms();
+      } catch (e) { alert("创建失败: " + e.message); }
+    }
+
+    function createRoomFromScript(sid) {
+      document.getElementById("roomScriptSelect").value = sid;
+      switchPage("rooms");
+      document.getElementById("roomMaxPlayers").value = 6;
+    }
+
+    async function closeRoom(code) {
+      if (!confirm("确定关闭房间 " + code + "？")) return;
+      await api("/api/admin/rooms/" + code, { method: "DELETE" });
+      loadRooms();
+    }
+
+    function esc(s) {
+      const d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML;
+    }
+
+    loadScripts();
+  </script>
+</body>
+</html>

@@ -1,0 +1,312 @@
+// 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
+
+function parseScript(markdown) {
+  const result = {
+    title: "",
+    setting: {},
+    victim: {},
+    characters: [],
+    murderer: {},
+    clues: { round1: [], round2: [], round3: [], redHerrings: [] },
+    dmGuide: {},
+    errors: [],
+  };
+
+  try {
+    // === 标题 ===
+    let titleMatch = markdown.match(/^#\s*《(.+?)》/m);
+    if (!titleMatch) titleMatch = markdown.match(/剧本名称[：:]\s*《?(.+?)》?/);
+    if (!titleMatch) titleMatch = markdown.match(/\*\*剧本名称\*\*[：:]\s*《?(.+?)》?/);
+    result.title = titleMatch ? titleMatch[1].trim() : "未命名剧本";
+
+    // === 基本设定 ===
+    result.setting = {
+      era: extractField(markdown, "时代背景"),
+      location: extractField(markdown, "地点场景"),
+      playerCount: extractField(markdown, "参与人数"),
+      duration: extractField(markdown, "游戏时长"),
+      difficulty: extractField(markdown, "难度等级"),
+    };
+
+    // === 死者信息 ===
+    result.victim = {
+      name: extractField(markdown, "姓名与身份"),
+      deathTime: extractField(markdown, "死亡时间"),
+      deathPlace: extractField(markdown, "死亡地点"),
+      causeOfDeath: extractField(markdown, "直接死因"),
+      bodyDescription: extractSection(markdown, "尸体状态"),
+      fullSection: extractSection(markdown, "死者信息", 1500),
+    };
+
+    // === 凶手设定 ===
+    const murdererSection = extractSection(markdown, "凶手设定", 3000);
+    result.murderer = {
+      name: extractField(murdererSection, "凶手姓名") || extractField(markdown, "凶手姓名"),
+      motive: extractField(murdererSection, "作案动机") || extractSection(markdown, "作案动机", 1000),
+      method: extractField(murdererSection, "作案手法") || extractSection(markdown, "作案手法", 1500),
+      feasibility: extractSection(markdown, "可行性", 500),
+      mistakes: extractSection(markdown, "破绽与线索", 800),
+    };
+
+    // === 角色列表（从角色设定表格） ===
+    result.characters = extractCharacters(markdown, result.murderer.name);
+    if (result.characters.length < 2) {
+      result.errors.push("角色提取数量不足，可能影响游戏");
+    }
+
+    // === 角色个人剧本 ===
+    extractCharacterScripts(markdown, result.characters);
+
+    // === 线索系统 ===
+    result.clues = extractAllClues(markdown);
+
+    // === DM 手册 ===
+    result.dmGuide = {
+      openingMonologue: extractSection(markdown, "DM开场白", 2000),
+      fullTimeline: extractSection(markdown, "完整时间线", 3000),
+      truthReveal: extractSection(markdown, "真相复盘", 3000),
+      endings: {
+        trueEnding: extractSection(markdown, "真结局", 500),
+        escapeEnding: extractSection(markdown, "凶手逃脱", 500),
+        wrongEnding: extractSection(markdown, "误判", 500),
+      },
+    };
+
+  } catch (e) {
+    result.errors.push("解析异常: " + e.message);
+  }
+
+  return result;
+}
+
+// ==================== 工具函数 ====================
+
+function extractField(text, label) {
+  const patterns = [
+    new RegExp(`${label}[：:]\\s*(.+?)(?:\\n|$)`, "i"),
+    new RegExp(`\\*\\*${label}\\*\\*[：:]\\s*(.+?)(?:\\n|$)`, "i"),
+    new RegExp(`${label}\\s*[：:]\\s*(.+?)(?:\\n\\n|\\n#{1,3}|$)`, "is"),
+  ];
+  for (const p of patterns) {
+    const m = text.match(p);
+    if (m) return m[1].trim().replace(/^[-*]\s*/, "");
+  }
+  return "";
+}
+
+function extractSection(text, heading, maxLen = 2000) {
+  // 支持多种标题格式
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(
+    `(?:#{1,4}\\s*)?${escaped}[：:]?[\\s\\S]*?(?=\\n#{1,4}\\s+(?:${escaped}|第[一二三四五六]|角色\\s*\\d|一[、.]|二[、.]|三[、.]|四[、.]|五[、.]|六[、.])|\\n---|$)`,
+    "i"
+  );
+  const m = text.match(pattern);
+  if (!m) return "";
+  let content = m[0].replace(new RegExp(`^#{1,4}\\s*${escaped}[：:]?\\s*`, "i"), "").trim();
+  if (content.length > maxLen) content = content.substring(0, maxLen) + "...";
+  return content;
+}
+
+function extractCharacters(text, murdererName) {
+  const chars = [];
+
+  // 方法A: 匹配 "### 角色X：姓名" 格式
+  const headingPattern = /^###\s*角色[一二三四五六七八\d]+[：:]\s*(.{2,6})$/gm;
+  let match;
+  while ((match = headingPattern.exec(text)) !== null) {
+    const name = match[1].trim();
+    if (name && name.length >= 2 && name.length <= 6 && !/凶手|死者|角色|未知|年龄|性别/.test(name)) {
+      chars.push({ name, age: "", gender: "", occupation: "", personality: "", relationshipToVictim: "", isMurderer: false });
+    }
+  }
+
+  // 方法B: 匹配 "- **姓名**：xxx" 格式（fallback）
+  if (chars.length === 0) {
+    const section = extractSection(text, "角色设定", 10000);
+    const lines = section.split("\n");
+    let currentChar = null;
+
+    for (const line of lines) {
+      const nameMatch = line.match(/[-*]\s*\*\*姓名\*\*[：:]\s*(.{2,6})/);
+      if (nameMatch) {
+        const name = nameMatch[1].trim().replace(/\*+/g, "");
+        if (name.length >= 2 && name.length <= 6 && !/凶手|死者|角色|未知/.test(name)) {
+          currentChar = { name, age: "", gender: "", occupation: "", personality: "", relationshipToVictim: "", isMurderer: false };
+          chars.push(currentChar);
+        }
+        continue;
+      }
+      if (currentChar) {
+        const occMatch = line.match(/\*\*职业\/?身份\*\*[：:]\s*(.+)/);
+        if (occMatch) currentChar.occupation = occMatch[1].trim();
+        const relMatch = line.match(/\*\*与死者关系\*\*[：:]\s*(.+)/);
+        if (relMatch) currentChar.relationshipToVictim = relMatch[1].trim();
+        const ageMatch = line.match(/\*\*年龄\/?性别\*\*[：:]\s*(.+)/);
+        if (ageMatch) currentChar.age = ageMatch[1].trim();
+      }
+    }
+  }
+
+  // 方法C: 查找所有 "### 角色" 标题
+  if (chars.length === 0) {
+    const roleHeadings = text.match(/^#{2,4}\s*角色[：:、\s].+$/gm);
+    if (roleHeadings) {
+      roleHeadings.forEach(h => {
+        const nameMatch = h.match(/角色[：:、\s]*(.{2,6})$/);
+        if (nameMatch) {
+          const n = nameMatch[1].trim();
+          if (n.length >= 2 && n.length <= 6) chars.push({ name: n, age: "", gender: "", occupation: "", personality: "", relationshipToVictim: "", isMurderer: false });
+        }
+      });
+    }
+  }
+
+  // 标记凶手
+  if (murdererName) {
+    chars.forEach(c => {
+      if (c.name === murdererName || murdererName.includes(c.name) || c.name.includes(murdererName)) {
+        c.isMurderer = true;
+      }
+    });
+  }
+
+  return chars;
+}
+
+function extractCharacterScripts(markdown, characters) {
+  for (const char of characters) {
+    // 定位该角色的个人剧本区域
+    const regex = new RegExp(
+      `角色\\s*\\d+[：:]\\s*${escapeRegex(char.name)}[\\s\\S]*?(?=角色\\s*\\d+[：:]|#{1,3}\\s*(?:第[三四]|线索|DM)|$)`,
+      "i"
+    );
+    const match = markdown.match(regex);
+    if (!match) continue;
+
+    const section = match[0];
+
+    char.script = {
+      story: extractField(section, "你的故事") || extractSection(section, "你的故事", 2000),
+      secret: extractField(section, "你的秘密") || extractSection(section, "你的秘密", 1000),
+      personalTimeline: extractSection(section, "你的时间线", 1500),
+      goals: extractSection(section, "你的目标", 800),
+      knownInfo: extractSection(section, "你掌握的信息", 1500),
+      items: extractSection(section, "你的物品", 800),
+      lies: extractSection(section, "你的谎言", 1000),
+      defenseStrategy: extractSection(section, "如果被指认|辩护", 1000),
+      fullScript: section.substring(0, 5000),
+    };
+  }
+}
+
+function extractAllClues(markdown) {
+  const rounds = { round1: [], round2: [], round3: [], redHerrings: [] };
+
+  // Find the clues section
+  let clueSection = extractSection(markdown, "线索系统", 50000);
+  if (!clueSection || clueSection.length < 200) {
+    clueSection = extractSection(markdown, "第三部分", 50000);
+  }
+  if (!clueSection || clueSection.length < 200) {
+    const idx = markdown.search(/(?:线索系统|第三部分|#{1,3}\s*《.+?》完整线索)/i);
+    clueSection = idx >= 0 ? markdown.substring(idx, idx + 30000) : "";
+  }
+
+  // Split into round sections by ## 第X轮 headings
+  const roundPattern = /##\s*第([一二三])轮/g;
+  const roundMatches = [];
+  let m;
+  while ((m = roundPattern.exec(clueSection)) !== null) {
+    roundMatches.push({ round: m[1], start: m.index });
+  }
+
+  for (let i = 0; i < roundMatches.length; i++) {
+    const { round, start } = roundMatches[i];
+    const end = i + 1 < roundMatches.length ? roundMatches[i + 1].start : clueSection.length;
+    const sectionText = clueSection.substring(start, end);
+
+    const prefix = round === "一" ? "A" : round === "二" ? "B" : "C";
+    const roundNum = round === "一" ? 1 : round === "二" ? 2 : 3;
+    const key = `round${roundNum}`;
+
+    rounds[key] = parseClueSection(sectionText, prefix, roundNum);
+  }
+
+  // Also try splitting on ### sections directly as fallback
+  const allClues = [...rounds.round1, ...rounds.round2, ...rounds.round3];
+  if (allClues.length === 0) {
+    rounds.round1 = parseClueSection(clueSection, "A", 1);
+    rounds.round2 = [];
+    rounds.round3 = [];
+  }
+
+  return rounds;
+}
+
+function parseClueSection(text, prefix, roundNum) {
+  const clues = [];
+  // Split by "### Xn：" or "### Xn" headings (but not ## or # headings)
+  const clueBlocks = text.split(/\n(?=###\s+[A-C]\d+[：:\s])/);
+
+  for (const block of clueBlocks) {
+    // Extract clue ID: match "### A1" or "### A1："
+    const idMatch = block.match(/^###\s+([A-C]\d+)/m);
+    if (!idMatch) continue;
+
+    const id = idMatch[1];
+    const clue = { id, round: roundNum, content: "", pointsTo: "", clueType: "" };
+
+    // Extract fields from bullet points with bold labels
+    const contentMatch = block.match(/\*\*线索内容\*\*[：:]\s*([\s\S]+?)(?=\n- \*\*|\n---|\n$)/);
+    if (contentMatch) clue.content = contentMatch[1].trim().replace(/\n/g, " ");
+
+    const pointMatch = block.match(/\*\*指向角色\/?事件\*\*[：:]\s*(.+)/);
+    if (pointMatch) clue.pointsTo = pointMatch[1].trim();
+
+    const typeMatch = block.match(/\*\*线索类型\*\*[：:]\s*(.+)/);
+    if (typeMatch) clue.clueType = typeMatch[1].trim();
+
+    // If content is still empty, try matching the entire description after the heading
+    if (!clue.content) {
+      const bodyMatch = block.match(/^###\s+[A-C]\d+[：:\s]*[^\n]*\n([\s\S]+)/);
+      if (bodyMatch) {
+        const body = bodyMatch[1].trim();
+        // Take first meaningful paragraph
+        const firstPara = body.split(/\n- \*\*/)[0].trim();
+        clue.content = firstPara.substring(0, 500);
+      }
+    }
+
+    if (clue.content || clue.pointsTo) clues.push(clue);
+  }
+
+  // Fallback: match "- **线索内容**" directly
+  if (clues.length === 0) {
+    const lines = text.split("\n");
+    let current = null;
+    for (const line of lines) {
+      const bidMatch = line.match(/^[-*]\s*\*\*线索内容\*\*[：:]\s*(.+)/);
+      if (bidMatch) {
+        if (current) clues.push(current);
+        current = { id: `${prefix}${clues.length + 1}`, round: roundNum, content: bidMatch[1].trim(), pointsTo: "", clueType: "" };
+        continue;
+      }
+      if (current) {
+        const pm = line.match(/^[-*]\s*\*\*指向角色\/?事件\*\*[：:]\s*(.+)/);
+        if (pm) { current.pointsTo = pm[1].trim(); continue; }
+        const tm = line.match(/^[-*]\s*\*\*线索类型\*\*[：:]\s*(.+)/);
+        if (tm) { current.clueType = tm[1].trim(); continue; }
+      }
+    }
+    if (current) clues.push(current);
+  }
+
+  return clues;
+}
+
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+module.exports = { parseScript };

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>剧本杀平台 — 登录</title>
+  <link rel="stylesheet" href="/common.css">
+</head>
+<body>
+  <div class="login-wrapper">
+    <div class="login-card">
+      <h1>剧本杀</h1>
+      <p class="subtitle">AI DM 全自动推理游戏平台</p>
+
+      <div class="tabs">
+        <button class="tab active" onclick="switchTab('login')">登录</button>
+        <button class="tab" onclick="switchTab('register')">注册</button>
+      </div>
+
+      <div id="loginForm">
+        <div class="form-group">
+          <label>用户名</label>
+          <input type="text" id="loginUser" placeholder="请输入用户名" />
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input type="password" id="loginPass" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()" />
+        </div>
+        <button class="btn btn-primary" onclick="doLogin()">登 录</button>
+      </div>
+
+      <div id="registerForm" style="display:none;">
+        <div class="form-group">
+          <label>用户名</label>
+          <input type="text" id="regUser" placeholder="至少2个字符" />
+        </div>
+        <div class="form-group">
+          <label>密码</label>
+          <input type="password" id="regPass" placeholder="至少4个字符" />
+        </div>
+        <div class="form-group">
+          <label>确认密码</label>
+          <input type="password" id="regPass2" placeholder="再次输入密码" onkeydown="if(event.key==='Enter')doRegister()" />
+        </div>
+        <button class="btn btn-primary" onclick="doRegister()">注 册</button>
+      </div>
+
+      <div class="error-msg" id="errorMsg"></div>
+    </div>
+  </div>
+
+  <script>
+    let mode = "login";
+
+    function switchTab(t) {
+      mode = t;
+      document.querySelectorAll(".tab").forEach((el, i) => el.classList.toggle("active", (i === 0 && t === "login") || (i === 1 && t === "register")));
+      document.getElementById("loginForm").style.display = t === "login" ? "block" : "none";
+      document.getElementById("registerForm").style.display = t === "register" ? "block" : "none";
+      document.getElementById("errorMsg").style.display = "none";
+    }
+
+    function showError(msg) {
+      const el = document.getElementById("errorMsg");
+      el.textContent = msg; el.style.display = "block";
+    }
+
+    async function doLogin() {
+      const u = document.getElementById("loginUser").value.trim();
+      const p = document.getElementById("loginPass").value;
+      if (!u || !p) return showError("请输入用户名和密码");
+
+      try {
+        const res = await fetch("/api/auth/login", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p }),
+        });
+        const data = await res.json();
+        if (!res.ok) return showError(data.error);
+
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("username", data.username);
+        localStorage.setItem("role", data.role);
+
+        if (data.role === "admin") location.href = "/admin.html";
+        else location.href = "/player.html";
+      } catch (e) { showError("网络错误"); }
+    }
+
+    async function doRegister() {
+      const u = document.getElementById("regUser").value.trim();
+      const p = document.getElementById("regPass").value;
+      const p2 = document.getElementById("regPass2").value;
+      if (!u || !p) return showError("请输入用户名和密码");
+      if (u.length < 2) return showError("用户名至少2个字符");
+      if (p.length < 4) return showError("密码至少4个字符");
+      if (p !== p2) return showError("两次密码不一致");
+
+      try {
+        const res = await fetch("/api/auth/register", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username: u, password: p }),
+        });
+        const data = await res.json();
+        if (!res.ok) return showError(data.error);
+
+        localStorage.setItem("token", data.token);
+        localStorage.setItem("username", data.username);
+        localStorage.setItem("role", data.role);
+        location.href = "/player.html";
+      } catch (e) { showError("网络错误"); }
+    }
+  </script>
+</body>
+</html>

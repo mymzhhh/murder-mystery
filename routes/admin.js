@@ -1,0 +1,199 @@
+// Admin API routes
+
+const { createSession, getSession, addMessage, listSessions, deleteSession } = require("../modules/history-manager");
+const { parseScript } = require("../modules/script-parser");
+const { listUsers, setRole, deleteUser } = require("../modules/auth");
+const { writeScript } = require("../modules/script-writer");
+const { reviewScript, reviewAndRevise } = require("../modules/script-reviewer");
+const { splitScript, getSplitData } = require("../modules/script-splitter");
+const { createRoom, getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, removePlayer, loadClues } = require("../modules/game-manager");
+
+function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
+  // 剧本列表
+  app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const sessions = await listSessions();
+      const scripts = sessions.filter(s => s.textType === "murder-mystery");
+      res.json({ scripts });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 生成剧本（SSE — 使用 script-writer Agent）
+  app.post("/api/admin/scripts/generate", authMiddleware, adminMiddleware, async (req, res) => {
+    const { input } = req.body;
+    if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    try {
+      const result = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }));
+      if (!result.ok) { send("error", { message: result.error }); return res.end(); }
+      send("complete", { sessionId: result.sessionId, summary: result.summary });
+    } catch (err) { send("error", { message: err.message }); }
+    res.end();
+  });
+
+  app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
+    if (!(await deleteSession(req.params.id))) return res.status(404).json({ error: "剧本不存在" });
+    res.json({ success: true });
+  });
+
+  // 评测剧本（单次）
+  app.post("/api/admin/scripts/:id/review", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const result = await reviewScript(req.params.id);
+      if (!result.ok) return res.status(400).json({ error: result.error });
+      res.json(result.review);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 评测+重新生成循环（SSE，最多3轮）
+  app.post("/api/admin/scripts/:id/review-revise", authMiddleware, adminMiddleware, async (req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    try {
+      const result = await reviewAndRevise(req.params.id, (stage, msg) => send("progress", { stage, message: msg }));
+      send("complete", result);
+    } catch (e) { send("error", { message: e.message }); }
+    res.end();
+  });
+
+  // 切分剧本（SSE）
+  app.post("/api/admin/scripts/:id/split", authMiddleware, adminMiddleware, async (req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
+    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    try {
+      const result = await splitScript(req.params.id, (stage, msg) => send("progress", { stage, message: msg }));
+      if (!result.ok) { send("error", { message: result.error }); return res.end(); }
+      send("complete", { sessionId: req.params.id, meta: result.result.meta });
+    } catch (e) { send("error", { message: e.message }); }
+    res.end();
+  });
+
+  // 获取已切分数据
+  app.get("/api/admin/scripts/:id/split", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const data = await getSplitData(req.params.id);
+      if (!data) return res.status(404).json({ error: "未找到切分数据" });
+      res.json(data);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.get("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
+    const s = await getSession(req.params.id);
+    if (!s) return res.status(404).json({ error: "剧本不存在" });
+    const markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+    const parsed = parseScript(markdown);
+    res.json({ session: { sessionId: s.sessionId, createdAt: s.createdAt, topic: s.metadata?.topic }, parsed });
+  });
+
+  // 用户管理
+  app.get("/api/admin/users", authMiddleware, adminMiddleware, async (req, res) => res.json({ users: await listUsers() }));
+  app.put("/api/admin/users/:name/role", authMiddleware, adminMiddleware, async (req, res) => {
+    const { role } = req.body;
+    if (!["admin", "player"].includes(role)) return res.status(400).json({ error: "无效的角色" });
+    if (!(await setRole(req.params.name, role))) return res.status(404).json({ error: "用户不存在" });
+    res.json({ success: true });
+  });
+  app.delete("/api/admin/users/:name", authMiddleware, adminMiddleware, async (req, res) => {
+    if (req.params.name === req.user.username) return res.status(400).json({ error: "不能删除自己" });
+    await deleteUser(req.params.name);
+    res.json({ success: true });
+  });
+
+  // 房间管理
+  app.post("/api/admin/rooms", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { scriptSessionId, maxPlayers } = req.body;
+      if (!scriptSessionId) return res.status(400).json({ error: "请选择剧本" });
+      const result = await createGameRoom(scriptSessionId, maxPlayers);
+      res.json(result);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.delete("/api/admin/rooms/:code", authMiddleware, adminMiddleware, async (req, res) => {
+    const { getRedis } = require("../modules/game-manager");
+    const r2 = await getRedis();
+    await r2.srem("rooms:open", req.params.code);
+    await deleteGameRoom(req.params.code);
+    io.to(req.params.code).emit("game_ended", { message: "房间已被管理员关闭" });
+    res.json({ success: true });
+  });
+
+  app.get("/api/admin/rooms", authMiddleware, adminMiddleware, async (req, res) => {
+    const { getRedis } = require("../modules/game-manager");
+    const r2 = await getRedis();
+    const codes = await r2.smembers("rooms:open");
+    const rooms = [];
+    for (const code of codes) {
+      const room = await getRoom(code);
+      if (room) {
+        const players = await getPlayers(code);
+        rooms.push({ roomCode: code, status: room.status, phase: room.phase, scriptTitle: JSON.parse(room.parsedScript || "{}").title, playerCount: players.length });
+      }
+    }
+    res.json({ rooms });
+  });
+}
+
+// 共享的房间创建逻辑（优先使用切分数据）
+async function createGameRoom(scriptSessionId, maxPlayers) {
+  const { getRedis } = require("../modules/game-manager");
+  const r2 = await getRedis();
+
+  // 尝试从 split 数据加载
+  const meta = await r2.hgetall(`split:${scriptSessionId}:meta`);
+  let parsed;
+  let allClues = [];
+  let characterNames = [];
+
+  if (meta && meta.title) {
+    // 使用切分数据
+    const charKeys = await r2.keys(`split:${scriptSessionId}:char:*`);
+    const clueKeys = await r2.keys(`split:${scriptSessionId}:clue:*`);
+    const dmData = await r2.hgetall(`split:${scriptSessionId}:dm`);
+
+    const pipeline = r2.pipeline();
+    charKeys.forEach(k => pipeline.hgetall(k));
+    clueKeys.forEach(k => pipeline.hgetall(k));
+    const results = await pipeline.exec();
+
+    const characters = [];
+    for (let i = 0; i < results.length; i++) {
+      const d = results[i][1];
+      if (!d) continue;
+      if (d.playerScript !== undefined) {
+        characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, script: { story: d.playerScript, secret: d.secret } });
+        characterNames.push(d.name);
+      } else {
+        allClues.push(d);
+      }
+    }
+
+    parsed = {
+      title: meta.title,
+      setting: { era: meta.era, location: meta.location },
+      characters,
+      clues: { round1: allClues.filter(c => c.round === "1"), round2: allClues.filter(c => c.round === "2"), round3: allClues.filter(c => c.round === "3"), redHerrings: [] },
+      murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
+      dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
+      victim: {},
+    };
+  } else {
+    // 回退：从旧 session 解析
+    const session = await getSession(scriptSessionId);
+    if (!session) throw new Error("剧本不存在");
+    const markdown = session.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+    parsed = parseScript(markdown);
+    allClues = [...(parsed.clues?.round1 || []), ...(parsed.clues?.round2 || []), ...(parsed.clues?.round3 || [])];
+    characterNames = parsed.characters?.map(c => c.name) || [];
+  }
+
+  const room = await createRoom("system_dm", "AI_DM");
+  await updateRoom(room.roomCode, { scriptSessionId, parsedScript: JSON.stringify(parsed), murdererName: parsed.murderer?.name || "", dmType: "ai", maxPlayers: maxPlayers || 6 });
+  if (allClues.length > 0) await loadClues(room.roomCode, allClues);
+  await r2.sadd("rooms:open", room.roomCode);
+  await removePlayer(room.roomCode, "system_dm");
+  return { roomCode: room.roomCode, title: parsed.title, characterCount: characterNames.length, characters: characterNames };
+}
+
+module.exports = { setupAdminRoutes, createGameRoom };

@@ -1,0 +1,18 @@
+{
+  "name": "text-gen-agent",
+  "version": "1.0.0",
+  "description": "基于 DeepSeek API 的文本生成 Agent",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "ioredis": "^5.10.1",
+    "openai": "^4.73.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^10.0.0"
+  }
+}

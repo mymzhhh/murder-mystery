@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>剧本杀 — 游戏大厅</title>
+  <link rel="stylesheet" href="/common.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>剧本杀</h1>
+    <span class="user-info" id="userInfo"></span>
+    <button class="btn btn-outline btn-sm" onclick="doLogout()">退出</button>
+  </header>
+
+  <div class="main-content" id="mainContent">
+    <!-- 大厅视图 -->
+    <div id="lobbyView">
+      <div class="grid-2">
+        <div class="panel">
+          <h3>创建房间</h3>
+          <div class="form-group">
+            <label>选择剧本</label>
+            <select id="createScriptSelect" onchange="onScriptSelect()" style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;">
+              <option value="">-- 选择一个剧本 --</option>
+            </select>
+          </div>
+          <div id="scriptPreview" style="display:none;"></div>
+          <div class="form-group">
+            <label>游玩人数（由剧本角色数决定）</label>
+            <input type="number" id="createMaxPlayers" value="6" disabled style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);font-size:14px;opacity:0.6;" />
+          </div>
+          <button class="btn btn-success" onclick="createMyRoom()" id="btnCreateRoom" disabled>请先选择剧本</button>
+          <div id="createResult" style="margin-top:12px;display:none;"></div>
+        </div>
+
+        <div class="panel">
+          <h3>加入房间</h3>
+          <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">输入朋友分享的房间码即可加入</p>
+          <div style="display:flex;gap:10px;">
+            <input type="text" id="roomCodeInput" placeholder="输入房间码" maxlength="6" style="flex:1;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:20px;font-family:monospace;text-align:center;text-transform:uppercase;letter-spacing:4px;" onkeydown="if(event.key==='Enter')joinRoom()" />
+            <button class="btn btn-primary" onclick="joinRoom()" style="width:auto;">加入</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>可加入的房间</h3>
+        <div class="grid-3" id="roomList">
+          <span style="color:var(--text2);">加载中...</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 游戏视图 -->
+    <div id="gameView" style="display:none;">
+      <div id="gameContent"></div>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/player.js"></script>
+</body>
+</html>
