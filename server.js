@@ -23,6 +23,22 @@ app.use(express.static(path.join(__dirname, "public"), {
 }));
 app.get("/", (req, res) => res.redirect("/login.html"));
 
+// 健康检查 + 调试
+app.get("/api/health", async (req, res) => {
+  const info = {
+    redisUrl: process.env.REDIS_URL ? process.env.REDIS_URL.replace(/\/\/.*@/, "//***@") : "NOT SET",
+    port: process.env.PORT,
+    railwayEnv: !!process.env.RAILWAY_ENVIRONMENT,
+  };
+  try {
+    const { getRedis } = require("./modules/game-manager");
+    const r = await getRedis();
+    await r.ping();
+    info.redis = "connected";
+  } catch (e) { info.redis = "error: " + e.message; }
+  res.json(info);
+});
+
 // 挂载路由
 setupAuthRoutes(app);
 setupAdminRoutes(app, authMiddleware, adminMiddleware, io);
