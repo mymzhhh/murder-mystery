@@ -118,25 +118,18 @@ async function writeScript(userInput, onProgress) {
   let enhancedInput = userInput;
   const isPVE = /NPC|PVE|对抗|嫌疑人|侦探|探案|推理者/.test(userInput);
 
-  // 人数约束
+  // 人数约束（前置到最前面，最强优先级）
   const actualPlayerCount = playerCount > 0 ? Math.min(playerCount, MAX_PLAYERS) : MAX_PLAYERS;
-  let countOverride = "";
-  if (isPVE) {
-    countOverride = `【核心约束 — 角色结构】
-- 玩家可操控的侦探角色：恰好 ${actualPlayerCount} 人
-- NPC嫌疑人（非玩家角色）：2-${MAX_NPC} 人
-- 在角色设定中必须将"玩家角色"和"NPC嫌疑人"分为两个独立的表格列出
-- 玩家角色标注为【玩家】，NPC嫌疑人标注为【NPC】
-- 总人数（玩家+NPC）：${actualPlayerCount + 2} 到 ${actualPlayerCount + MAX_NPC} 人
-- 违反此约束的剧本将被自动拒绝！`;
-  } else {
-    countOverride = `【核心约束 — 角色数量】
-- 角色设定中必须恰好列出 ${actualPlayerCount} 个可玩角色
-- 不得多写任何角色，也不得少写。总角色数必须等于 ${actualPlayerCount}
-- 违反此约束的剧本将被自动拒绝！`;
-  }
+  const npcCountHint = isPVE ? `+ NPC嫌疑人2-${MAX_NPC}人` : "";
+  const countOverride = `【必须严格遵守 — 不可违反的角色数量约束】
+1. 玩家角色数量：恰好 ${actualPlayerCount} 人 ${npcCountHint}
+2. 总角色数不超过 ${MAX_PLAYERS} 人
+3. 在"角色设定"章节中，玩家角色标注【玩家】，NPC标注【NPC】
+4. 角色数量不符合要求的剧本将被直接拒绝！请务必清点角色数量后再输出。`;
 
   enhancedInput = countOverride + "\n\n" + enhancedInput;
+  // 进一步加强：用分隔线强调
+  enhancedInput = "========================================\n" + enhancedInput + "\n========================================";
 
   if (existing.length > 0) {
     const avoidList = existing.map(s => `- 避免：${s.murderer ? s.murderer + '用' + s.method?.substring(0, 50) : ''} - 《${s.title}》`).join("\n");
