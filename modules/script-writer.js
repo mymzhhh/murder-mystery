@@ -4,8 +4,6 @@ const { buildMurderMystery } = require("./murder-mystery-builder");
 const { createSession, addMessage, listSessions, getSession, deleteSession } = require("./history-manager");
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
-const { splitScript } = require("./script-splitter");
-
 const MAX_PLAYERS = 6;
 
 /**
@@ -70,34 +68,23 @@ async function checkDuplication(userInput, existingSummaries) {
  * 检测用户请求的玩家数量
  */
 function detectPlayerCount(input) {
-  // 匹配各种人数表达
-  const patterns = [
-    /(\d+)\s*人/, /(\d+)\s*个?玩家/, /(\d+)\s*个?角色/,
-    /(\d+)人本/, /[七八九十百千]+人/,
-    /[一二三四五六七八九十]+人本/,
-  ];
+  // 直接匹配数字
+  var dm = input.match(/(\d+)\s*(?:人|个?玩家|个?角色|人本)/);
+  if (dm) { var n = parseInt(dm[1]); if (n >= 1 && n <= 20) return n; }
 
-  const digitMap = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10 };
-
-  for (const p of patterns) {
-    const m = input.match(p);
-    if (m) {
-      if (m[1] && /^\d+$/.test(m[1])) return parseInt(m[1]);
-      if (m[1]) {
-        let count = 0;
-        for (const ch of m[1]) {
-          if (digitMap[ch]) count += digitMap[ch];
-        }
-        return count || 0;
-      }
-      if (m[0]) {
-        for (const [ch, v] of Object.entries(digitMap)) {
-          if (m[0].includes(ch + "人")) return v;
-        }
-      }
-    }
+  // 中文数字
+  var digits = { "一":1,"二":2,"两":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,"双":2 };
+  var cm = input.match(/([一两二三四五六七八九十双]+)\s*(?:人|个?玩家|个人|人本)/);
+  if (cm) {
+    var str = cm[1], count = 0;
+    if (str === "十") return 10;
+    if (str.startsWith("十")) count = 10 + (digits[str[1]] || 0);
+    else if (str.endsWith("十")) count = (digits[str[0]] || 0) * 10;
+    else count = digits[str] || 0;
+    if (count >= 1 && count <= 20) return count;
   }
-  return 0; // 未指定
+
+  return 0;
 }
 
 /**
@@ -162,31 +149,16 @@ async function writeScript(userInput, onProgress) {
   const parsed = parseScript(result.fullScript);
   const characterNames = parsed.characters?.map(c => c.name) || [];
 
-  // 8. 自动切分：纯化角色剧本和线索，存入 split:* 命名空间
-  onProgress("split", "正在自动切分剧本...");
-  const splitResult = await splitScript(session.sessionId, (stage, msg) => {
-    onProgress("split_" + stage, msg);
-  });
-
-  // 9. 切分完成后清理原始数据（只保留 split 版本）
-  if (splitResult.ok) {
-    await deleteSession(session.sessionId);
-    // 清理 script_meta 缓存（如果存在）
-    const { getRedis } = require("./game-manager");
-    try { await (await getRedis()).del(`script_meta:${session.sessionId}`); } catch (e) { /* skip */ }
-  }
-
   return {
     ok: true,
     sessionId: session.sessionId,
-    splitSessionId: splitResult.ok ? session.sessionId : null,
+    script: result.fullScript,
     summary: {
       title: parsed.title,
       characterCount: parsed.characters?.length || 0,
       characterNames: characterNames,
       era: parsed.setting?.era || "",
       clueCount: (parsed.clues?.round1?.length || 0) + (parsed.clues?.round2?.length || 0) + (parsed.clues?.round3?.length || 0),
-      splitted: splitResult.ok,
     },
   };
 }

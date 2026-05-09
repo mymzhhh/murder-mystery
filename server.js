@@ -17,7 +17,7 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" }, pingTimeout: 60000, pingInterval: 25000 });
 const PORT = process.env.PORT || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 app.use(express.static(path.join(__dirname, "public"), {
   setHeaders: (res) => { res.set("Cache-Control", "no-cache, no-store, must-revalidate"); }
 }));
