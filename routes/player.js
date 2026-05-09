@@ -1,7 +1,6 @@
 // Player API routes
 
 const { v4: uuidv4 } = require("uuid");
-const { listSessions, getSession } = require("../modules/history-manager");
 const { getRoom, getPlayers } = require("../modules/game-manager");
 
 function setupPlayerRoutes(app, authMiddleware) {
@@ -28,14 +27,7 @@ function setupPlayerRoutes(app, authMiddleware) {
         }
       }
 
-      // 如果有旧的未切分剧本也列出来
-      const sessions = await listSessions();
-      const oldScripts = sessions.filter(s => s.textType === "murder-mystery" && !splitIds.includes(s.sessionId));
-      for (const s of oldScripts) {
-        const cached = await r2.hgetall(`script_meta:${s.sessionId}`);
-        scripts.push({ ...s, title: cached?.title || s.topic || "", characterCount: parseInt(cached?.characterCount) || 0 });
-      }
-
+      // 只显示已完成切分的剧本
       res.json({ scripts });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
