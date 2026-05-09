@@ -15,7 +15,7 @@ function getRedis() {
         return Math.min(times * 1000, 10000);
       },
       lazyConnect: true,
-      enableOfflineQueue: false,
+      enableOfflineQueue: true,
     };
     // Railway Redis 需要 TLS
     if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) {

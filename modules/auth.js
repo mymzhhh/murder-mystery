@@ -8,7 +8,7 @@ let redis = null;
 
 function getRedis() {
   if (!redis) {
-    var opts = { lazyConnect: true, maxRetriesPerRequest: 2, retryStrategy: function(t) { return Math.min(t * 1000, 10000); }, enableOfflineQueue: false };
+    var opts = { lazyConnect: true, maxRetriesPerRequest: 2, retryStrategy: function(t) { return Math.min(t * 1000, 10000); }, enableOfflineQueue: true };
     if (REDIS_URL.startsWith("rediss://") || process.env.RAILWAY_ENVIRONMENT) opts.tls = { rejectUnauthorized: false };
     redis = new Redis(REDIS_URL, opts);
     redis.on("error", function() {});
