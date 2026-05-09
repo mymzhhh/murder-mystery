@@ -13,7 +13,6 @@ COPY templates/ ./templates/
 COPY routes/ ./routes/
 COPY socket/ ./socket/
 COPY public/ ./public/
-COPY data/ ./data/
 
 # 确保数据目录存在
 RUN mkdir -p /app/data/sessions
