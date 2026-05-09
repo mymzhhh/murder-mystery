@@ -1,0 +1,19 @@
+{
+  "build": {
+    "builder": "DOCKERFILE"
+  },
+  "deploy": {
+    "startCommand": "node server.js",
+    "healthcheckPath": "/login.html",
+    "healthcheckTimeout": 30,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 3
+  },
+  "service": {
+    "DEEPSEEK_API_KEY": "sk-0abaf754b31242eb9ba05d657e55c736",
+    "DEEPSEEK_BASE_URL": "https://api.deepseek.com",
+    "DEFAULT_MODEL": "deepseek-v4-pro",
+    "REDIS_URL": "${{RAILWAY_REDIS_URL}}",
+    "PORT": "3000"
+  }
+}
