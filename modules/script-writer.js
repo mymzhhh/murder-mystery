@@ -113,68 +113,74 @@ async function writeScript(userInput, onProgress) {
     };
   }
 
-  // 3. 构建增强的 prompt
+  // 3. 构建增强的 prompt（强制人数约束）
   let enhancedInput = userInput;
   const isPVE = /NPC|PVE|对抗|嫌疑人|侦探|探案|推理者/.test(userInput);
 
+  // 人数约束前置到 system prompt 级别
+  let countOverride = "";
   if (playerCount > 0) {
     if (isPVE) {
-      enhancedInput += `\n\n【硬性要求】这是一个 ${playerCount} 人游玩的PVE剧本。剧本中只有 ${playerCount} 个玩家角色（侦探/调查员），其余为NPC嫌疑人。所有角色（玩家+NPC）总数不得超过 ${MAX_PLAYERS} 人。`;
+      countOverride = `【核心约束：这是一个仅限 ${playerCount} 名玩家游玩的PVE剧本。剧本设计 ${playerCount} 个侦探角色，可额外设计3-4名NPC嫌疑人辅助剧情。所有角色（侦探+NPC）合计不得超过${MAX_PLAYERS}人。角色设定章节中只能列出恰好${playerCount}个侦探角色+NPC嫌疑人。】`;
     } else {
-      enhancedInput += `\n\n【硬性要求：角色总数必须精确为 ${playerCount} 人，不能多也不能少。每增加一个角色都会导致剧本无法使用！】`;
+      countOverride = `【核心约束：角色设定章节中必须恰好列出 ${playerCount} 个角色。不得多写任何额外角色，也不得少写。如果超过${playerCount}个角色，这个剧本将被拒绝。】`;
     }
   } else {
-    enhancedInput += `\n\n【硬性要求：角色总数不能超过 ${MAX_PLAYERS} 人，且必须包含至少2个角色。】`;
+    countOverride = `【核心约束：角色设定章节中不能超过 ${MAX_PLAYERS} 个角色。】`;
   }
+
+  enhancedInput = countOverride + "\n\n" + enhancedInput;
 
   if (existing.length > 0) {
     const avoidList = existing.map(s => `- 避免：${s.murderer ? s.murderer + '用' + s.method?.substring(0, 50) : ''} - 《${s.title}》`).join("\n");
     enhancedInput += `\n\n【创作约束 — 必须避免以下已有剧本的设定和手法：】\n${avoidList}\n请创作全新的故事，手法和动机必须有明显差异。`;
   }
 
-  // 4. 创建会话并生成
-  onProgress("init", "正在创建剧本会话...");
-  const session = await createSession({
-    textType: "murder-mystery",
-    topic: userInput.slice(0, 100),
-    templateName: "剧本杀",
-  });
-  await addMessage(session.sessionId, "user", userInput);
+  // 4. 生成（最多重试2次确保人数正确）
+  let result, session, parsed, characterNames, actualCount;
+  const MAX_GEN_RETRIES = 2;
 
-  // 5. 多阶段生成
-  onProgress("generate", "正在多阶段生成剧本...");
-  const result = await buildMurderMystery(enhancedInput, (stage, msg) => {
-    onProgress(stage, msg);
-  });
+  for (let attempt = 0; attempt <= MAX_GEN_RETRIES; attempt++) {
+    onProgress("init", attempt > 0 ? `第${attempt+1}次生成（修正角色数量）...` : "正在创建剧本会话...");
+    session = await createSession({ textType: "murder-mystery", topic: userInput.slice(0, 100), templateName: "剧本杀" });
+    await addMessage(session.sessionId, "user", userInput);
 
-  // 6. 保存原始剧本到 Redis
-  const contentToSave = result.fullScript.substring(0, 50000);
-  await addMessage(session.sessionId, "assistant", contentToSave);
+    let genInput = enhancedInput;
+    if (attempt > 0) {
+      genInput = `【警告：上一次生成因为角色数量不符合要求被拒绝。必须严格遵守角色数量约束，不得自行增减角色！】\n\n${enhancedInput}`;
+    }
 
-  // 7. 验证角色数量
-  const parsed = parseScript(result.fullScript);
-  const characterNames = parsed.characters?.map(c => c.name) || [];
-  const actualCount = characterNames.length;
+    onProgress("generate", "正在多阶段生成剧本...");
+    result = await buildMurderMystery(genInput, (stage, msg) => onProgress(stage, msg));
+    await addMessage(session.sessionId, "assistant", result.fullScript.substring(0, 50000));
 
-  // 非PVE模式：角色数必须匹配
-  if (playerCount > 0 && !isPVE && actualCount > 0 && actualCount !== playerCount) {
-    // 删除不合格会话
-    await deleteSession(session.sessionId);
-    return {
-      ok: false,
-      error: `剧本生成的角色数为 ${actualCount} 人，但您要求的是 ${playerCount} 人。请重新生成并明确指定角色数量。`,
-      actualCount, expectedCount: playerCount,
-    };
-  }
+    parsed = parseScript(result.fullScript);
+    characterNames = parsed.characters?.map(c => c.name) || [];
+    actualCount = characterNames.length;
 
-  // PVE模式：总角色数不能超限
-  if (isPVE && actualCount > MAX_PLAYERS) {
-    await deleteSession(session.sessionId);
-    return {
-      ok: false,
-      error: `剧本生成了 ${actualCount} 个角色，超过最大限制 ${MAX_PLAYERS} 人。请尝试重新生成。`,
-      actualCount, maxPlayers: MAX_PLAYERS,
-    };
+    // 检查人数
+    if (playerCount > 0 && !isPVE && actualCount !== playerCount) {
+      if (attempt < MAX_GEN_RETRIES) {
+        await deleteSession(session.sessionId);
+        onProgress("retry", `角色数不匹配（期望${playerCount}，实际${actualCount}），重新生成...`);
+        continue;
+      }
+      await deleteSession(session.sessionId);
+      return { ok: false, error: `经过${MAX_GEN_RETRIES+1}次尝试，剧本角色数仍为 ${actualCount} 人（期望 ${playerCount} 人）。请手动修改需求后重试。`, actualCount, expectedCount: playerCount };
+    }
+
+    if (isPVE && actualCount > MAX_PLAYERS) {
+      if (attempt < MAX_GEN_RETRIES) {
+        await deleteSession(session.sessionId);
+        onProgress("retry", `角色数超限（${actualCount}>${MAX_PLAYERS}），重新生成...`);
+        continue;
+      }
+      await deleteSession(session.sessionId);
+      return { ok: false, error: `经过${MAX_GEN_RETRIES+1}次尝试，剧本角色数仍超限。请简化需求后重试。`, actualCount };
+    }
+
+    // 检查通过
+    break;
   }
 
   return {
