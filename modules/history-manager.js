@@ -10,7 +10,7 @@ let redis = null;
 function getRedis() {
   if (!redis) {
     var opts = {
-      maxRetriesPerRequest: 2,
+      maxRetriesPerRequest: null,
       retryStrategy: function(times) {
         return Math.min(times * 1000, 10000);
       },
