@@ -14,9 +14,11 @@ function getRedis() {
   return redis;
 }
 async function ensureConn() {
-  const r = getRedis();
-  if (r.status !== "ready" && r.status !== "connecting") await r.connect();
-  return r;
+  try {
+    const r = getRedis();
+    if (r.status !== "ready" && r.status !== "connecting") await r.connect();
+    return r;
+  } catch(e) { throw new Error("Redis不可用"); }
 }
 
 function hashPassword(password) {
