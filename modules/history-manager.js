@@ -12,8 +12,7 @@ function getRedis() {
     var opts = {
       maxRetriesPerRequest: 2,
       retryStrategy: function(times) {
-        if (times > 10) return null;
-        return Math.min(times * 500, 5000);
+        return Math.min(times * 1000, 10000);
       },
       lazyConnect: true,
       enableOfflineQueue: false,
