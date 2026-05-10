@@ -203,8 +203,6 @@
       </div>`;
 
       h += '<div style="text-align:center;margin-top:16px;">';
-      h += '<button class="btn btn-outline btn-sm" id="voiceBtn" onclick="initVoice()" style="margin-right:8px;">开启语音</button>';
-      h += '<button class="btn btn-outline btn-sm" onclick="toggleMute()" style="margin-right:8px;">静音</button>';
       h += '<button class="btn btn-outline" onclick="leaveRoom()" style="margin-right:8px;">离开房间</button>';
       if (gs.players.length >= 2) {
         h += '<button class="btn btn-success" onclick="startGame()">开始游戏（AI DM主持）</button>';
@@ -285,8 +283,6 @@
       h += '<span class="phase-indicator ' + cls + '">' + (labels[phase]||phase) + '</span>';
       h += '<span style="font-size:13px;color:var(--text2);">角色: ' + esc(gs.myCharacter?.name||'未选择') + '</span>';
       h += '<span style="flex:1;"></span>';
-      h += '<button class="btn btn-outline btn-sm" id="voiceBtn" onclick="initVoice()" style="margin-right:4px;">开启语音</button>';
-      h += '<button class="btn btn-outline btn-sm" onclick="toggleMute()" style="margin-right:4px;">静音</button>';
       h += '<button class="btn btn-outline btn-sm" onclick="socket.emit(\'ready\',{roomCode:gs.room&&gs.room.roomCode})">进入下一阶段</button>';
       h += '</div>';
       return h;
@@ -308,12 +304,8 @@
       (gs.players||[]).forEach(function(p) {
         var isMe = p.playerId === myId;
         var isNPC = p.isNPC || (p.playerId && p.playerId.startsWith("npc_"));
-        var muted = voiceCtx.mutedPeers && voiceCtx.mutedPeers[p.playerId];
         h += '<div style="display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px;">';
         h += '<span style="flex:1;">' + esc(p.characterName||p.playerName) + (isMe?' (你)':'') + (isNPC?' <span style="color:var(--gold);font-size:10px;">[NPC]</span>':'') + '</span>';
-        if (!isMe && !isNPC && voiceCtx.enabled) {
-          h += '<button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:10px;" onclick="togglePeerMute(\'' + p.playerId + '\')">' + (muted?'🔇':'🔊') + '</button>';
-        }
         h += '</div>';
       });
       h += '</div>';
@@ -329,18 +321,31 @@
       h += '<div class="sidebar-tab-content" id="sidebarTabContent">';
 
       if (activeTab === 'script') {
-        // 剧本标签：显示角色剧本
+        // 剧本标签：显示角色剧本（优先完整playerScript，回退到分段字段）
         var char = gs.myCharacter || {};
         var s = char.script || {};
+        var fullScript = s.playerScript || s.fullScript || s.story || '';
         h += '<div class="sidebar-script">';
         if (char.name) {
           h += '<h4 style="color:var(--gold);margin-bottom:8px;">' + esc(char.name) + ' 的角色剧本</h4>';
           if (char.isMurderer) h += '<div class="murderer-tag" style="margin-bottom:8px;">你是凶手</div>';
         }
-        var sections = [['你的故事', s.story], ['你的秘密', s.secret], ['你的时间线', s.personalTimeline], ['你的目标', s.goals], ['你掌握的信息', s.knownInfo], ['你的物品', s.items]];
-        for (var i = 0; i < sections.length; i++) {
-          if (sections[i][1]) {
-            h += '<details class="script-detail"><summary>' + esc(sections[i][0]) + '</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;">' + esc(String(sections[i][1]).substring(0, 2000)) + '</div></details>';
+        // 优先显示完整剧本正文
+        if (fullScript) {
+          h += '<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;max-height:350px;overflow-y:auto;">' + esc(String(fullScript).substring(0, 5000)) + '</div>';
+        }
+        // 秘密单独显示
+        if (s.secret) {
+          h += '<details class="script-detail" style="margin-top:8px;"><summary style="color:var(--blood-light);">你的秘密</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;">' + esc(String(s.secret).substring(0, 2000)) + '</div></details>';
+        }
+        // 如果分段字段可用则作为补充
+        var sections = [['你的时间线', s.personalTimeline], ['你的目标', s.goals], ['你已知晓', s.knownInfo], ['你的物品', s.items]];
+        var hasExtra = sections.some(function(sec) { return sec[1]; });
+        if (hasExtra) {
+          for (var i = 0; i < sections.length; i++) {
+            if (sections[i][1]) {
+              h += '<details class="script-detail"><summary>' + esc(sections[i][0]) + '</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;">' + esc(String(sections[i][1]).substring(0, 2000)) + '</div></details>';
+            }
           }
         }
         h += '</div>';
@@ -567,169 +572,11 @@
       const d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML;
     }
 
-// ==================== WebRTC 语音 ====================
-var voiceCtx = { peers: {}, stream: null, muted: false, enabled: false };
+// 音效和语音已移除
 
-async function initVoice() {
-  if (voiceCtx.enabled) return;
-  try {
-    voiceCtx.stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    voiceCtx.enabled = true;
-    voiceCtx.muted = false;
-    connectToAllPeers();
-    updateVoiceBtn();
-    console.log("[voice] enabled");
-  } catch(e) { console.log("[voice] mic denied:", e.message); }
+// 聊天/房间更新时自动刷新侧边栏
+if (!window._sidePatched) {
+  window._sidePatched = true;
+  socket.on("chat_message", function(data) { setTimeout(refreshSidebar, 50); });
+  socket.on("room_updated", function(data) { setTimeout(refreshSidebar, 50); });
 }
-
-function toggleMute() {
-  voiceCtx.muted = !voiceCtx.muted;
-  if (voiceCtx.stream) {
-    voiceCtx.stream.getAudioTracks().forEach(function(t) { t.enabled = !voiceCtx.muted; });
-  }
-  if (socket) socket.emit("rtc_mute", { roomCode: gs.room && gs.room.roomCode, muted: voiceCtx.muted });
-  updateVoiceBtn();
-}
-
-function updateVoiceBtn() {
-  var btn = document.getElementById("voiceBtn");
-  if (!btn) return;
-  if (!voiceCtx.enabled) { btn.textContent = "开启语音"; btn.className = "btn btn-outline btn-sm"; }
-  else if (voiceCtx.muted) { btn.textContent = "已静音"; btn.className = "btn btn-outline btn-sm"; }
-  else { btn.textContent = "语音中"; btn.className = "btn btn-success btn-sm"; }
-}
-
-function connectToAllPeers() {
-  if (!gs.players) return;
-  var myId = socket && socket.id;
-  gs.players.forEach(function(p) {
-    if (p.playerId !== myId && p.connected && !voiceCtx.peers[p.playerId]) {
-      createPeerConnection(p.playerId);
-    }
-  });
-}
-
-function createPeerConnection(targetId) {
-  var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-  voiceCtx.peers[targetId] = pc;
-
-  pc.onicecandidate = function(e) {
-    if (e.candidate && socket) {
-      socket.emit("rtc_ice", { roomCode: gs.room && gs.room.roomCode, targetId: targetId, candidate: e.candidate });
-    }
-  };
-
-  pc.ontrack = function(e) {
-    var audio = new Audio();
-    audio.srcObject = e.streams[0];
-    audio.autoplay = true;
-    audio.playsinline = true;
-    audio.setAttribute("data-peer", targetId);
-    document.body.appendChild(audio);
-    audio.play().catch(function() { /* autoplay blocked, user needs to interact */ });
-  };
-
-  pc.onconnectionstatechange = function() {
-    if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-      closePeer(targetId);
-    }
-  };
-
-  if (voiceCtx.stream) {
-    voiceCtx.stream.getTracks().forEach(function(t) { pc.addTrack(t, voiceCtx.stream); });
-  }
-
-  pc.createOffer().then(function(offer) { return pc.setLocalDescription(offer); })
-    .then(function() { socket.emit("rtc_offer", { roomCode: gs.room && gs.room.roomCode, targetId: targetId, offer: pc.localDescription }); })
-    .catch(function(e) { console.log("[voice] offer error:", e.message); });
-}
-
-function closePeer(targetId) {
-  var pc = voiceCtx.peers[targetId];
-  if (pc) { pc.close(); delete voiceCtx.peers[targetId]; }
-  var el = document.querySelector('audio[data-peer="' + targetId + '"]');
-  if (el) el.remove();
-}
-
-function closeAllPeers() {
-  Object.keys(voiceCtx.peers).forEach(closePeer);
-  voiceCtx.peers = {};
-  if (voiceCtx.stream) {
-    voiceCtx.stream.getTracks().forEach(function(t) { t.stop(); });
-    voiceCtx.stream = null;
-  }
-  voiceCtx.enabled = false;
-  voiceCtx.muted = false;
-  updateVoiceBtn();
-}
-
-// WebRTC signaling handlers
-if (typeof socket !== "undefined" && socket) {
-  socket.on("rtc_offer", function(data) {
-    var pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
-    voiceCtx.peers[data.fromId] = pc;
-    pc.onicecandidate = function(e) {
-      if (e.candidate) socket.emit("rtc_ice", { roomCode: gs.room && gs.room.roomCode, targetId: data.fromId, candidate: e.candidate });
-    };
-    pc.ontrack = function(e) {
-      var a = new Audio(); a.srcObject = e.streams[0]; a.autoplay = true; a.playsinline = true; a.setAttribute("data-peer", data.fromId); document.body.appendChild(a);
-      a.play().catch(function() {});
-    };
-    pc.onconnectionstatechange = function() {
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") closePeer(data.fromId);
-    };
-    if (voiceCtx.stream) {
-      voiceCtx.stream.getTracks().forEach(function(t) { pc.addTrack(t, voiceCtx.stream); });
-    }
-    pc.setRemoteDescription(new RTCSessionDescription(data.offer))
-      .then(function() { return pc.createAnswer(); })
-      .then(function(answer) { return pc.setLocalDescription(answer); })
-      .then(function() { socket.emit("rtc_answer", { roomCode: gs.room && gs.room.roomCode, targetId: data.fromId, answer: pc.localDescription }); })
-      .catch(function(e) { console.log("[voice] answer error:", e.message); });
-  });
-
-  socket.on("rtc_answer", function(data) {
-    var pc = voiceCtx.peers[data.fromId];
-    if (pc) pc.setRemoteDescription(new RTCSessionDescription(data.answer)).catch(function(e) {});
-  });
-
-  socket.on("rtc_ice", function(data) {
-    var pc = voiceCtx.peers[data.fromId];
-    if (pc && data.candidate) pc.addIceCandidate(new RTCIceCandidate(data.candidate)).catch(function(e) {});
-  });
-
-  socket.on("rtc_mute_update", function(data) {
-    var el = document.querySelector('audio[data-peer="' + data.playerId + '"]');
-    if (el) el.muted = data.muted;
-  });
-}
-
-// Hook into room join/leave
-var _origShowGame = showGame;
-showGame = function() {
-  _origShowGame();
-  setTimeout(initVoice, 1000);
-  // 聊天消息到达时刷新侧边栏
-  var origChat = socket._callbacks && socket._callbacks["chat_message"];
-  if (!window._chatPatched) {
-    window._chatPatched = true;
-    socket.on("chat_message", function(data) { setTimeout(refreshSidebar, 50); });
-    socket.on("room_updated", function(data) { setTimeout(refreshSidebar, 50); });
-  }
-};
-
-// 单人静音
-window._mutedPeers = {};
-if (!voiceCtx.mutedPeers) voiceCtx.mutedPeers = {};
-
-function togglePeerMute(playerId) {
-  voiceCtx.mutedPeers[playerId] = !voiceCtx.mutedPeers[playerId];
-  var el = document.querySelector('audio[data-peer="' + playerId + '"]');
-  if (el) el.muted = voiceCtx.mutedPeers[playerId];
-  refreshSidebar();
-}
-var _origLeaveRoom = leaveRoom;
-leaveRoom = function() { closeAllPeers(); _origLeaveRoom(); };
-if (window._origLeftRoom) { /* already patched */ }
-
-// 音效已移除

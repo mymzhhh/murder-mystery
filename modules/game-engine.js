@@ -97,7 +97,8 @@ function validateAction(action, gameState, playerId) {
 
 function getAvailableCluesForPlayer(allClues, playerId, round) {
   return allClues.filter(c =>
-    c.round === round && !c.foundBy.includes(playerId)
+    // 用 == 兼容 Redis 返回的字符串 round 值
+    c.round == round && (!c.foundBy || !c.foundBy.includes(playerId))
   );
 }
 
