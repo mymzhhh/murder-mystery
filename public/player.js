@@ -139,26 +139,27 @@
       try {
         const res = await api("/api/player/rooms", { method: "POST", body: JSON.stringify({ scriptSessionId: sid, maxPlayers: max }) });
         const data = await res.json();
+        if (!data.roomCode) {
+          alert("创建房间失败: " + (data.error || "未知错误"));
+          return;
+        }
         const el = document.getElementById("createResult");
         el.style.display = "block";
+        var code = data.roomCode;
         el.innerHTML = `
           <div style="padding:20px;background:var(--surface2);border-radius:12px;text-align:center;border:2px solid var(--success);">
             <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">房间已创建！分享房间码给朋友</p>
-            <div class="room-code-lg" id="myRoomCode" style="font-size:36px;cursor:pointer;">${data.roomCode}</div>
+            <div class="room-code-lg" id="myRoomCode" style="font-size:36px;cursor:pointer;">${esc(code)}</div>
             <p style="font-size:12px;color:var(--text2);margin-top:4px;">点击房间码复制 | 即将自动进入...</p>
             <p style="font-size:11px;color:var(--text2);margin-top:8px;">${data.characterCount}个角色：${(data.characters||[]).join('、')}</p>
           </div>`;
-        // 自动进入房间
-        var code = data.roomCode;
-        var joinWhenReady = function() {
-          if (socket && socket.connected) {
-            joinMyRoom(code);
-          } else {
-            socket.once("connect", function() { joinMyRoom(code); });
-          }
-        };
-        setTimeout(joinWhenReady, 500);
-          document.getElementById("myRoomCode").addEventListener("click", copyRoomCode);
+        // 自动进入房间：socket已连接立即join，否则等connect事件
+        if (socket && socket.connected) {
+          joinMyRoom(code);
+        } else {
+          socket.once("connect", function() { joinMyRoom(code); });
+        }
+        document.getElementById("myRoomCode").addEventListener("click", copyRoomCode);
         loadRooms();
       } catch (e) { alert("创建失败: " + e.message); }
     }
@@ -393,18 +394,17 @@
         }
         h += '</div>';
       } else if (activeTab === 'interrogate') {
-        // 审讯标签：选择NPC提问
+        // 审讯标签：NPC列表，点击弹出对话框
         var npcs = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
         h += '<div class="sidebar-script" style="max-height:450px;">';
-        h += '<p style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">选择NPC嫌疑人进行审讯。NPC可能说谎，请自行判断。</p>';
+        h += '<p style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">点击NPC进行审讯（对话全员可见）</p>';
         for (var j = 0; j < npcs.length; j++) {
           var npc = npcs[j];
-          h += '<div class="script-detail" style="margin-bottom:8px;">';
-          h += '<summary style="font-size:12px;color:var(--gold);cursor:pointer;font-weight:600;" onclick="this.parentElement.classList.toggle(\'open\')">' + esc(npc.name) + (npc.occupation ? ' (' + esc(npc.occupation) + ')' : '') + (npc.isMurderer ? '' : '') + '</summary>';
-          h += '<div class="npc-interrogate" style="margin-top:6px;display:none;">';
-          h += '<textarea id="npcQ_' + esc(npc.name) + '" placeholder="向 ' + esc(npc.name) + ' 提问..." style="width:100%;height:50px;padding:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px;resize:none;"></textarea>';
-          h += '<button class="btn btn-primary btn-sm" style="margin-top:4px;width:100%;" onclick="askNpcSidebar(\'' + esc(npc.name) + '\')">提问</button>';
-          h += '</div></div>';
+          h += '<div class="npc-card" onclick="openNpcDialog(\'' + esc(npc.name) + '\')" style="padding:8px;margin-bottom:4px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface);">';
+          h += '<span style="color:var(--gold);font-weight:600;">' + esc(npc.name) + '</span>';
+          if (npc.occupation) h += '<span style="font-size:11px;color:var(--text-dim);margin-left:6px;">' + esc(npc.occupation) + '</span>';
+          h += '<span style="float:right;font-size:11px;color:var(--text-dim);">审讯 ▶</span>';
+          h += '</div>';
         }
         h += '</div>';
       } else {
@@ -557,6 +557,95 @@
       socket.emit("investigate", { roomCode: gs.room?.roomCode });
     }
 
+    // ==================== NPC审讯弹窗 ====================
+    window._npcChats = {};
+
+    function openNpcDialog(npcName) {
+      var chats = window._npcChats[npcName] || [];
+      var h = '<div class="npc-dialog-overlay" onclick="if(event.target===this)closeNpcDialog()">';
+      h += '<div class="npc-dialog">';
+      h += '<div class="npc-dialog-header">';
+      h += '<span>🎤 审讯 ' + esc(npcName) + '</span>';
+      h += '<button onclick="closeNpcDialog()" style="background:none;border:none;color:var(--text);font-size:18px;cursor:pointer;">✕</button>';
+      h += '</div>';
+      h += '<div class="npc-dialog-body" id="npcDialogBody">';
+      if (chats.length === 0) {
+        h += '<p style="color:var(--text-dim);text-align:center;padding:20px;">输入你的问题开始审讯...</p>';
+      } else {
+        for (var i = 0; i < chats.length; i++) {
+          var m = chats[i];
+          h += '<div class="npc-dialog-msg"><div class="npc-dialog-role">' + (m.role === 'user' ? '你' : esc(npcName)) + ':</div><div>' + esc(m.content) + '</div></div>';
+        }
+      }
+      h += '</div>';
+      h += '<div class="npc-dialog-input">';
+      h += '<input id="npcDialogInput" placeholder="输入你的问题..." onkeydown="if(event.key==\'Enter\')askNpcInDialog(\'' + esc(npcName) + '\')" />';
+      h += '<button onclick="askNpcInDialog(\'' + esc(npcName) + '\')">发送</button>';
+      h += '</div></div></div>';
+
+      var overlay = document.getElementById("npcDialogOverlay");
+      if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "npcDialogOverlay";
+        document.body.appendChild(overlay);
+      }
+      overlay.innerHTML = h;
+      overlay.style.display = "block";
+      setTimeout(function() { var inp = document.getElementById("npcDialogInput"); if (inp) inp.focus(); }, 100);
+    }
+
+    function closeNpcDialog() {
+      var overlay = document.getElementById("npcDialogOverlay");
+      if (overlay) overlay.style.display = "none";
+    }
+
+    function askNpcInDialog(npcName) {
+      var inp = document.getElementById("npcDialogInput");
+      if (!inp) return;
+      var q = inp.value.trim();
+      if (!q) return;
+      inp.value = "";
+      // 记录提问
+      var chats = window._npcChats[npcName] || [];
+      chats.push({ role: "user", content: q });
+      window._npcChats[npcName] = chats;
+      // 发送到服务器
+      socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npcName, question: q });
+      // 刷新对话框
+      refreshNpcDialog(npcName);
+    }
+
+    function refreshNpcDialog(npcName) {
+      var chats = window._npcChats[npcName] || [];
+      var body = document.getElementById("npcDialogBody");
+      if (!body) return;
+      var h = '';
+      for (var i = 0; i < chats.length; i++) {
+        var m = chats[i];
+        h += '<div class="npc-dialog-msg" style="margin-bottom:8px;"><div class="npc-dialog-role" style="color:' + (m.role === 'user' ? 'var(--gold)' : 'var(--mystic-light)') + ';font-weight:600;font-size:11px;">' + (m.role === 'user' ? '你' : esc(npcName)) + ':</div><div style="font-size:13px;">' + esc(m.content) + '</div></div>';
+      }
+      body.innerHTML = h || '<p style="color:var(--text-dim);text-align:center;padding:20px;">输入你的问题开始审讯...</p>';
+      body.scrollTop = body.scrollHeight;
+    }
+
+    // 监听chat_message，如果是NPC回复则更新对话框
+    var _origChatHandler = socket._callbacks && socket._callbacks["$chat_message"];
+    socket.on("chat_message", function(data) {
+      // 检查是否是NPC消息（来自ask_npc的回复）
+      if (data.playerId && data.playerId.startsWith("npc_")) {
+        var npcName = data.characterName;
+        if (npcName) {
+          var chats = window._npcChats[npcName] || [];
+          var content = data.content || "";
+          // 去掉 "[回复 xxx] " 前缀
+          content = content.replace(/^\[回复 .+?\]\s*/, "");
+          chats.push({ role: "npc", content: content });
+          window._npcChats[npcName] = chats;
+          refreshNpcDialog(npcName);
+        }
+      }
+    });
+
     function renderDiscussion() {
       let h = topBar(gs.phase);
       h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
@@ -564,25 +653,6 @@
       h += '<p style="color:var(--text2);font-size:13px;margin-top:12px;">讨论中 — 使用右侧聊天框发送消息</p>';
       document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
       setTimeout(function(){var e=document.getElementById('chatMsgs');if(e)e.scrollTop=e.scrollHeight;},100);
-    }
-
-    function askNpc() {
-      var npc = document.getElementById("npcSelect")?.value;
-      var q = document.getElementById("npcQuestion")?.value.trim();
-      if (!npc || !q) return;
-      socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npc, question: q });
-      document.getElementById("npcQuestion").value = "";
-    }
-
-    function askNpcSidebar(npcName) {
-      var qEl = document.getElementById("npcQ_" + npcName);
-      if (!qEl) return;
-      var q = qEl.value.trim();
-      if (!q) return;
-      socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npcName, question: q });
-      qEl.value = "";
-      // 自动切换到聊天标签查看回复
-      switchSidebarTab("chat");
     }
 
     function doChat() {
