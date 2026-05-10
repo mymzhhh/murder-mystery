@@ -148,8 +148,20 @@
             <p style="font-size:12px;color:var(--text2);margin-top:4px;">点击房间码复制 | 即将自动进入...</p>
             <p style="font-size:11px;color:var(--text2);margin-top:8px;">${data.characterCount}个角色：${(data.characters||[]).join('、')}</p>
           </div>`;
-        // 自动进入房间
-        setTimeout(function() { joinMyRoom(data.roomCode); }, 500);
+        // 自动进入房间（等待Socket连接就绪）
+        var code = data.roomCode;
+        var attempts = 0;
+        var tryJoin = setInterval(function() {
+          attempts++;
+          if (socket && socket.connected) {
+            clearInterval(tryJoin);
+            joinMyRoom(code);
+          } else if (attempts >= 10) {
+            clearInterval(tryJoin);
+            el.innerHTML += '<p style="color:var(--warning);margin-top:8px;">自动进入失败，请手动点击下方按钮</p>';
+            el.innerHTML += '<button class="btn btn-primary btn-sm" onclick="joinMyRoom(\'' + code + '\')" style="margin-top:4px;">进入房间</button>';
+          }
+        }, 500);
           document.getElementById("myRoomCode").addEventListener("click", copyRoomCode);
         loadRooms();
       } catch (e) { alert("创建失败: " + e.message); }
