@@ -10,11 +10,33 @@ const { optimizePrompt } = require("../modules/prompt-agent");
 const { createRoom, getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, removePlayer, loadClues } = require("../modules/game-manager");
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
-  // 剧本列表
+  // 剧本列表（含未切分 session + 已切分 split 数据）
   app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
     try {
       const sessions = await listSessions();
       const scripts = sessions.filter(s => s.textType === "murder-mystery");
+
+      // 同时读取已切分的剧本（原始session已被删除但split数据保留）
+      const { getRedis } = require("../modules/game-manager");
+      const r2 = await getRedis();
+      const splitIds = await r2.smembers("scripts:split");
+      for (const id of splitIds) {
+        // 避免重复（如果session还在列表中）
+        if (!scripts.find(s => s.sessionId === id)) {
+          const meta = await r2.hgetall(`split:${id}:meta`);
+          if (meta && meta.title) {
+            scripts.push({
+              sessionId: id,
+              topic: meta.title,
+              textType: "murder-mystery",
+              createdAt: meta.splitAt || "",
+              messageCount: parseInt(meta.clueCount) || 0,
+              isSplit: true,
+            });
+          }
+        }
+      }
+
       res.json({ scripts });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
