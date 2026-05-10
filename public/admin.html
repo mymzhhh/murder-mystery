@@ -42,8 +42,8 @@
       <div class="panel">
         <h3>剧本库</h3>
         <table class="table" id="scriptTable">
-          <thead><tr><th>主题</th><th>创建时间</th><th>操作</th></tr></thead>
-          <tbody><tr><td colspan="3" style="color:var(--text2);">加载中...</td></tr></tbody>
+          <thead><tr><th>主题</th><th>人数</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody><tr><td colspan="4" style="color:var(--text2);">加载中...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -268,10 +268,11 @@
         const res = await api("/api/admin/scripts");
         const data = await res.json();
         const tbody = document.querySelector("#scriptTable tbody");
-        if (data.scripts.length === 0) { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--text2);">暂无剧本</td></tr>'; return; }
+        if (data.scripts.length === 0) { tbody.innerHTML = '<tr><td colspan="4" style="color:var(--text2);">暂无剧本</td></tr>'; return; }
         tbody.innerHTML = data.scripts.map(s => `
           <tr>
             <td>${esc(s.topic)}</td>
+            <td>${s.characterCount || '?'}人</td>
             <td>${new Date(s.createdAt).toLocaleString()}</td>
             <td>
               <button class="btn btn-outline btn-sm" onclick="createRoomFromScript('${s.sessionId}')">创建房间</button>

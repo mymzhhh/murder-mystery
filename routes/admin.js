@@ -14,7 +14,10 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
     try {
       const sessions = await listSessions();
-      const scripts = sessions.filter(s => s.textType === "murder-mystery");
+      const scripts = sessions.filter(s => s.textType === "murder-mystery").map(s => ({
+        ...s,
+        characterCount: s.messageCount || undefined, // session暂用messageCount占位
+      }));
 
       // 同时读取已切分的剧本（原始session已被删除但split数据保留）
       const { getRedis } = require("../modules/game-manager");
