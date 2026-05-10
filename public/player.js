@@ -409,7 +409,7 @@
         h += '</div>';
       } else {
         // 聊天标签
-        h += '<div class="chat-box" style="height:200px;"><div class="chat-messages" id="chatMsgs">';
+        h += '<div class="chat-box" style="height:280px;"><div class="chat-messages" id="chatMsgs">';
         (gs.chatMessages||[]).slice(-40).forEach(function(m) {
           h += '<div class="chat-msg"><span class="sender">' + esc(m.characterName||m.playerName) + ':</span>' + esc(m.content) + '</div>';
         });
