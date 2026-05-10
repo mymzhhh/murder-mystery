@@ -19,8 +19,10 @@ function setupGameSocket(io) {
         if (!room) return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });
 
         const existing = await getPlayers(roomCode);
-        const byUsername = existing.find(p => p.playerName === user.username);
-        const bySocketId = existing.find(p => p.playerId === socket.id);
+        // 过滤掉NPC虚拟玩家
+        const humanPlayers = existing.filter(p => !p.isNPC);
+        const byUsername = humanPlayers.find(p => p.playerName === user.username);
+        const bySocketId = humanPlayers.find(p => p.playerId === socket.id);
 
         if (byUsername) {
           await updatePlayer(roomCode, byUsername.playerId, { playerId: socket.id, connected: true });
@@ -34,43 +36,69 @@ function setupGameSocket(io) {
         }
         socket.join(roomCode);
 
-        const players = await getPlayers(roomCode);
+        // 如果没有房主，设第一个加入的人类玩家为房主
+        const allPlayers = await getPlayers(roomCode);
+        const currentHumans = allPlayers.filter(p => !p.isNPC);
+        if (!room.ownerId || !currentHumans.find(p => p.playerId === room.ownerId)) {
+          const newOwner = currentHumans[0];
+          if (newOwner) {
+            await updateRoom(roomCode, { ownerId: newOwner.playerId });
+          }
+        }
+        const updatedRoom = await getRoom(roomCode);
+
         const parsed = JSON.parse(room.parsedScript || "{}");
-        const myPlayer = players.find(p => p.playerId === socket.id);
+        const myPlayer = allPlayers.find(p => p.playerId === socket.id);
         const myCharacter = parsed.characters?.find(c => c.name === myPlayer?.characterName);
-        // 线索公开：所有已发现的线索对所有玩家可见
         const allCluesRaw = await getClues(roomCode);
         const myClues = (allCluesRaw || []).filter(c => c.foundBy && c.foundBy.length > 0).map(c => {
-          const finder = players.find(p => p.playerId === c.foundBy[0]);
+          const finder = allPlayers.find(p => p.playerId === c.foundBy[0]);
           return { ...c, foundByName: finder?.characterName || finder?.playerName || "未知" };
         });
 
+        // 检查是否可以开始游戏
+        const totalPlayerSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
+        const assignedCount = currentHumans.filter(p => p.characterName).length;
+        const allReady = currentHumans.length >= totalPlayerSlots && assignedCount >= currentHumans.length && currentHumans.length >= 2;
+
         socket.emit("room_state", {
-          room: { roomCode, status: room.status, phase: room.phase },
-          players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false })),
+          room: { roomCode, status: room.status, phase: room.phase, ownerId: updatedRoom.ownerId, maxPlayers: room.maxPlayers },
+          playerId: socket.id,
+          players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isOwner: p.playerId === updatedRoom.ownerId })),
           myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), phaseNarrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim },
-          allCharacters: parsed.characters || [], // 完整角色列表（含NPC、roleType）
+          allCharacters: parsed.characters || [],
+          canStart: allReady, totalSlots: totalPlayerSlots,
         });
-        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode) });
+        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: room.ownerId });
       } catch (e) { socket.emit("error", { code: "JOIN_FAILED", message: e.message }); }
     });
 
     socket.on("leave_room", async ({ roomCode }) => {
       try {
+        const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
         const me = players.find(p => p.playerId === socket.id);
         if (me) await removePlayer(roomCode, socket.id);
         socket.leave(roomCode);
         const remaining = await getPlayers(roomCode);
+        const humanRemaining = remaining.filter(p => !p.isNPC);
+
+        // 房主离开时转让给随机其他人
+        if (room.ownerId === socket.id && humanRemaining.length > 0) {
+          const newOwner = humanRemaining[Math.floor(Math.random() * humanRemaining.length)];
+          await updateRoom(roomCode, { ownerId: newOwner.playerId });
+        }
+
         if (remaining.length === 0) {
           const { getRedis } = require("../modules/game-manager");
           const r2 = await getRedis();
           await r2.srem("rooms:open", roomCode);
           await deleteGameRoom(roomCode);
         } else {
-          io.to(roomCode).emit("room_updated", { players: remaining });
+          const updatedRoom = await getRoom(roomCode);
+          io.to(roomCode).emit("room_updated", { players: remaining, ownerId: updatedRoom.ownerId });
         }
         socket.emit("left_room", {});
       } catch (e) { socket.emit("error", { code: "LEAVE_FAILED", message: e.message }); }
@@ -90,17 +118,35 @@ function setupGameSocket(io) {
         if (players.some(p => p.characterName === characterName)) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
         await updatePlayer(roomCode, socket.id, { characterName, characterScript: JSON.stringify(char) });
         socket.emit("character_selected", { characterName, character: char, isMurderer: char.isMurderer });
-        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode) });
+        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: room.ownerId });
       } catch (e) { socket.emit("error", { code: "SELECT_FAILED", message: e.message }); }
     });
 
     socket.on("start_game", async ({ roomCode }) => {
       try {
         const room = await getRoom(roomCode);
-        const players = await getPlayers(roomCode);
-        const assigned = players.filter(p => p.characterName);
-        if (assigned.length < 2) return socket.emit("error", { code: "NOT_ENOUGH", message: "至少需要2名玩家" });
+        // 只有房主可以开始游戏
+        if (room.ownerId && room.ownerId !== socket.id) {
+          return socket.emit("error", { code: "NOT_OWNER", message: "只有房主可以开始游戏" });
+        }
+        const curPlayers = await getPlayers(roomCode);
+        const humanPlayers = curPlayers.filter(p => !p.isNPC);
+        if (humanPlayers.length < 2) return socket.emit("error", { code: "NOT_ENOUGH", message: "至少需要2名玩家" });
+
         const parsed = JSON.parse(room.parsedScript || "{}");
+        const totalSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
+
+        // 检查人数是否足够
+        if (humanPlayers.length < totalSlots) {
+          return socket.emit("error", { code: "NOT_FULL", message: `等待更多玩家加入（${humanPlayers.length}/${totalSlots}人）` });
+        }
+        // 检查是否所有人已选角色
+        const unassigned = humanPlayers.filter(p => !p.characterName);
+        if (unassigned.length > 0) {
+          return socket.emit("error", { code: "NOT_READY", message: `还有${unassigned.length}名玩家未选择角色` });
+        }
+
+        const assigned = humanPlayers.filter(p => p.characterName);
 
         // 将NPC角色以虚拟玩家身份加入游戏（AI控制）
         const npcChars = parsed.characters?.filter(c => c.roleType === "npc") || [];

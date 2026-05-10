@@ -71,9 +71,8 @@
       socket.on("connect", function() { loadRooms(); });
       socket.on("room_state", function(data) { gs = Object.assign(gs, data); showGame(); });
       socket.on("room_updated", function(data) {
-        var oldPlayers = gs.players;
         gs.players = data.players;
-        // 仅局部更新玩家列表，不重绘整个页面防止按钮跳动
+        if (data.ownerId) gs.room = gs.room || {}; gs.room.ownerId = data.ownerId;
         updatePlayerList();
         updateCharSelect();
       });
@@ -140,13 +139,11 @@
           <div style="padding:20px;background:var(--surface2);border-radius:12px;text-align:center;border:2px solid var(--success);">
             <p style="font-size:13px;color:var(--text2);margin-bottom:8px;">房间已创建！分享房间码给朋友</p>
             <div class="room-code-lg" id="myRoomCode" style="font-size:36px;cursor:pointer;">${data.roomCode}</div>
-            <p style="font-size:12px;color:var(--text2);margin-top:4px;">点击房间码复制</p>
-            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;">
-              <button class="btn btn-primary btn-sm" onclick="copyRoomCode()" style="width:auto;">复制房间码</button>
-              <button class="btn btn-success btn-sm" onclick="joinMyRoom('${data.roomCode}')" style="width:auto;">进入房间</button>
-            </div>
+            <p style="font-size:12px;color:var(--text2);margin-top:4px;">点击房间码复制 | 即将自动进入...</p>
             <p style="font-size:11px;color:var(--text2);margin-top:8px;">${data.characterCount}个角色：${(data.characters||[]).join('、')}</p>
           </div>`;
+        // 自动进入房间
+        setTimeout(function() { joinMyRoom(data.roomCode); }, 500);
           document.getElementById("myRoomCode").addEventListener("click", copyRoomCode);
         loadRooms();
       } catch (e) { alert("创建失败: " + e.message); }
@@ -185,16 +182,27 @@
       const chars = parsed.characters || gs.myCharacter ? [gs.myCharacter] : [];
       const availableChars = /* get from room state */ [];
 
+      const isOwner = gs.room?.ownerId === gs.playerId;
+      const humanPlayers = (gs.players || []).filter(function(p) { return !p.isNPC; });
+      const totalSlots = gs.totalSlots || (gs.allCharacters || []).filter(function(c) { return c.roleType !== 'npc'; }).length;
+      const assignedCount = humanPlayers.filter(function(p) { return p.characterName; }).length;
+      const canStart = humanPlayers.length >= totalSlots && assignedCount >= humanPlayers.length && humanPlayers.length >= 2;
+
       let h = `<div class="panel"><div style="text-align:center;margin:20px 0;">
         <h3>房间 ${gs.room?.roomCode}</h3>
         <p style="color:var(--text2);">${parsed.title||'剧本杀'}</p>
         <p style="font-size:13px;color:var(--text2);">${parsed.setting?.era||''} | ${esc(parsed.setting?.location||'')}</p>
+        <p style="font-size:12px;color:var(--gold);">${humanPlayers.length}/${totalSlots}人 | ${assignedCount}人已选角色</p>
       </div>
 
       <div class="grid-2">
         <div>
           <h4>玩家列表</h4>
-          <div id="playerListEl">${gs.players.map(function(p) { return '<div class="card" style="margin-bottom:4px;padding:10px;">' + esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选择角色)') + '</div>'; }).join("")}</div>
+          <div id="playerListEl">${gs.players.map(function(p) {
+            var label = esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选角色)');
+            if (p.isOwner) label = '👑 ' + label;
+            return '<div class="card" style="margin-bottom:4px;padding:10px;">' + label + '</div>';
+          }).join("")}</div>
         </div>
         <div>
           <h4>选择你的角色</h4>
@@ -204,8 +212,12 @@
 
       h += '<div style="text-align:center;margin-top:16px;">';
       h += '<button class="btn btn-outline" onclick="leaveRoom()" style="margin-right:8px;">离开房间</button>';
-      if (gs.players.length >= 2) {
-        h += '<button class="btn btn-success" onclick="startGame()">开始游戏（AI DM主持）</button>';
+      if (isOwner) {
+        var btnDisabled = !canStart;
+        var btnText = canStart ? '开始游戏（AI DM主持）' : (humanPlayers.length < totalSlots ? '等待玩家加入...' : '等待所有人选择角色...');
+        h += '<button class="btn btn-success" onclick="startGame()"' + (btnDisabled ? ' disabled style="opacity:0.5;"' : '') + '>' + btnText + '</button>';
+      } else {
+        h += '<span style="color:var(--text2);font-size:13px;">等待房主开始游戏...</span>';
       }
       h += '</div>';
       h += '</div>';
@@ -238,7 +250,9 @@
       var list = document.getElementById("playerListEl");
       if (!list) return;
       list.innerHTML = gs.players.map(function(p) {
-        return '<div class="card" style="margin-bottom:4px;padding:10px;">' + esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选择角色)') + '</div>';
+        var label = esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选角色)');
+        if (p.isOwner) label = '👑 ' + label;
+        return '<div class="card" style="margin-bottom:4px;padding:10px;">' + label + '</div>';
       }).join("");
     }
 
