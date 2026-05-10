@@ -80,7 +80,11 @@
       socket.on("game_started", function(data) { gs.phase = data.phase; gs.narrative = data.narrative || ""; renderGame(); });
       socket.on("phase_changed", function(data) { gs.phase = data.phase; gs.phaseConfig = data.config || {}; gs.narrative = data.narrative || ""; renderGame(); });
       socket.on("clue_received", function(data) { data.clue.foundByName = data.foundBy; gs.myClues.push(data.clue); renderInvestigation(); });
-      socket.on("chat_message", function(data) { gs.chatMessages.push(data); if (gs.phase.includes("discussion") || gs.phase === "round3" || gs.phase === "voting") renderDiscussion(); });
+      socket.on("chat_message", function(data) {
+        gs.chatMessages.push(data);
+        if (gs.phase.includes("discussion") || gs.phase === "round3" || gs.phase === "voting") renderDiscussion();
+        else if (gs.phase.includes("investigation")) renderInvestigation();
+      });
       socket.on("vote_recorded", function(data) { gs.voteTarget = data.target; renderVoting(); });
       socket.on("vote_update", function(data) { renderVoting(); });
       socket.on("truth_revealed", function(data) { gs.phase = "truth_reveal"; renderTruth(data); });
@@ -561,10 +565,14 @@
     }
 
     function askNpcSidebar(npcName) {
-      var q = document.getElementById("npcQ_" + npcName)?.value.trim();
+      var qEl = document.getElementById("npcQ_" + npcName);
+      if (!qEl) return;
+      var q = qEl.value.trim();
       if (!q) return;
       socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npcName, question: q });
-      document.getElementById("npcQ_" + npcName).value = "";
+      qEl.value = "";
+      // 自动切换到聊天标签查看回复
+      switchSidebarTab("chat");
     }
 
     function doChat() {
