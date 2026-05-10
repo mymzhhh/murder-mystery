@@ -318,7 +318,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
   if (allClues.length > 0) await loadClues(room.roomCode, allClues);
   await r2.sadd("rooms:open", room.roomCode);
   await removePlayer(room.roomCode, "system_dm");
-  const onlyPlayerNames = characters.filter(c => c.roleType !== "npc").map(c => c.name);
+  const onlyPlayerNames = (parsed.characters || []).filter(c => c.roleType !== "npc").map(c => c.name);
   return { roomCode: room.roomCode, title: parsed.title, characterCount: onlyPlayerNames.length, characters: onlyPlayerNames };
 }
 
