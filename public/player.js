@@ -494,6 +494,21 @@
     function renderInvestigation() {
       let h = topBar(gs.phase);
       h += gs.narrative ? `<div class="narrative-panel">${esc(gs.narrative)}</div>` : "";
+      // NPC审讯面板
+      var npcChars = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
+      if (npcChars.length > 0) {
+        h += '<div class="panel" style="margin-top:16px;"><h4 style="margin-bottom:8px;">审讯NPC嫌疑人</h4>';
+        h += '<div style="display:flex;gap:8px;align-items:center;">';
+        h += '<select id="npcSelect" style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;">';
+        npcChars.forEach(function(n) { h += '<option value="' + esc(n.name) + '">' + esc(n.name) + (n.occupation ? ' (' + esc(n.occupation) + ')' : '') + '</option>'; });
+        h += '</select>';
+        h += '</div>';
+        h += '<div style="display:flex;gap:8px;margin-top:8px;">';
+        h += '<input id="npcQuestion" placeholder="输入你的问题..." style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;" onkeydown="if(event.key==\'Enter\')askNpc()" />';
+        h += '<button class="btn btn-primary btn-sm" onclick="askNpc()">提问</button>';
+        h += '</div></div>';
+      }
+
       h += '<h4 style="margin:12px 0;">已获取的线索</h4>';
       h += '<div class="clue-grid">';
       for (const c of gs.myClues) {
@@ -514,9 +529,32 @@
     function renderDiscussion() {
       let h = topBar(gs.phase);
       h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
+
+      // NPC审讯面板
+      var npcChars = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
+      if (npcChars.length > 0) {
+        h += '<div class="panel" style="margin-top:12px;"><h4 style="margin-bottom:8px;">审讯NPC嫌疑人</h4>';
+        h += '<div style="display:flex;gap:8px;align-items:center;">';
+        h += '<select id="npcSelect" style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;">';
+        npcChars.forEach(function(n) { h += '<option value="' + esc(n.name) + '">' + esc(n.name) + (n.occupation ? ' (' + esc(n.occupation) + ')' : '') + '</option>'; });
+        h += '</select></div>';
+        h += '<div style="display:flex;gap:8px;margin-top:8px;">';
+        h += '<input id="npcQuestion" placeholder="输入你的问题..." style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;" onkeydown="if(event.key==\'Enter\')askNpc()" />';
+        h += '<button class="btn btn-primary btn-sm" onclick="askNpc()">提问</button>';
+        h += '</div></div>';
+      }
+
       h += '<p style="color:var(--text2);font-size:13px;margin-top:12px;">讨论中 — 使用右侧聊天框发送消息</p>';
       document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
       setTimeout(function(){var e=document.getElementById('chatMsgs');if(e)e.scrollTop=e.scrollHeight;},100);
+    }
+
+    function askNpc() {
+      var npc = document.getElementById("npcSelect")?.value;
+      var q = document.getElementById("npcQuestion")?.value.trim();
+      if (!npc || !q) return;
+      socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npc, question: q });
+      document.getElementById("npcQuestion").value = "";
     }
 
     function doChat() {

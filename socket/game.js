@@ -4,6 +4,7 @@ const { verifyToken } = require("../modules/auth");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, clearVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
 const { getPhaseConfig, getPhaseRound, validateAction, getAvailableCluesForPlayer } = require("../modules/game-engine");
 const { generatePhaseNarrative, decideClueForPlayer } = require("../modules/dm-agent");
+const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
 
 function setupGameSocket(io) {
@@ -164,6 +165,39 @@ function setupGameSocket(io) {
         const msg = await addChatMessage(roomCode, socket.id, player?.playerName || "", player?.characterName || "", content, room.phase);
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "CHAT_FAILED", message: e.message }); }
+    });
+
+    // 审讯NPC：玩家向NPC嫌疑人提问
+    socket.on("ask_npc", async ({ roomCode, npcName, question }) => {
+      try {
+        const room = await getRoom(roomCode);
+        const players = await getPlayers(roomCode);
+        const val = validateAction("send_chat", { phase: room.phase, players }, socket.id);
+        if (!val.ok) return socket.emit("error", { code: val.error, message: "当前阶段无法审讯NPC" });
+        if (!question?.trim()) return socket.emit("error", { code: "EMPTY", message: "请输入问题" });
+
+        const parsed = JSON.parse(room.parsedScript || "{}");
+        const npcChar = parsed.characters?.find(c => c.name === npcName && c.roleType === "npc");
+        if (!npcChar) return socket.emit("error", { code: "NOT_FOUND", message: "未找到该NPC" });
+
+        const player = players.find(p => p.playerId === socket.id);
+        const askerName = player?.characterName || player?.playerName || "未知";
+
+        // 获取最近的聊天记录作为上下文
+        const chatHistory = await getChatMessages(roomCode, 10);
+
+        const scriptSummary = {
+          title: parsed.title,
+          setting: parsed.setting,
+          victim: parsed.victim,
+        };
+
+        const response = await generateNpcResponse(npcChar, question, scriptSummary, chatHistory);
+
+        // NPC回复以聊天消息形式广播
+        const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `[回复 ${askerName}] ${response}`, room.phase);
+        io.to(roomCode).emit("chat_message", msg);
+      } catch (e) { socket.emit("error", { code: "NPC_FAILED", message: e.message }); }
     });
 
     socket.on("vote", async ({ roomCode, targetCharacterName }) => {
