@@ -159,7 +159,7 @@ function setupGameSocket(io) {
         for (let i = 0; i < npcChars.length; i++) {
           const npc = npcChars[i];
           const npcId = "npc_" + roomCode + "_" + i;
-          const existingNpc = players.find(p => p.playerId === npcId);
+          const existingNpc = curPlayers.find(p => p.playerId === npcId);
           if (!existingNpc) {
             await addPlayer(roomCode, npcId, "NPC:" + npc.name, false);
             await updatePlayer(roomCode, npcId, {
