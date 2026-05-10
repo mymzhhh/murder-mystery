@@ -1,4 +1,4 @@
-// DeepSeek API 生成器模块 — 封装 LLM 调用逻辑
+// DeepSeek API 生成器模块 — 封装 LLM 调用逻辑（含自动重试）
 // DeepSeek 兼容 OpenAI API 格式
 
 const OpenAI = require("openai");
@@ -7,6 +7,9 @@ require("dotenv").config();
 const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const defaultModel = process.env.DEFAULT_MODEL || "deepseek-chat";
+
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 2000; // 初始重试间隔
 
 let client = null;
 
@@ -22,9 +25,22 @@ function getClient() {
   return client;
 }
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
- * 生成文本
- * @param {string} systemPrompt - 系统提示词（模板定义的角色和规则）
+ * 判断是否为可重试的错误
+ */
+function isRetryableError(err) {
+  const msg = (err.message || "").toLowerCase();
+  return /network|timeout|econnrefused|econnreset|etimedout|429|502|503|504|socket|connect/i.test(msg)
+    || (err.status && [429, 502, 503, 504].includes(err.status));
+}
+
+/**
+ * 生成文本（含自动重试）
+ * @param {string} systemPrompt - 系统提示词
  * @param {string} userPrompt  - 用户的具体需求
  * @param {object} options     - 可选参数 { model, maxTokens, temperature }
  * @returns {Promise<{content: string, usage: object}>}
@@ -33,27 +49,39 @@ async function generate(systemPrompt, userPrompt, options = {}) {
   const openai = getClient();
   const model = options.model || defaultModel;
 
-  const response = await openai.chat.completions.create({
-    model,
-    max_tokens: options.maxTokens || 4096,
-    temperature: options.temperature ?? 0.7,
-    messages: [
-      { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
-    ],
-  });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await openai.chat.completions.create({
+        model,
+        max_tokens: options.maxTokens || 4096,
+        temperature: options.temperature ?? 0.7,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      });
 
-  const choice = response.choices[0];
-  const content = choice.message?.content || "";
+      const choice = response.choices[0];
+      const content = choice.message?.content || "";
 
-  return {
-    content,
-    usage: {
-      inputTokens: response.usage?.prompt_tokens || 0,
-      outputTokens: response.usage?.completion_tokens || 0,
-    },
-    model: response.model,
-  };
+      return {
+        content,
+        usage: {
+          inputTokens: response.usage?.prompt_tokens || 0,
+          outputTokens: response.usage?.completion_tokens || 0,
+        },
+        model: response.model,
+      };
+    } catch (err) {
+      if (attempt < MAX_RETRIES && isRetryableError(err)) {
+        const delay = RETRY_DELAY_MS * Math.pow(2, attempt); // 指数退避: 2s, 4s, 8s
+        console.warn(`DeepSeek API 调用失败（第${attempt + 1}次），${delay / 1000}s 后重试：${err.message}`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /**
@@ -66,27 +94,39 @@ async function generate(systemPrompt, userPrompt, options = {}) {
 async function refine(systemPrompt, history, feedback) {
   const openai = getClient();
 
-  const response = await openai.chat.completions.create({
-    model: defaultModel,
-    max_tokens: 4096,
-    temperature: 0.7,
-    messages: [
-      { role: "system", content: systemPrompt },
-      ...history.map(m => ({ role: m.role, content: m.content })),
-      { role: "user", content: `请根据以下反馈修改上面的文案：\n${feedback}` },
-    ],
-  });
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const response = await openai.chat.completions.create({
+        model: defaultModel,
+        max_tokens: 4096,
+        temperature: 0.7,
+        messages: [
+          { role: "system", content: systemPrompt },
+          ...history.map(m => ({ role: m.role, content: m.content })),
+          { role: "user", content: `请根据以下反馈修改上面的文案：\n${feedback}` },
+        ],
+      });
 
-  const choice = response.choices[0];
-  const content = choice.message?.content || "";
+      const choice = response.choices[0];
+      const content = choice.message?.content || "";
 
-  return {
-    content,
-    usage: {
-      inputTokens: response.usage?.prompt_tokens || 0,
-      outputTokens: response.usage?.completion_tokens || 0,
-    },
-  };
+      return {
+        content,
+        usage: {
+          inputTokens: response.usage?.prompt_tokens || 0,
+          outputTokens: response.usage?.completion_tokens || 0,
+        },
+      };
+    } catch (err) {
+      if (attempt < MAX_RETRIES && isRetryableError(err)) {
+        const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
+        console.warn(`DeepSeek API 调用失败（第${attempt + 1}次），${delay / 1000}s 后重试：${err.message}`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 module.exports = { generate, refine };
