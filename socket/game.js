@@ -244,10 +244,14 @@ function setupGameSocket(io) {
           victim: parsed.victim,
         };
 
+        // 先广播玩家的问题
+        const qMsg = await addChatMessage(roomCode, socket.id, "NPC:" + npcName, askerName, `🔍 审问 ${npcName}：${question}`, room.phase);
+        io.to(roomCode).emit("chat_message", qMsg);
+
         const response = await generateNpcResponse(npcChar, question, scriptSummary, chatHistory);
 
         // NPC回复以聊天消息形式广播
-        const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `[回复 ${askerName}] ${response}`, room.phase);
+        const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `${response}`, room.phase);
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "NPC_FAILED", message: e.message }); }
     });
