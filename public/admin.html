@@ -160,9 +160,16 @@
         // 美化输出
         var playerCount = data.playerCount || (data.extracted ? data.extracted.playerCount : 4);
         var npcCount = data.npcCount || 0;
+        var isPVE = data.isPVE !== undefined ? data.isPVE : (npcCount > 0);
+        var gameMode = data.gameMode || (isPVE ? "PVE" : "PVP");
+
+        // 存储配置供 step2 使用
+        _scriptConfig = { playerCount: playerCount, npcCount: npcCount, isPVE: isPVE, gameMode: gameMode };
+
         el.innerHTML = '<div class="grid-2" style="margin-bottom:16px;">';
-        el.innerHTML += '<div class="card" style="text-align:center;"><div style="font-size:32px;color:var(--gold);font-weight:800;">' + (playerCount || 4) + '</div><div style="font-size:11px;color:var(--text-dim);">玩家角色</div></div>';
-        el.innerHTML += '<div class="card" style="text-align:center;"><div style="font-size:32px;color:var(--mystic-light);font-weight:800;">' + (npcCount || 0) + '</div><div style="font-size:11px;color:var(--text-dim);">NPC嫌疑人</div></div>';
+        el.innerHTML += '<div class="card" style="text-align:center;"><div style="font-size:32px;color:var(--gold);font-weight:800;">' + playerCount + '</div><div style="font-size:11px;color:var(--text-dim);">玩家角色</div></div>';
+        el.innerHTML += '<div class="card" style="text-align:center;"><div style="font-size:32px;color:var(--mystic-light);font-weight:800;">' + npcCount + '</div><div style="font-size:11px;color:var(--text-dim);">NPC嫌疑人</div></div>';
+        el.innerHTML += '<div class="card" style="text-align:center;"><div style="font-size:32px;color:' + (isPVE ? 'var(--gold)' : 'var(--mystic-light)') + ';font-weight:800;font-size:18px;">' + gameMode + '</div><div style="font-size:11px;color:var(--text-dim);">游戏模式</div></div>';
         if (data.title) el.innerHTML += '<div class="card"><strong style="color:var(--gold);">' + esc(data.title) + '</strong><div style="font-size:12px;color:var(--text-dim);margin-top:4px;">' + esc(data.era || '') + ' | ' + esc(data.style || '') + '</div></div>';
         el.innerHTML += '</div>';
 
@@ -179,6 +186,7 @@
 
     // Step 2-5: 生成→评测→切分
     var _abortController = null;
+    var _scriptConfig = null; // 存储 prompt-agent 输出的剧本配置
 
     function cancelPipeline() {
       if (_abortController) { _abortController.abort(); _abortController = null; }
@@ -201,7 +209,7 @@
       try {
         var res = await fetch("/api/admin/pipeline/run", {
           method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
-          body: JSON.stringify({ input: input }),
+          body: JSON.stringify({ input: input, config: _scriptConfig || undefined }),
           signal: _abortController.signal,
         });
         var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";

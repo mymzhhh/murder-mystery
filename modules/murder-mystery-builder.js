@@ -1,184 +1,379 @@
-// 剧本杀多阶段生成流水线
+// 剧本杀多阶段生成流水线（v3：动态玩家数2-6、NPC 0-3）
 
 const { generate } = require("./generator");
 const path = require("path");
 
-// 获取剧本杀模板的 stages
 const tplPath = path.join(__dirname, "..", "templates", "murder-mystery.js");
 const MURDER_TPL = require(tplPath);
 const stages = MURDER_TPL.stages;
-const TOKENS_PER_STAGE = 8192;
+const LIMITS = MURDER_TPL.limits || { minPlayers: 2, maxPlayers: 6, maxNpc: 3, maxTotal: 9 };
+const TOKENS_PER_STAGE = 10240;  // 4000-6000字中文剧本需要更大token预算
 
 /**
  * 生成完整剧本杀剧本
  * @param {string} userInput - 用户的需求描述
- * @param {function} onProgress - 进度回调 (stage, message, content)
- * @returns {Promise<{fullScript: string, stages: object}>}
+ * @param {function} onProgress - 进度回调 (stage, message)
+ * @param {object} [config] - 可选：{playerCount, npcCount, isPVE}
+ * @returns {Promise<{fullScript: string, stages: object, characters: Array}>}
  */
-async function buildMurderMystery(userInput, onProgress) {
+async function buildMurderMystery(userInput, onProgress, config) {
   const report = {};
+  const cfg = {
+    playerCount: config?.playerCount || LIMITS.maxPlayers,
+    npcCount: config?.npcCount ?? (config?.isPVE ? 2 : 0),
+    isPVE: config?.isPVE ?? (config?.npcCount > 0),
+  };
+  // 约束到合法范围
+  cfg.playerCount = Math.max(LIMITS.minPlayers, Math.min(LIMITS.maxPlayers, cfg.playerCount));
+  cfg.npcCount = Math.max(0, Math.min(LIMITS.maxNpc, cfg.npcCount));
 
-  // ========== 阶段 1：故事框架 ==========
-  onProgress("framework", "正在设计故事框架、角色和凶手设定...");
-  const frameworkPrompt = `请根据以下需求创作剧本杀故事框架：\n\n${userInput}\n\n请按照模板完整输出所有部分，确保故事逻辑严密、凶手手法合理、线索链完整。`;
-  const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE });
+  // ========== 阶段 1：故事框架（注入动态角色数量） ==========
+  onProgress("framework", `正在设计故事框架（${cfg.playerCount}玩家${cfg.npcCount > 0 ? ' + ' + cfg.npcCount + 'NPC' : ''}）...`);
+  const frameworkPrompt = buildFrameworkPrompt(userInput, cfg);
+  const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE * 2, temperature: 0.75 });
   report.framework = frameworkResult.content;
 
-  // 解析角色名称（调用模型以结构化格式输出）
-  onProgress("extract", "正在解析角色列表...");
-  const characterNames = await extractCharacterNames(report.framework);
-  // 检测每个角色的类型（玩家/NPC）
-  const charTypes = {};
-  for (const name of characterNames) {
-    // 在框架中搜索该角色附近的NPC/玩家标记
-    const idx = report.framework.indexOf(name);
-    const ctx = idx >= 0 ? report.framework.substring(Math.max(0, idx - 200), Math.min(report.framework.length, idx + 500)) : "";
-    charTypes[name] = /【NPC】|NPC嫌疑人/.test(ctx) ? "npc" : "player";
+  // ========== 阶段 1.5：结构化提取角色列表 ==========
+  onProgress("extract", "正在解析角色列表（区分玩家/NPC/凶手）...");
+  const characters = await extractCharactersStructured(report.framework, cfg);
+  const playerChars = characters.filter(c => c.type === "player");
+  const npcChars = characters.filter(c => c.type === "npc");
+  report.characters = characters;
+
+  onProgress("characters", `角色解析完成：${playerChars.length}名玩家 + ${npcChars.length}名NPC（凶手：${characters.find(c => c.isMurderer)?.name || "未知"}）`);
+
+  // ========== 阶段 2：角色内容 ==========
+  const characterResults = {};
+
+  for (let i = 0; i < playerChars.length; i++) {
+    const ch = playerChars[i];
+    onProgress("player_script", `撰写玩家角色剧本 (${i + 1}/${playerChars.length}): ${ch.name}`);
+    const prompt = buildCharacterPrompt(ch, report.framework, i + 1, playerChars.length);
+    const systemPrompt = buildCharacterSystemPrompt(ch);
+    const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
+    characterResults[ch.name] = result.content;
   }
 
-  const playerChars = characterNames.filter(n => charTypes[n] === "player");
-  const npcChars = characterNames.filter(n => charTypes[n] === "npc");
-  onProgress("characters", `即将撰写 ${playerChars.length} 个玩家剧本 + ${npcChars.length} 个NPC剧本...`);
-
-  const characterScripts = {};
-  const allChars = [...playerChars, ...npcChars]; // 先玩家后NPC
-  for (let i = 0; i < allChars.length; i++) {
-    const name = allChars[i];
-    const type = charTypes[name];
-    const icon = type === "npc" ? "[NPC]" : "[玩家]";
-    onProgress(type === "npc" ? "npc_script" : "player_script",
-      `撰写${icon}角色剧本 (${i + 1}/${allChars.length}): ${name}`);
-    const charPrompt = stages.characterScript
-      .replace("{characterName}", name)
-      .replace("{frameworkSummary}", frameworkSummary);
-    const result = await generate(
-      getCharSystemPrompt(name, report.framework),
-      charPrompt,
-      { maxTokens: TOKENS_PER_STAGE }
-    );
-    characterScripts[name] = result.content;
+  for (let i = 0; i < npcChars.length; i++) {
+    const ch = npcChars[i];
+    onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
+    const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
+    const systemPrompt = buildNpcSystemPrompt(ch);
+    const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
+    characterResults[ch.name] = result.content;
   }
-  report.characterScripts = characterScripts;
+  report.characterScripts = characterResults;
+
+  const frameworkSummary = buildStructuredSummary(report);
 
   // ========== 阶段 3：线索系统 ==========
   onProgress("clues", "正在设计线索系统和证据链...");
   const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary);
-  const cluesResult = await generate(
-    getCluesSystemPrompt(report.framework),
-    cluesPrompt,
-    { maxTokens: TOKENS_PER_STAGE }
-  );
+  const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: TOKENS_PER_STAGE });
   report.clues = cluesResult.content;
 
   // ========== 阶段 4：DM 手册 ==========
-  onProgress("dmGuide", "正在撰写 DM 完整手册（时间线、真相复盘、结局）...");
+  onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
   const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary);
-  const dmResult = await generate(
-    getDMSystemPrompt(report.framework),
-    dmPrompt,
-    { maxTokens: TOKENS_PER_STAGE }
-  );
+  const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: TOKENS_PER_STAGE });
   report.dmGuide = dmResult.content;
 
-  // ========== 组装完整剧本 ==========
+  // ========== 组装 ==========
   onProgress("assemble", "正在组装完整剧本...");
   const fullScript = assembleScript(report, userInput);
 
-  onProgress("done", "剧本杀生成完毕！");
-  return { fullScript, stages: report };
+  onProgress("done", `剧本生成完毕：${playerChars.length}名玩家 + ${npcChars.length}名NPC`);
+  return { fullScript, stages: report, characters };
 }
 
-async function extractCharacterNames(framework) {
-  const prompt = `请从以下剧本杀故事框架中提取所有角色姓名，以 JSON 数组格式返回，不要其他内容。
+// ==================== 框架 Prompt 构建 ====================
 
-格式示例：["张明", "李芳", "王强", "陈雪", "林峰", "赵雨"]
+function buildFrameworkPrompt(userInput, cfg) {
+  const { playerCount, npcCount, isPVE } = cfg;
+
+  // 构建NPC相关行
+  const npcline = npcCount > 0 ? `+ ${npcCount}名NPC嫌疑人` : "（纯PVP，无NPC嫌疑人）";
+  const npcConstraint = npcCount > 0
+    ? `NPC嫌疑人恰好${npcCount}人，编号NPC1-NPC${npcCount}`
+    : "无NPC嫌疑人（PVP模式）";
+
+  // NPC章节
+  const npcSection = npcCount > 0
+    ? `\n## 四、NPC嫌疑人设定（恰好${npcCount}人，编号为NPC1-NPC${npcCount}）\n对每个NPC嫌疑人输出：\n- 编号：（NPC1 / NPC2${npcCount >= 3 ? ' / NPC3' : ''}）\n- **姓名**、**年龄**、**性别**、**职业/身份**\n- **角色类型**：【NPC嫌疑人】\n- 外貌特征与性格特点\n- 与死者的关系\n- 表面上的不在场证明\n- **隐藏的秘密**\n- **与案件的关联**（为何被列入嫌疑人范围）\n- 标记是否为凶手（如果凶手是NPC，必须在此标注）\n`
+    : "\n## 四、NPC嫌疑人设定\n（本次为PVP模式，无NPC嫌疑人，所有角色均为玩家。）\n";
+
+  // 凶手设定章节编号（有NPC时为五，无NPC时为四）
+  const murdererSection = npcCount > 0 ? "四、NPC嫌疑人设定\n\n## " : "四、NPC嫌疑人设定（无）\n\n## ";
+  const timelineSection = npcCount > 0 ? "六" : "五";
+
+  return `【角色数量约束 — 必须严格遵守】
+玩家角色：恰好${playerCount}人
+NPC嫌疑人：${npcCount > 0 ? '恰好' + npcCount + '人' : '0人（PVP模式，无需NPC）'}
+游戏模式：${isPVE ? 'PVE侦探对抗' : 'PVP玩家互疑'}
+总人数：${playerCount + npcCount}人（不超过${LIMITS.maxTotal}人）
+
+【用户需求】
+${userInput}`;
+}
+
+// ==================== 结构化角色提取 ====================
+
+async function extractCharactersStructured(framework, cfg) {
+  const minExpected = cfg.playerCount || LIMITS.minPlayers;
+
+  const prompt = `请从以下剧本杀故事框架中提取所有角色的结构化信息。以 JSON 格式返回，不要其他内容。
+
+格式要求：
+[
+  {
+    "name": "角色姓名",
+    "type": "player 或 npc",
+    "isMurderer": true或false,
+    "occupation": "职业/身份"
+  }
+]
+
+规则：
+1. 【玩家】角色 type = "player"
+2. 【NPC嫌疑人】角色 type = "npc"（无NPC章节时全部为player）
+3. 凶手有且仅有一个，isMurderer = true
+4. 按玩家先、NPC后的顺序排列
 
 故事框架：
-${framework.substring(0, 6000)}
+${framework.substring(0, 8000)}
 
 请只输出 JSON 数组：`;
 
   try {
     const result = await generate(
-      "你是一个数据提取工具。从文本中提取角色姓名，只输出 JSON 数组。",
+      "你是一个数据提取工具。从剧本框架中提取角色信息，只输出 JSON 数组。",
       prompt,
-      { maxTokens: 512, temperature: 0.1 }
+      { maxTokens: 1024, temperature: 0.1 }
     );
-    const names = JSON.parse(result.content.trim());
-    if (Array.isArray(names) && names.length > 0) {
-      return names.filter(n => typeof n === "string" && n.length >= 2 && n.length <= 8).slice(0, 8);
+    const cleaned = result.content.trim()
+      .replace(/```json\n?/g, "").replace(/```\n?/g, "")
+      .replace(/^[^{[]*\[/, "[").replace(/\][^}\]]*$/, "]");
+
+    const chars = JSON.parse(cleaned);
+    if (Array.isArray(chars) && chars.length >= 2) {
+      return chars.map(c => ({
+        name: String(c.name || "").trim(),
+        type: c.type === "npc" ? "npc" : "player",
+        isMurderer: Boolean(c.isMurderer),
+        occupation: String(c.occupation || "").trim(),
+      })).filter(c => c.name.length >= 2 && c.name.length <= 8);
     }
   } catch (e) {
-    console.error("角色名提取失败，使用默认值：", e.message);
+    console.error("结构化角色提取失败，回退到传统方法：", e.message);
   }
-  return ["角色A", "角色B", "角色C", "角色D", "角色E", "角色F"];
+
+  return extractCharactersFallback(framework, minExpected);
 }
 
-function summarizeFramework(framework) {
-  // 提取框架关键部分作为各阶段的上下文
-  const maxLen = 4000;
-  if (framework.length <= maxLen) return framework;
+function extractCharactersFallback(framework, minExpected) {
+  minExpected = minExpected || LIMITS.minPlayers;
+  const chars = [];
 
-  // 截取关键部分
-  const sections = framework.split(/(?=##?\s*[一二三四五六七八九十])/);
-  const importantSections = sections.filter(s =>
-    /角色|凶手|时间线|死者|设定|关系/.test(s.substring(0, 30))
-  );
-  const summary = importantSections.join("\n\n");
-  return summary.length > maxLen ? summary.substring(0, maxLen) + "\n...(已截断)" : summary;
-}
-
-function getCharSystemPrompt(name, framework) {
-  // 判断该角色是否为凶手
-  let isMurderer = false;
-  try {
-    isMurderer = framework.includes(name) && (
-      framework.includes("凶手" + name) ||
-      framework.includes("凶手：" + name) ||
-      framework.includes("凶手是" + name) ||
-      framework.includes(name + "是凶手") ||
-      new RegExp(name + ".{0,5}凶手").test(framework)
-    );
-  } catch (e) { /* regex fallthrough */ }
-
-  let prompt = "你是剧本杀角色剧本写作专家。现在为 \"" + name + "\" 撰写个人剧本。\n\n";
-  if (isMurderer) {
-    prompt += "**重要：该角色是凶手。** 需要在剧本中巧妙隐藏作案事实，同时埋下细微的破绽线索。\n";
+  const playerPattern = /(?:玩家\d|玩家[一二三四五六])[：:]\s*(.{2,6})/g;
+  let m;
+  while ((m = playerPattern.exec(framework)) !== null) {
+    const name = m[1].trim().replace(/[【\[].*$/, "");
+    if (name.length >= 2 && name.length <= 6 && !chars.find(c => c.name === name)) {
+      chars.push({ name, type: "player", isMurderer: false, occupation: "" });
+    }
   }
-  prompt += "输出需包含完整的故事背景、秘密、时间线、目标、掌握的信息、物品清单、谎言建议和辩护策略。总字数 2000-4000 字。";
-  return prompt;
+
+  const npcPattern = /(?:NPC\d|NPC嫌疑人)[：:]\s*(.{2,6})/g;
+  while ((m = npcPattern.exec(framework)) !== null) {
+    const name = m[1].trim().replace(/[【\[].*$/, "");
+    if (name.length >= 2 && name.length <= 6 && !chars.find(c => c.name === name)) {
+      chars.push({ name, type: "npc", isMurderer: false, occupation: "" });
+    }
+  }
+
+  if (chars.length < minExpected) {
+    const genericPattern = /(?:###\s+)?角色[一二三四五六七八\d]+[：:]\s*(.{2,6})/g;
+    while ((m = genericPattern.exec(framework)) !== null) {
+      const name = m[1].trim().replace(/[【\[].*$/, "");
+      if (name.length >= 2 && name.length <= 6 && !chars.find(c => c.name === name)) {
+        const isNpc = /NPC/.test(framework.substring(Math.max(0, m.index - 100), m.index + 200));
+        chars.push({ name, type: isNpc ? "npc" : "player", isMurderer: false, occupation: "" });
+      }
+    }
+  }
+
+  // 不够 minExpected 时补齐占位
+  while (chars.length < minExpected) {
+    chars.push({ name: `角色${chars.length + 1}`, type: "player", isMurderer: false, occupation: "" });
+  }
+
+  const murdererRegex = /凶手[姓名]*[：:]\s*(.{2,6})/;
+  const murMatch = framework.match(murdererRegex);
+  if (murMatch) {
+    const murName = murMatch[1].trim();
+    const found = chars.find(c => c.name === murName || murName.includes(c.name) || c.name.includes(murName));
+    if (found) found.isMurderer = true;
+  }
+
+  return chars.slice(0, LIMITS.maxTotal);
 }
 
-function getCluesSystemPrompt(framework) {
-  return `你是剧本杀线索设计专家。确保每条线索都有意义且可以串联成完整证据链。线索要分层次：从公开到深入，从误导到真相。输出 40-50 条线索，分为三轮。`;
+// ==================== Prompt 构建 ====================
+
+function buildCharacterPrompt(ch, framework, index, total) {
+  const instructions = stages.playerInstruction
+    .replace("{characterName}", ch.name)
+    .replace("{isMurdererExtra}", ch.isMurderer
+      ? `### 七、作案过程
+以下是事件发生时你实际所做的一切。详细记录你从策划到实施、再到善后的每一步行动。包括：具体的作案手法、使用的工具、制造不在场证明的方式、以及你可能留下的痕迹。用第一人称如实叙述，不掺杂任何自我评价或掩饰建议。`
+      : "");
+
+  return `请为【玩家${index}/${total}】角色撰写完整个人剧本。
+
+## 角色基本信息
+- 姓名：${ch.name}
+- 身份：${ch.occupation || "详见框架"}
+- 是否是凶手：${ch.isMurderer ? "是" : "否"}
+
+## 完整故事框架（供参考，确保一致性）
+${framework.substring(0, 6000)}
+
+## 要求
+${instructions}
+
+请直接输出角色剧本内容，不需要 JSON 包装。`;
 }
 
-function getDMSystemPrompt(framework) {
-  return `你是剧本杀 DM 手册撰写专家。请输出完整的主持人手册，包括游戏流程、开场白、完整时间线、真相复盘、多种结局和注意事项。需详细严谨，DM 能直接使用。`;
+function buildNpcPrompt(ch, framework, index, total) {
+  const instructions = stages.npcInstruction
+    .replace("{characterName}", ch.name)
+    .replace("{isMurdererExtra}", ch.isMurderer
+      ? `### 五、作案过程
+该NPC实施犯罪的完整过程。包括策划、具体手法、使用的工具、制造不在场证明的方式、事后处理、以及留下的破绽。用第三人称客观叙述。`
+      : "");
+
+  return `请为【NPC嫌疑人${index}/${total}】撰写精简信息。
+
+## NPC基本信息
+- 姓名：${ch.name}
+- 身份：${ch.occupation || "详见框架"}
+- 是否是凶手：${ch.isMurderer ? "是（凶手是NPC！）" : "否"}
+
+## 完整故事框架（供参考）
+${framework.substring(0, 5000)}
+
+## 要求
+${instructions}
+
+请直接输出NPC信息内容，不需要 JSON 包装。`;
+}
+
+function buildCharacterSystemPrompt(ch) {
+  return ch.isMurderer
+    ? `你是剧本杀角色剧本作家。为【玩家角色 — 凶手】"${ch.name}"撰写4000-6000字的深度个人剧本。使用第一人称纯叙事——只陈述角色的故事、经历和事实，不包含任何"你应该怎样玩"的指导。让扮演者基于故事自主决定如何行动。凶手角色的作案细节自然融入时间线和故事中，作为客观事实呈现。`
+    : `你是剧本杀角色剧本作家。为【玩家角色】"${ch.name}"撰写4000-6000字的深度个人剧本。使用第一人称纯叙事——只讲述角色的完整人生故事，刻画性格、经历和人际关系。不包含任何策略建议或玩法指导，由玩家自行判断和决策。`;
+}
+
+function buildNpcSystemPrompt(ch) {
+  return ch.isMurderer
+    ? `你是剧本杀写作专家。为【NPC嫌疑人 — 凶手】"${ch.name}"撰写2000-3000字的客观信息。使用第三人称纯叙事，只陈述背景、秘密、行动和作案过程，不做任何玩法指导。`
+    : `你是剧本杀写作专家。为【NPC嫌疑人】"${ch.name}"撰写2000-3000字的客观信息。使用第三人称纯叙事，只陈述背景、秘密和时间线，不做任何玩法指导。`;
+}
+
+function getCluesSystemPrompt() {
+  return `你是剧本杀线索设计专家。确保每条线索都有意义且可以串联成完整证据链。线索要分层次：从公开到深入，从误导到真相。输出40-50条线索，分为三轮。`;
+}
+
+function getDMSystemPrompt() {
+  return `你是剧本杀DM手册撰写专家。请输出完整的主持人手册，包括游戏流程、开场白、完整时间线、真相复盘、多种结局和注意事项。需详细严谨，DM能直接使用。`;
+}
+
+// ==================== 摘要与组装 ====================
+
+function buildStructuredSummary(report) {
+  const chars = report.characters || [];
+  const players = chars.filter(c => c.type === "player");
+  const npcs = chars.filter(c => c.type === "npc");
+  const murderer = chars.find(c => c.isMurderer);
+
+  let summary = "## 角色结构摘要\n\n";
+  summary += `### 玩家角色（${players.length}人）\n`;
+  players.forEach((c, i) => {
+    summary += `- 玩家${i + 1}：${c.name}（${c.occupation || "待定"}）${c.isMurderer ? "【凶手】" : ""}\n`;
+  });
+
+  if (npcs.length > 0) {
+    summary += `\n### NPC嫌疑人（${npcs.length}人）\n`;
+    npcs.forEach((c, i) => {
+      summary += `- NPC${i + 1}：${c.name}（${c.occupation || "待定"}）${c.isMurderer ? "【凶手】" : ""}\n`;
+    });
+  } else {
+    summary += `\n### NPC嫌疑人\n（无 — PVP模式）\n`;
+  }
+
+  summary += `\n### 凶手\n- 凶手：${murderer?.name || "未知"}（${murderer?.type === "npc" ? "NPC嫌疑人" : "玩家"}）\n\n`;
+
+  const fw = report.framework || "";
+  const importantSections = [];
+  const sectionPatterns = [
+    /(?:##\s*[一二三四五六七八九十]、[^\n]+)[\s\S]*?(?=##\s*[一二三四五六七八九十]、|$)/g,
+  ];
+
+  for (const pattern of sectionPatterns) {
+    let match;
+    while ((match = pattern.exec(fw)) !== null) {
+      const section = match[0];
+      if (/(?:死者|凶手|时间线|关系)/.test(section.substring(0, 30))) {
+        importantSections.push(section.substring(0, 1500));
+      }
+    }
+  }
+
+  const extra = importantSections.length > 0
+    ? importantSections.join("\n\n")
+    : fw.substring(0, 3000);
+
+  return summary + "\n## 框架关键信息\n\n" + extra;
 }
 
 function assembleScript(report, userInput) {
   const parts = [];
+  const chars = report.characters || [];
+  const players = chars.filter(c => c.type === "player");
+  const npcs = chars.filter(c => c.type === "npc");
 
   parts.push(`# 剧本杀完整剧本\n`);
-  parts.push(`> 用户需求：${userInput}\n`);
   parts.push(`> 生成时间：${new Date().toISOString()}\n`);
+  parts.push(`> 角色结构：${players.length}名玩家 + ${npcs.length}名NPC\n`);
   parts.push(`---\n`);
 
   parts.push(`# 第一部分：故事框架\n`);
   parts.push(report.framework);
   parts.push(`\n---\n`);
 
-  parts.push(`# 第二部分：角色个人剧本\n`);
-  const names = Object.keys(report.characterScripts);
-  for (let i = 0; i < names.length; i++) {
-    const name = names[i];
-    parts.push(`## 角色 ${i + 1}：${name}\n`);
-    parts.push(report.characterScripts[name]);
+  parts.push(`# 第二部分：角色内容\n`);
+  parts.push(`## 玩家角色剧本\n\n`);
+  for (let i = 0; i < players.length; i++) {
+    const name = players[i].name;
+    const tag = players[i].isMurderer ? " [凶手]" : "";
+    parts.push(`### 玩家角色 ${i + 1}：${name}${tag}\n`);
+    parts.push(report.characterScripts[name] || "(内容缺失)");
     parts.push(`\n`);
   }
-  parts.push(`---\n`);
 
+  if (npcs.length > 0) {
+    parts.push(`---\n`);
+    parts.push(`## NPC嫌疑人信息\n\n`);
+    for (let i = 0; i < npcs.length; i++) {
+      const name = npcs[i].name;
+      const tag = npcs[i].isMurderer ? " [凶手]" : "";
+      parts.push(`### NPC ${i + 1}：${name}${tag}\n`);
+      parts.push(report.characterScripts[name] || "(内容缺失)");
+      parts.push(`\n`);
+    }
+  }
+
+  parts.push(`---\n`);
   parts.push(`# 第三部分：线索系统\n`);
   parts.push(report.clues);
   parts.push(`\n---\n`);
@@ -189,11 +384,12 @@ function assembleScript(report, userInput) {
 
   parts.push(`\n# 剧本统计\n`);
   const totalChars = parts.reduce((sum, p) => sum + p.length, 0);
-  parts.push(`- 总字数：约 ${Math.round(totalChars * 0.7).toLocaleString()} 字（含标点和格式标记）\n`);
-  parts.push(`- 角色数量：${names.length} 人\n`);
+  parts.push(`- 总字数：约 ${Math.round(totalChars * 0.7).toLocaleString()} 字\n`);
+  parts.push(`- 玩家角色：${players.length} 人\n`);
+  parts.push(`- NPC嫌疑人：${npcs.length} 人\n`);
   parts.push(`- 线索总数：约 40-50 条\n`);
 
   return parts.join("\n");
 }
 
-module.exports = { buildMurderMystery };
+module.exports = { buildMurderMystery, LIMITS };

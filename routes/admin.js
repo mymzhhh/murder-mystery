@@ -21,12 +21,12 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   // 生成剧本（SSE — 使用 script-writer Agent）
   app.post("/api/admin/scripts/generate", authMiddleware, adminMiddleware, async (req, res) => {
-    const { input } = req.body;
+    const { input, config } = req.body;
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
     const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
     try {
-      const result = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }));
+      const result = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
       if (!result.ok) { send("error", { message: result.error }); return res.end(); }
       send("complete", { sessionId: result.sessionId, summary: result.summary });
     } catch (err) { send("error", { message: err.message }); }
@@ -52,7 +52,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   // Step 2-5: 完整流水线（生成→评测→切分，SSE）
   app.post("/api/admin/pipeline/run", authMiddleware, adminMiddleware, async (req, res) => {
-    const { input } = req.body;
+    const { input, config } = req.body;
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
 
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
@@ -63,7 +63,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     try {
       // Step 2: 生成
       send("phase", { phase: "write", message: "正在生成剧本..." });
-      const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }));
+      const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
 
       if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write" }); return res.end(); }
       currentSessionId = writeResult.sessionId;

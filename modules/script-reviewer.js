@@ -1,24 +1,29 @@
-// 剧本评测 Agent — 审查剧本质量，不合格则提出修改意见并触发重新生成
+// 剧本评测 Agent — 审查剧本质量，不合格则提出修改意见并触发重新生成（优化版）
 
 const { getSession, addMessage, createSession, deleteSession } = require("./history-manager");
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
-const { buildMurderMystery } = require("./murder-mystery-builder");
+const { buildMurderMystery, LIMITS } = require("./murder-mystery-builder");
 const { splitScript } = require("./script-splitter");
 
 const MAX_RETRIES = 3;
-const PASS_SCORE = 75; // 满分100，75分通过
+const PASS_SCORE = 75;
+
+const MAX_PLAYERS = LIMITS.maxPlayers;  // 6
+const MAX_NPC = LIMITS.maxNpc;          // 3
+const MAX_TOTAL = LIMITS.maxTotal;      // 9
 
 const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需要从多个维度审查一份剧本杀剧本的质量。
 
-## 硬性约束（不合格直接扣分到不通过）
+## 硬性约束（不合格直接低分，无法通过）
 
-1. **角色数量合规 (一票否决)**：
-   - 玩家角色：≤6人
-   - NPC嫌疑人：≤3人
+1. **角色数量合规**：
+   - 玩家角色：2-6人（少于2人或超过6人都不合格）
+   - NPC嫌疑人：0-3人
    - 总角色数：≤9人
-   - 必须区分【玩家】和【NPC】角色类型
-   - 违反任何一条直接判定为不合格
+   - 必须明确区分【玩家】和【NPC嫌疑人】角色类型
+
+2. **凶手唯一性**：有且仅有一个凶手
 
 ## 评分维度（每项0-100分）
 
@@ -26,6 +31,7 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
    - 故事是否有清晰的开端、发展、高潮、结局？
    - 世界观设定是否自洽？
    - 人物关系是否完整且合理？
+   - 角色背景故事是否足够丰满（玩家剧本应达到4000-6000字）？
 
 2. **凶手设计 (25%)**：
    - 凶手的动机是否充分且深刻？（不能是简单的仇杀或财杀）
@@ -38,12 +44,15 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
    - 是否存在无效或冗余线索？
 
 4. **角色设计 (15%)**：
-   - 每个角色是否都有独立的故事和秘密？
+   - 每个玩家角色是否都有完整的故事和秘密？
+   - NPC嫌疑人是否有合理的动机和背景？
    - 角色之间是否有复杂的利益纠葛？
+   - 剧本是否为纯叙事（不包含"你应该"、"可以撒谎"等策略建议）？
 
 5. **可玩性 (15%)**：
    - 玩家能否通过线索推理出凶手？
    - 推理难度是否合适？
+   - 角色信息是否平衡（无人拥有过多或过少信息）？
 
 ## 输出格式（JSON）
 {
@@ -76,9 +85,14 @@ async function reviewScript(sessionId) {
 
   // 硬性约束检查
   const constraintErrors = [];
-  if (totalCount > 9) constraintErrors.push(`总角色数超限(${totalCount}/9)`);
-  if (playerCount > 6) constraintErrors.push(`玩家角色数超限(${playerCount}/6)`);
-  if (npcCount > 3) constraintErrors.push(`NPC数超限(${npcCount}/3)`);
+  if (totalCount > MAX_TOTAL) constraintErrors.push(`总角色数超限(${totalCount}/${MAX_TOTAL})`);
+  if (playerCount > MAX_PLAYERS) constraintErrors.push(`玩家角色数超限(${playerCount}/${MAX_PLAYERS})`);
+  if (playerCount < LIMITS.minPlayers) constraintErrors.push(`玩家角色数不足(${playerCount}，需要至少${LIMITS.minPlayers}人)`);
+  if (npcCount > MAX_NPC) constraintErrors.push(`NPC数超限(${npcCount}/${MAX_NPC})`);
+
+  // 统计是否有明确的凶手
+  const hasClearMurderer = !!(parsed.murderer?.name && parsed.murderer.name.length >= 2);
+  if (!hasClearMurderer) constraintErrors.push("未明确标注凶手");
 
   if (constraintErrors.length > 0) {
     return {
@@ -89,8 +103,8 @@ async function reviewScript(sessionId) {
         passed: false,
         scores: { storyCompleteness: 20, murdererDesign: 20, clueSystem: 20, characterDesign: 20, playability: 20 },
         strengths: [],
-        weaknesses: [],
-        revisionAdvice: `角色数量违反硬性约束：${constraintErrors.join("；")}。玩家≤6、NPC≤3、总计≤9。请重新生成。`,
+        weaknesses: constraintErrors,
+        revisionAdvice: `角色数量/结构违反硬性约束：${constraintErrors.join("；")}。玩家≤${MAX_PLAYERS}、NPC≤${MAX_NPC}、总计≤${MAX_TOTAL}，且有且仅有一个凶手。请严格按照约束重新生成。`,
       }
     };
   }
@@ -125,7 +139,6 @@ ${markdown.substring(0, 8000)}`;
     review.passed = review.totalScore >= PASS_SCORE;
     return { ok: true, review };
   } catch (e) {
-    // JSON解析失败，尝试宽松评分
     console.error("评测解析失败：", e.message);
     return {
       ok: true,
@@ -176,7 +189,6 @@ async function reviewAndRevise(sessionId, onProgress) {
         onProgress("split_" + stage, msg);
       });
       if (splitResult.ok) {
-        // 清理原始数据
         await deleteSession(currentSessionId);
         try { const { getRedis } = require("./game-manager"); await (await getRedis()).del(`script_meta:${currentSessionId}`); } catch (e) { /* skip */ }
       }
@@ -199,14 +211,17 @@ async function reviewAndRevise(sessionId, onProgress) {
         const session = await getSession(currentSessionId);
         const originalInput = session?.metadata?.topic || (session?.messages?.find(m => m.role === "user")?.content) || "生成剧本";
 
-        // 构建带修改意见的输入
-        const revisionInput = `【修改要求 — 基于评测反馈（第${round}轮）】\n${review.revisionAdvice}\n\n【原有需求】\n${originalInput}`;
+        const revisionInput = `## 修改要求（第${round}轮，基于评测反馈）
+
+${review.revisionAdvice}
+
+## 原有需求
+${originalInput}`;
 
         const newResult = await buildMurderMystery(revisionInput, (stage, msg) => {
           onProgress(`gen_${stage}`, msg);
         });
 
-        // 创建新会话保存修改后的剧本
         const newSession = await createSession({
           textType: "murder-mystery",
           topic: originalInput.slice(0, 100),
@@ -214,7 +229,6 @@ async function reviewAndRevise(sessionId, onProgress) {
         });
         await addMessage(newSession.sessionId, "user", revisionInput);
         await addMessage(newSession.sessionId, "assistant", newResult.fullScript.substring(0, 50000));
-        // 清理旧会话
         await deleteSession(currentSessionId);
         currentSessionId = newSession.sessionId;
       } catch (e) {
@@ -223,7 +237,6 @@ async function reviewAndRevise(sessionId, onProgress) {
     }
   }
 
-  // 3轮后仍未通过
   onProgress("failed", `已进行 ${MAX_RETRIES} 轮评测和修改，仍未达到通过标准`);
   return {
     ok: true,

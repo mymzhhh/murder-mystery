@@ -1,8 +1,10 @@
-// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis
+// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis（优化版）
 
 const { getSession } = require("./history-manager");
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
+
+const NPC_SCRIPT_MAX_LEN = 2000;  // NPC剧本精简后最大长度
 
 const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要将剧本的各个模块拆分为"玩家可见"和"DM专用"两部分。
 
@@ -11,7 +13,13 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
 **玩家剧本** — 只保留玩家自己的信息，移除所有提示性的指引：
 - 保留：故事背景、时间线（个人行动）、目标/任务、掌握的信息、随身物品
 - 移除：谎言建议、辩护策略、"如果你是凶手"提示、推理提示
-- 语言：保持角色视角（第一人称），不包含任何元信息
+- 语言：保持第一人称视角，不包含任何元信息
+
+**NPC嫌疑人信息** — 精简为DM参考卡片，不需要玩家视角内容：
+- 保留：背景故事、秘密、与案件相关的客观信息、时间线摘要
+- 移除：目标、谎言、辩护、物品清单等玩家专属段落
+- 语言：第三人称客观叙述
+- 字数：≤${NPC_SCRIPT_MAX_LEN}字
 
 **线索卡** — 只保留线索本身的信息：
 - 保留：线索编号、名称、内容描述、发现地点
@@ -22,10 +30,17 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
 
 ## 输出格式（JSON）
 
-对于每个角色剧本，输出：
+对于每个玩家角色剧本，输出：
 {
   "playerScript": "纯化的玩家剧本内容...",
   "secret": "该角色的秘密（仅DM可见）",
+  "isMurderer": false
+}
+
+对于每个NPC嫌疑人，输出：
+{
+  "playerScript": "NPC信息精简版...",
+  "secret": "该NPC的秘密",
   "isMurderer": false
 }
 
@@ -47,10 +62,10 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
 }`;
 
 /**
- * 使用 LLM 纯化一段玩家剧本
+ * 纯化一段玩家剧本
  */
 async function purifyPlayerScript(characterName, rawScript, isMurderer) {
-  const prompt = `请纯化角色"${characterName}"的剧本。移除所有提示性、引导性内容（如"谎言建议"、"辩护策略"、"推理提示"等），只保留角色自身的故事背景、个人时间线、任务目标、掌握的信息和随身物品。使用第一人称视角。
+  const prompt = `请纯化玩家角色"${characterName}"的剧本。移除所有提示性、引导性内容（如"谎言建议"、"辩护策略"、"推理提示"、"如何圆谎"等），只保留角色自身的故事背景、个人时间线、任务目标、掌握的信息和随身物品。使用第一人称视角。
 
 ${isMurderer ? '注意：该角色是凶手，请在剧本中保留其作案相关的真实时间线和动机，但不要添加任何额外的标注或提示。' : ''}
 
@@ -64,10 +79,32 @@ ${rawScript.substring(0, 5000)}
 }
 
 /**
+ * 纯化NPC信息（精简版）
+ */
+async function purifyNpcInfo(characterName, rawScript, isMurderer) {
+  const prompt = `请将以下NPC嫌疑人"${characterName}"的信息精简为DM参考卡片。
+
+要求：
+1. 删除所有玩家专属内容（目标、谎言、辩护策略等）
+2. 保留背景故事、秘密、与案件的关联
+3. 使用第三人称客观叙述
+4. 总字数不超过${NPC_SCRIPT_MAX_LEN}字
+5. ${isMurderer ? '该NPC是凶手！请保留作案过程描述。' : ''}
+
+原始内容：
+${rawScript.substring(0, 5000)}
+
+请输出精简后的NPC信息（纯文本，≤${NPC_SCRIPT_MAX_LEN}字）：`;
+
+  const result = await generate(SPLIT_SYSTEM_PROMPT, prompt, { maxTokens: 2048, temperature: 0.3 });
+  return result.content.trim().substring(0, NPC_SCRIPT_MAX_LEN);
+}
+
+/**
  * 纯化单条线索
  */
 async function purifyClue(clue, round) {
-  const prompt = `请纯化以下线索卡。只保留线索编号、内容描述和发现地点，移除所有分析性内容（如"指向角色"、"推理提示"、"推理价值"等）。
+  const prompt = `请纯化以下线索卡。只保留线索编号、内容描述和发现地点，移除所有分析性内容（如"指向角色"、"推理提示"、"推理价值"、"线索类型"等）。
 
 线索编号：${clue.id}
 线索内容：${clue.content || ""}
@@ -83,7 +120,6 @@ async function purifyClue(clue, round) {
     const cleaned = result.content.trim().replace(/```json\n?/g, "").replace(/```\n?/g, "");
     return JSON.parse(cleaned);
   } catch (e) {
-    // 解析失败时使用原始数据
     return {
       id: clue.id,
       name: "",
@@ -124,12 +160,12 @@ async function splitScript(sessionId, onProgress) {
     dm: {},
   };
 
-  // 1. 切分角色剧本（区分玩家/NPC）
+  // 1. 切分角色内容（区分玩家/NPC）
   const characters = parsed.characters || [];
   const playerChars = characters.filter(c => c.roleType !== "npc");
   const npcChars = characters.filter(c => c.roleType === "npc");
 
-  // 先处理玩家角色
+  // 处理玩家角色（完整剧本纯化）
   for (let i = 0; i < playerChars.length; i++) {
     const char = playerChars[i];
     onProgress("player_script", `纯化玩家剧本 (${i + 1}/${playerChars.length}): ${char.name}`);
@@ -146,15 +182,15 @@ async function splitScript(sessionId, onProgress) {
     };
   }
 
-  // 再处理NPC（简化版本）
+  // 处理NPC（精简信息，更短的prompt上下文）
   for (let i = 0; i < npcChars.length; i++) {
     const char = npcChars[i];
-    onProgress("npc_script", `纯化NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
+    onProgress("npc_script", `精简NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
     const rawScript = char.script?.fullScript || char.script?.story || JSON.stringify(char);
-    const purified = await purifyPlayerScript(char.name, rawScript, char.isMurderer);
+    const purified = await purifyNpcInfo(char.name, rawScript, char.isMurderer);
 
     result.characters[char.name] = {
-      playerScript: purified.substring(0, 2000), // NPC剧本精简
+      playerScript: purified,
       secret: char.script?.secret || char.secret || "",
       isMurderer: char.isMurderer || false,
       occupation: char.occupation || "",
@@ -163,20 +199,21 @@ async function splitScript(sessionId, onProgress) {
     };
   }
 
-  // 2. 切分线索
+  // 2. 切分线索（批量处理）
   const allClues = [
     ...(parsed.clues?.round1 || []).map(c => ({ ...c, round: 1 })),
     ...(parsed.clues?.round2 || []).map(c => ({ ...c, round: 2 })),
     ...(parsed.clues?.round3 || []).map(c => ({ ...c, round: 3 })),
   ];
 
-  onProgress("clue", `纯化线索 (共 ${allClues.length} 条)...`);
-  // 线索较多，批量处理：每5条并发一次
-  for (let i = 0; i < allClues.length; i += 5) {
-    const batch = allClues.slice(i, i + 5);
-    const purified = await Promise.all(batch.map(c => purifyClue(c, c.round)));
-    result.clues.push(...purified);
-    onProgress("clue", `纯化线索 (${Math.min(i + 5, allClues.length)}/${allClues.length})`);
+  if (allClues.length > 0) {
+    onProgress("clue", `纯化线索 (共 ${allClues.length} 条)...`);
+    for (let i = 0; i < allClues.length; i += 5) {
+      const batch = allClues.slice(i, i + 5);
+      const purified = await Promise.all(batch.map(c => purifyClue(c, c.round)));
+      result.clues.push(...purified);
+      onProgress("clue", `纯化线索 (${Math.min(i + 5, allClues.length)}/${allClues.length})`);
+    }
   }
 
   // 3. DM 手册
@@ -197,7 +234,7 @@ async function splitScript(sessionId, onProgress) {
   onProgress("save", "正在存入 Redis...");
   await saveToRedis(sessionId, result);
 
-  onProgress("done", `切分完成：${characters.length} 个角色、${result.clues.length} 条线索、DM 手册`);
+  onProgress("done", `切分完成：${playerChars.length}玩家+${npcChars.length}NPC、${result.clues.length}条线索`);
   return { ok: true, result };
 }
 
@@ -265,7 +302,6 @@ async function getSplitData(sessionId) {
   const meta = await redis.hgetall(`split:${sessionId}:meta`);
   if (!meta || !meta.title) return null;
 
-  // 查找所有角色和线索 key
   const charKeys = await redis.keys(`split:${sessionId}:char:*`);
   const clueKeys = await redis.keys(`split:${sessionId}:clue:*`);
   const dm = await redis.hgetall(`split:${sessionId}:dm`);
@@ -287,6 +323,7 @@ async function getSplitData(sessionId) {
         playerScript: data.playerScript,
         secret: data.secret,
         isMurderer: data.isMurderer === "1",
+        roleType: data.roleType || "player",
         occupation: data.occupation,
         age: data.age,
       };
@@ -307,4 +344,4 @@ async function getSplitData(sessionId) {
   };
 }
 
-module.exports = { splitScript, getSplitData };
+module.exports = { splitScript, getSplitData, NPC_SCRIPT_MAX_LEN };
