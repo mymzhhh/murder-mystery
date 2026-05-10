@@ -146,7 +146,6 @@ function setupGameSocket(io) {
         if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
         const parsed = JSON.parse(room.parsedScript || "{}");
         const player = players.find(p => p.playerId === socket.id);
-        const player = players.find(p => p.playerId === socket.id);
         const myChar = parsed.characters?.find(c => c.name === player?.characterName);
         const clue = await decideClueForPlayer(parsed, myChar || {}, available, playerClues, round, room.phase);
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
