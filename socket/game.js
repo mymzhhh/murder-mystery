@@ -46,10 +46,11 @@ function setupGameSocket(io) {
 
         socket.emit("room_state", {
           room: { roomCode, status: room.status, phase: room.phase },
-          players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected })),
+          players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false })),
           myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), phaseNarrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim },
+          allCharacters: parsed.characters || [], // 完整角色列表（含NPC、roleType）
         });
         io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode) });
       } catch (e) { socket.emit("error", { code: "JOIN_FAILED", message: e.message }); }

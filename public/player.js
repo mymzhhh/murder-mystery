@@ -530,9 +530,9 @@
       let h = topBar("voting");
       h += gs.narrative ? `<div class="narrative-panel">${esc(gs.narrative)}</div>` : "";
 
-      // 投票目标包含人类玩家和NPC角色
-      var humanNames = gs.players.map(p => p.characterName).filter(Boolean);
-      var npcNames = (gs.myCharacter && gs.parsedScript?.characters ? gs.parsedScript.characters.filter(c => c.roleType === 'npc').map(c => c.name) : []);
+      // 投票目标：所有角色（含NPC），从 allCharacters 获取NPC信息
+      var humanNames = (gs.players || []).map(p => p.characterName).filter(Boolean);
+      var npcNames = (gs.allCharacters || []).filter(c => c.roleType === 'npc').map(c => c.name);
       var allVoteTargets = humanNames.concat(npcNames.filter(n => !humanNames.includes(n)));
       var chars = allVoteTargets.filter((v, i, a) => a.indexOf(v) === i);
       h += '<h4 style="margin:16px 0;">投票指认凶手</h4><div class="vote-grid">';
