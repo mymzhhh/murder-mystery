@@ -52,6 +52,7 @@ async function createSession(metadata = {}) {
   const now = new Date().toISOString();
   const timestamp = Date.now();
 
+  // 基础字段 + 所有额外 metadata 字段
   const sessionData = {
     sessionId,
     createdAt: now,
@@ -60,6 +61,13 @@ async function createSession(metadata = {}) {
     topic: metadata.topic || "",
     templateName: metadata.templateName || "",
   };
+
+  // 将额外 metadata 字段（如 playerCount, npcCount, isPVE）也存入 hash
+  for (const [key, value] of Object.entries(metadata)) {
+    if (!sessionData[key] && value !== undefined) {
+      sessionData[key] = typeof value === "string" ? value : JSON.stringify(value);
+    }
+  }
 
   await r
     .multi()
@@ -72,11 +80,7 @@ async function createSession(metadata = {}) {
     createdAt: now,
     updatedAt: now,
     messages: [],
-    metadata: {
-      textType: sessionData.textType,
-      topic: sessionData.topic,
-      templateName: sessionData.templateName,
-    },
+    metadata: sessionData,
   };
 }
 
@@ -100,11 +104,7 @@ async function getSession(sessionId) {
     createdAt: meta.createdAt,
     updatedAt: meta.updatedAt,
     messages,
-    metadata: {
-      textType: meta.textType || "marketing",
-      topic: meta.topic || "",
-      templateName: meta.templateName || "",
-    },
+    metadata: meta,
   };
 }
 

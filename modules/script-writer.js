@@ -183,6 +183,9 @@ async function writeScript(userInput, onProgress, scriptConfig) {
       textType: "murder-mystery",
       topic: (typeof userInput === "string" ? userInput : "").slice(0, 100),
       templateName: "剧本杀",
+      playerCount: String(playerCount),
+      npcCount: String(npcCount),
+      isPVE: String(isPVE),
     });
     await addMessage(session.sessionId, "user", userInput);
 

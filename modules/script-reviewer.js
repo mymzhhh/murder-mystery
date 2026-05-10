@@ -211,21 +211,37 @@ async function reviewAndRevise(sessionId, onProgress) {
         const session = await getSession(currentSessionId);
         const originalInput = session?.metadata?.topic || (session?.messages?.find(m => m.role === "user")?.content) || "生成剧本";
 
+        // 从 session 元数据恢复剧本配置（首次生成时由 script-writer 存入）
+        const meta = session?.metadata || {};
+        const genConfig = {
+          playerCount: parseInt(meta.playerCount) || LIMITS.maxPlayers,
+          npcCount: parseInt(meta.npcCount) || 0,
+          isPVE: meta.isPVE === "true",
+        };
+
         const revisionInput = `## 修改要求（第${round}轮，基于评测反馈）
 
 ${review.revisionAdvice}
+
+## 角色数量约束（必须遵守）
+- 玩家角色：恰好${genConfig.playerCount}人
+- NPC嫌疑人：${genConfig.npcCount > 0 ? '恰好' + genConfig.npcCount + '人' : '0人（PVP模式，无NPC）'}
+- 总人数：${genConfig.playerCount + genConfig.npcCount}人
 
 ## 原有需求
 ${originalInput}`;
 
         const newResult = await buildMurderMystery(revisionInput, (stage, msg) => {
           onProgress(`gen_${stage}`, msg);
-        });
+        }, genConfig);
 
         const newSession = await createSession({
           textType: "murder-mystery",
           topic: originalInput.slice(0, 100),
           templateName: "剧本杀",
+          playerCount: String(genConfig.playerCount),
+          npcCount: String(genConfig.npcCount),
+          isPVE: String(genConfig.isPVE),
         });
         await addMessage(newSession.sessionId, "user", revisionInput);
         await addMessage(newSession.sessionId, "assistant", newResult.fullScript.substring(0, 50000));
