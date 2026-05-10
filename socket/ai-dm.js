@@ -16,16 +16,18 @@ async function autoAdvancePhase(io, roomCode, parsed) {
   if (nextPhase === "truth_reveal") {
     const votes = await getVotes(roomCode);
     const players = await getPlayers(roomCode);
+    const realPlayers = players.filter(p => !p.isNPC);
     const outcome = determineOutcome(votes, room.murdererName);
-    const tallied = tallyVotes(votes, players);
+    const tallied = tallyVotes(votes, realPlayers);
     const narrative = await generateTruthReveal(parsed, votes, outcome);
 
+    await updateRoom(roomCode, { phase: "truth_reveal", phaseStartedAt: Date.now(), aiNarrative: narrative, status: "finished" });
+    // 只发送 truth_revealed，不发送 phase_changed（避免前端 renderGame 覆盖真相数据）
     io.to(roomCode).emit("truth_revealed", {
       murdererName: room.murdererName, votes: tallied,
       outcome: outcome.outcome, description: outcome.description, narrative,
+      phase: "truth_reveal",
     });
-    await updateRoom(roomCode, { phase: "truth_reveal", phaseStartedAt: Date.now(), aiNarrative: narrative, status: "finished" });
-    io.to(roomCode).emit("phase_changed", { phase: "truth_reveal", label: "真相揭露", config: getPhaseConfig("truth_reveal"), narrative });
     return;
   }
 

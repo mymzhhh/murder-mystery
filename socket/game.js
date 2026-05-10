@@ -93,6 +93,26 @@ function setupGameSocket(io) {
         const assigned = players.filter(p => p.characterName);
         if (assigned.length < 2) return socket.emit("error", { code: "NOT_ENOUGH", message: "至少需要2名玩家" });
         const parsed = JSON.parse(room.parsedScript || "{}");
+
+        // 将NPC角色以虚拟玩家身份加入游戏（AI控制）
+        const npcChars = parsed.characters?.filter(c => c.roleType === "npc") || [];
+        const { getRedis } = require("../modules/game-manager");
+        for (let i = 0; i < npcChars.length; i++) {
+          const npc = npcChars[i];
+          const npcId = "npc_" + roomCode + "_" + i;
+          const existingNpc = players.find(p => p.playerId === npcId);
+          if (!existingNpc) {
+            await addPlayer(roomCode, npcId, "NPC:" + npc.name, false);
+            await updatePlayer(roomCode, npcId, {
+              characterName: npc.name,
+              characterScript: JSON.stringify(npc),
+              isNPC: true,
+            });
+          }
+        }
+        // 重新获取完整玩家列表（含NPC）
+        const allPlayers = await getPlayers(roomCode);
+
         for (const p of assigned) {
           const char = parsed.characters?.find(c => c.name === p.characterName);
           if (char) io.to(p.playerId).emit("character_assigned", { characterName: p.characterName, character: char, isMurderer: char.isMurderer || false });
@@ -101,7 +121,6 @@ function setupGameSocket(io) {
         await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: narrative });
         io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative });
         io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative });
-        const { getRedis } = require("../modules/game-manager");
         (await getRedis()).srem("rooms:open", roomCode);
         setTimeout(async () => { try { await autoAdvancePhase(io, roomCode, parsed); } catch (e) { /* ignore */ } }, 180000);
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
@@ -112,17 +131,18 @@ function setupGameSocket(io) {
         const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
         const val = validateAction("request_clue", { phase: room.phase, players }, socket.id);
-        if (!val.ok) return socket.emit("error", { code: val.error, message: val.message });
+        if (!val.ok) return socket.emit("error", { code: val.error, message: val.message || "当前阶段无法获取线索" });
         const round = getPhaseRound(room.phase);
         const allClues = await getClues(roomCode);
+        if (!allClues || allClues.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "剧本未加载线索数据" });
         const playerClues = await getPlayerClues(roomCode, socket.id);
         const available = getAvailableCluesForPlayer(allClues, socket.id, round);
-        if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已耗尽" });
+        if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
         const parsed = JSON.parse(room.parsedScript || "{}");
         const player = players.find(p => p.playerId === socket.id);
         const myChar = parsed.characters?.find(c => c.name === player?.characterName);
-        const clue = await decideClueForPlayer(parsed, myChar, available, playerClues, round, room.phase);
-        if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "没有合适的线索" });
+        const clue = await decideClueForPlayer(parsed, myChar || {}, available, playerClues, round, room.phase);
+        if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
         socket.emit("clue_received", { clue });
       } catch (e) { socket.emit("error", { code: "INVESTIGATE_FAILED", message: e.message }); }
@@ -142,13 +162,21 @@ function setupGameSocket(io) {
     socket.on("vote", async ({ roomCode, targetCharacterName }) => {
       try {
         const room = await getRoom(roomCode);
-        const player = await getPlayer(roomCode, socket.id);
-        const val = validateAction("cast_vote", { phase: room.phase, players: await getPlayers(roomCode) }, socket.id);
-        if (!val.ok) return socket.emit("error", { code: val.error, message: val.message });
+        const allPlayers = await getPlayers(roomCode);
+        const player = allPlayers.find(p => p.playerId === socket.id);
+        if (!player) return socket.emit("error", { code: "NOT_FOUND", message: "玩家不存在" });
+        const val = validateAction("cast_vote", { phase: room.phase, players: allPlayers }, socket.id);
+        if (!val.ok) return socket.emit("error", { code: val.error, message: val.message || "当前阶段无法投票" });
+        // 检查投票目标是否存在（含NPC角色）
+        const humanPlayers = allPlayers.filter(p => !p.isNPC);
+        const parsed = JSON.parse(room.parsedScript || "{}");
+        const npcNames = (parsed.characters || []).filter(c => c.roleType === "npc").map(c => c.name);
+        const allCharNames = [...new Set([...humanPlayers.map(p => p.characterName).filter(Boolean), ...npcNames])];
+        if (!allCharNames.includes(targetCharacterName)) return socket.emit("error", { code: "INVALID_TARGET", message: "投票目标不存在" });
         await recordVote(roomCode, socket.id, targetCharacterName);
         socket.emit("vote_recorded", { target: targetCharacterName });
         const votes = await getVotes(roomCode);
-        io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length, total: (await getPlayers(roomCode)).length });
+        io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length, total: humanPlayers.length });
       } catch (e) { socket.emit("error", { code: "VOTE_FAILED", message: e.message }); }
     });
 

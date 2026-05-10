@@ -84,7 +84,7 @@
       socket.on("chat_message", function(data) { gs.chatMessages.push(data); if (gs.phase.includes("discussion") || gs.phase === "round3" || gs.phase === "voting") renderDiscussion(); });
       socket.on("vote_recorded", function(data) { gs.voteTarget = data.target; renderVoting(); });
       socket.on("vote_update", function(data) { renderVoting(); });
-      socket.on("truth_revealed", function(data) { renderTruth(data); });
+      socket.on("truth_revealed", function(data) { gs.phase = "truth_reveal"; renderTruth(data); });
       socket.on("game_ended", function() { location.reload(); });
       socket.on("narrative", function(data) { gs.narrative = data.text; renderGame(); });
       socket.on("error", function(data) { alert(data.message); });
@@ -255,7 +255,9 @@
       var myChar = me ? me.characterName : null;
       sel.innerHTML = chars.map(function(c) {
         var name = c.name || c;
+        var isNpc = c.roleType === "npc";
         var taken = assigned.includes(name) && name !== myChar;
+        if (isNpc) return '<button class="btn btn-outline" style="margin:4px;opacity:0.3;cursor:not-allowed;" disabled>' + esc(name) + ' [NPC]</button>';
         return '<button class="btn btn-outline" style="margin:4px;' + (taken ? 'opacity:0.4;' : '') + (name === myChar ? 'border-color:var(--primary);' : '') + '" onclick="selectChar(\'' + esc(name) + '\')"' + (taken ? ' disabled' : '') + '>' + esc(name) + '</button>';
       }).join("") || '<span style="color:var(--text2);">暂无可用角色</span>';
     }
@@ -301,14 +303,15 @@
 
       var h = '';
 
-      // 玩家列表（紧凑）
+      // 玩家列表（含NPC标记）
       h += '<div class="panel" style="margin-bottom:8px;"><h4 style="font-size:13px;margin-bottom:4px;">玩家</h4>';
       (gs.players||[]).forEach(function(p) {
         var isMe = p.playerId === myId;
+        var isNPC = p.isNPC || (p.playerId && p.playerId.startsWith("npc_"));
         var muted = voiceCtx.mutedPeers && voiceCtx.mutedPeers[p.playerId];
         h += '<div style="display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px;">';
-        h += '<span style="flex:1;">' + esc(p.characterName||p.playerName) + (isMe?' (你)':'') + '</span>';
-        if (!isMe && voiceCtx.enabled) {
+        h += '<span style="flex:1;">' + esc(p.characterName||p.playerName) + (isMe?' (你)':'') + (isNPC?' <span style="color:var(--gold);font-size:10px;">[NPC]</span>':'') + '</span>';
+        if (!isMe && !isNPC && voiceCtx.enabled) {
           h += '<button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:10px;" onclick="togglePeerMute(\'' + p.playerId + '\')">' + (muted?'🔇':'🔊') + '</button>';
         }
         h += '</div>';
@@ -522,7 +525,11 @@
       let h = topBar("voting");
       h += gs.narrative ? `<div class="narrative-panel">${esc(gs.narrative)}</div>` : "";
 
-      const chars = gs.players.map(p => p.characterName).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+      // 投票目标包含人类玩家和NPC角色
+      var humanNames = gs.players.map(p => p.characterName).filter(Boolean);
+      var npcNames = (gs.myCharacter && gs.parsedScript?.characters ? gs.parsedScript.characters.filter(c => c.roleType === 'npc').map(c => c.name) : []);
+      var allVoteTargets = humanNames.concat(npcNames.filter(n => !humanNames.includes(n)));
+      var chars = allVoteTargets.filter((v, i, a) => a.indexOf(v) === i);
       h += '<h4 style="margin:16px 0;">投票指认凶手</h4><div class="vote-grid">';
       for (const name of chars) {
         h += `<div class="vote-card ${gs.voteTarget === name ? 'voted' : ''}" onclick="doVote('${esc(name)}')"><div class="name">${esc(name)}</div></div>`;
@@ -538,8 +545,10 @@
       socket.emit("vote", { roomCode: gs.room?.roomCode, targetCharacterName: target });
     }
 
+    window._truthData = null;
     function renderTruth(data) {
-      data = data || {};
+      if (data && data.murdererName) window._truthData = data; // 缓存真相数据防止被覆盖
+      data = data || window._truthData || {};
       let h = '<div class="reveal-container">';
       h += `<h2>${data.outcome === 'true_accusation' ? '案件告破！' : '真相大白'}</h2>`;
       h += data.murdererName ? `<div class="murderer">凶手：${esc(data.murdererName)}</div>` : '';
@@ -550,7 +559,7 @@
         h += '</div>';
       }
       h += '</div>';
-      document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
+      document.getElementById("gameContent").innerHTML = wrapWithSidebar(h, "chat");
       setTimeout(function(){var e=document.getElementById('chatMsgs');if(e)e.scrollTop=e.scrollHeight;},100);
     }
 

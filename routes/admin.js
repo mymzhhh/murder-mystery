@@ -261,7 +261,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       const d = results[i][1];
       if (!d) continue;
       if (d.playerScript !== undefined) {
-        characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, script: { story: d.playerScript, secret: d.secret } });
+        characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret: d.secret } });
         characterNames.push(d.name);
       } else {
         allClues.push(d);
