@@ -111,23 +111,48 @@ function extractSection(text, heading, maxLen = 2000) {
 function extractCharacters(text, murdererName) {
   const chars = [];
 
-  // 方法A: 匹配 "### 角色X：姓名" 格式
-  const headingPattern = /^###\s*角色[一二三四五六七八\d]+[：:]\s*(.{2,6})$/gm;
-  let match;
-  while ((match = headingPattern.exec(text)) !== null) {
-    const name = match[1].trim();
-    if (name && name.length >= 2 && name.length <= 6 && !/凶手|死者|角色|未知|年龄|性别/.test(name)) {
-      // 检测角色类型：在该角色块中搜索NPC/玩家标记
+  // 方法A: 匹配多种角色标题格式
+  // 格式1: "### 玩家角色 X：姓名" 或 "### 玩家角色X：姓名"
+  // 格式2: "### NPC X：姓名" 或 "### NPCX：姓名"
+  // 格式3: "### 角色 X：姓名"（旧格式，兼容）
+  const headingPatterns = [
+    { regex: /^###\s*玩家角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: "player" },
+    { regex: /^###\s*NPC\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: "npc" },
+    { regex: /^###\s*角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: null }, // 旧格式，从上下文检测
+  ];
+
+  for (const { regex, type } of headingPatterns) {
+    let match;
+    while ((match = regex.exec(text)) !== null) {
+      const name = match[1].trim();
+      if (!name || name.length < 2 || name.length > 6) continue;
+      if (/凶手|死者|角色|未知|年龄|性别|嫌疑人/.test(name)) continue;
+      // 避免重复
+      if (chars.find(c => c.name === name)) continue;
+
+      let roleType = type;
+      if (roleType === null) {
+        // 旧格式：在上下文中检测NPC/player标记
+        const blockStart = match.index;
+        const nextBlock = text.indexOf("\n###", blockStart + 1);
+        const block = text.substring(blockStart, nextBlock > 0 ? nextBlock : blockStart + 2000);
+        const isNPC = /【NPC】|NPC嫌疑人/.test(block);
+        const isPlayer = /【玩家】|玩家角色/.test(block);
+        roleType = isNPC ? "npc" : isPlayer ? "player" : "player";
+      }
+
+      // 在角色块中检测凶手标记和职业
       const blockStart = match.index;
       const nextBlock = text.indexOf("\n###", blockStart + 1);
       const block = text.substring(blockStart, nextBlock > 0 ? nextBlock : blockStart + 2000);
-      const isNPC = /【NPC】|NPC嫌疑人/.test(block);
-      const isPlayer = /【玩家】|玩家角色/.test(block);
+      const isMurderer = /\[凶手\]|凶手/.test(block.substring(0, 100));
+      const occMatch = block.match(/职业[\/身份]*[：:]\s*(.+?)(?:\n|$)/);
+      const occupation = occMatch ? occMatch[1].trim() : "";
 
       chars.push({
-        name, age: "", gender: "", occupation: "", personality: "",
-        relationshipToVictim: "", isMurderer: false,
-        roleType: isNPC ? "npc" : isPlayer ? "player" : "player"
+        name, age: "", gender: "", occupation, personality: "",
+        relationshipToVictim: "", isMurderer,
+        roleType,
       });
     }
   }

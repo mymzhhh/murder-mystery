@@ -310,10 +310,12 @@
       });
       h += '</div>';
 
-      // 标签导航
+      // 标签导航（有NPC时显示审讯标签）
+      var hasNpcs = (gs.allCharacters || []).some(c => c.roleType === 'npc');
       h += '<div class="sidebar-tabs">';
       h += '<button class="sidebar-tab ' + (activeTab === 'script' ? 'active' : '') + '" onclick="switchSidebarTab(\'script\')">📜 剧本</button>';
       h += '<button class="sidebar-tab ' + (activeTab === 'clues' ? 'active' : '') + '" onclick="switchSidebarTab(\'clues\')">🔍 线索</button>';
+      if (hasNpcs) h += '<button class="sidebar-tab ' + (activeTab === 'interrogate' ? 'active' : '') + '" onclick="switchSidebarTab(\'interrogate\')">🎤 审讯</button>';
       h += '<button class="sidebar-tab ' + (activeTab === 'chat' ? 'active' : '') + '" onclick="switchSidebarTab(\'chat\')">💬 聊天</button>';
       h += '</div>';
 
@@ -359,6 +361,21 @@
             var c = gs.myClues[j];
             h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div><div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
           }
+        }
+        h += '</div>';
+      } else if (activeTab === 'interrogate') {
+        // 审讯标签：选择NPC提问
+        var npcs = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
+        h += '<div class="sidebar-script" style="max-height:450px;">';
+        h += '<p style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">选择NPC嫌疑人进行审讯。NPC可能说谎，请自行判断。</p>';
+        for (var j = 0; j < npcs.length; j++) {
+          var npc = npcs[j];
+          h += '<div class="script-detail" style="margin-bottom:8px;">';
+          h += '<summary style="font-size:12px;color:var(--gold);cursor:pointer;font-weight:600;" onclick="this.parentElement.classList.toggle(\'open\')">' + esc(npc.name) + (npc.occupation ? ' (' + esc(npc.occupation) + ')' : '') + (npc.isMurderer ? '' : '') + '</summary>';
+          h += '<div class="npc-interrogate" style="margin-top:6px;display:none;">';
+          h += '<textarea id="npcQ_' + esc(npc.name) + '" placeholder="向 ' + esc(npc.name) + ' 提问..." style="width:100%;height:50px;padding:6px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:11px;resize:none;"></textarea>';
+          h += '<button class="btn btn-primary btn-sm" style="margin-top:4px;width:100%;" onclick="askNpcSidebar(\'' + esc(npc.name) + '\')">提问</button>';
+          h += '</div></div>';
         }
         h += '</div>';
       } else {
@@ -494,21 +511,6 @@
     function renderInvestigation() {
       let h = topBar(gs.phase);
       h += gs.narrative ? `<div class="narrative-panel">${esc(gs.narrative)}</div>` : "";
-      // NPC审讯面板
-      var npcChars = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
-      if (npcChars.length > 0) {
-        h += '<div class="panel" style="margin-top:16px;"><h4 style="margin-bottom:8px;">审讯NPC嫌疑人</h4>';
-        h += '<div style="display:flex;gap:8px;align-items:center;">';
-        h += '<select id="npcSelect" style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;">';
-        npcChars.forEach(function(n) { h += '<option value="' + esc(n.name) + '">' + esc(n.name) + (n.occupation ? ' (' + esc(n.occupation) + ')' : '') + '</option>'; });
-        h += '</select>';
-        h += '</div>';
-        h += '<div style="display:flex;gap:8px;margin-top:8px;">';
-        h += '<input id="npcQuestion" placeholder="输入你的问题..." style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;" onkeydown="if(event.key==\'Enter\')askNpc()" />';
-        h += '<button class="btn btn-primary btn-sm" onclick="askNpc()">提问</button>';
-        h += '</div></div>';
-      }
-
       h += '<h4 style="margin:12px 0;">已获取的线索</h4>';
       h += '<div class="clue-grid">';
       for (const c of gs.myClues) {
@@ -530,20 +532,6 @@
       let h = topBar(gs.phase);
       h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
 
-      // NPC审讯面板
-      var npcChars = (gs.allCharacters || []).filter(c => c.roleType === 'npc');
-      if (npcChars.length > 0) {
-        h += '<div class="panel" style="margin-top:12px;"><h4 style="margin-bottom:8px;">审讯NPC嫌疑人</h4>';
-        h += '<div style="display:flex;gap:8px;align-items:center;">';
-        h += '<select id="npcSelect" style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;">';
-        npcChars.forEach(function(n) { h += '<option value="' + esc(n.name) + '">' + esc(n.name) + (n.occupation ? ' (' + esc(n.occupation) + ')' : '') + '</option>'; });
-        h += '</select></div>';
-        h += '<div style="display:flex;gap:8px;margin-top:8px;">';
-        h += '<input id="npcQuestion" placeholder="输入你的问题..." style="flex:1;padding:8px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:6px;" onkeydown="if(event.key==\'Enter\')askNpc()" />';
-        h += '<button class="btn btn-primary btn-sm" onclick="askNpc()">提问</button>';
-        h += '</div></div>';
-      }
-
       h += '<p style="color:var(--text2);font-size:13px;margin-top:12px;">讨论中 — 使用右侧聊天框发送消息</p>';
       document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
       setTimeout(function(){var e=document.getElementById('chatMsgs');if(e)e.scrollTop=e.scrollHeight;},100);
@@ -555,6 +543,13 @@
       if (!npc || !q) return;
       socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npc, question: q });
       document.getElementById("npcQuestion").value = "";
+    }
+
+    function askNpcSidebar(npcName) {
+      var q = document.getElementById("npcQ_" + npcName)?.value.trim();
+      if (!q) return;
+      socket.emit("ask_npc", { roomCode: gs.room?.roomCode, npcName: npcName, question: q });
+      document.getElementById("npcQ_" + npcName).value = "";
     }
 
     function doChat() {

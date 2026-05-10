@@ -194,6 +194,7 @@ body::before {
 .script-detail { margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--surface); }
 .script-detail summary { font-size: 12px; color: var(--gold); cursor: pointer; font-weight: 600; }
 .script-detail[open] summary { margin-bottom: 6px; }
+.script-detail.open .npc-interrogate { display: block; }
 
 /* 侧边栏线索 */
 .sidebar-clues { max-height: 400px; overflow-y: auto; }
