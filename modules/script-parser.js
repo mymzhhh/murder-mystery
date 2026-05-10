@@ -116,9 +116,9 @@ function extractCharacters(text, murdererName) {
   // 格式2: "### NPC X：姓名" 或 "### NPCX：姓名"
   // 格式3: "### 角色 X：姓名"（旧格式，兼容）
   const headingPatterns = [
-    { regex: /^###\s*玩家角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: "player" },
-    { regex: /^###\s*NPC\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: "npc" },
-    { regex: /^###\s*角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.{2,6})$/gm, type: null }, // 旧格式，从上下文检测
+    { regex: /^###\s*玩家角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.+?)(?:\s*\[.*?\])?\s*$/gm, type: "player" },
+    { regex: /^###\s*NPC\s*[一二三四五六七八\d]+\s*[：:]\s*(.+?)(?:\s*\[.*?\])?\s*$/gm, type: "npc" },
+    { regex: /^###\s*角色\s*[一二三四五六七八\d]+\s*[：:]\s*(.+?)(?:\s*\[.*?\])?\s*$/gm, type: null }, // 旧格式
   ];
 
   for (const { regex, type } of headingPatterns) {
