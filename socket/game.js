@@ -24,6 +24,9 @@ function setupGameSocket(io) {
         const byUsername = humanPlayers.find(p => p.playerName === user.username);
         const bySocketId = humanPlayers.find(p => p.playerId === socket.id);
 
+        // 检查重连前是否是房主
+        const wasOwner = room.ownerId && byUsername && room.ownerId === byUsername.playerId;
+
         if (byUsername) {
           await updatePlayer(roomCode, byUsername.playerId, { playerId: socket.id, connected: true });
           await removePlayer(roomCode, byUsername.playerId);
@@ -36,10 +39,12 @@ function setupGameSocket(io) {
         }
         socket.join(roomCode);
 
-        // 如果没有房主，设第一个加入的人类玩家为房主
+        // 更新房主：重连的原房主保留主权，否则设第一个人类玩家为房主
         const allPlayers = await getPlayers(roomCode);
         const currentHumans = allPlayers.filter(p => !p.isNPC);
-        if (!room.ownerId || !currentHumans.find(p => p.playerId === room.ownerId)) {
+        if (wasOwner) {
+          await updateRoom(roomCode, { ownerId: socket.id });
+        } else if (!room.ownerId || !currentHumans.find(p => p.playerId === room.ownerId)) {
           const newOwner = currentHumans[0];
           if (newOwner) {
             await updateRoom(roomCode, { ownerId: newOwner.playerId });

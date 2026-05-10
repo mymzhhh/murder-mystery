@@ -72,7 +72,9 @@
       socket.on("room_state", function(data) { gs = Object.assign(gs, data); showGame(); });
       socket.on("room_updated", function(data) {
         gs.players = data.players;
-        if (data.ownerId) gs.room = gs.room || {}; gs.room.ownerId = data.ownerId;
+        if (data.ownerId) { gs.room = gs.room || {}; gs.room.ownerId = data.ownerId; }
+        // 在大厅阶段完全刷新（人数/开始按钮需要重新计算）
+        if (gs.phase === "lobby") { renderLobbyInGame(); return; }
         updatePlayerList();
         updateCharSelect();
       });
