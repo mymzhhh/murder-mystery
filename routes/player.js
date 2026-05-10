@@ -19,7 +19,7 @@ function setupPlayerRoutes(app, authMiddleware) {
             sessionId: id,
             title: meta.title,
             topic: meta.title,
-            characterCount: (JSON.parse(meta.characterNames || "[]")).length,
+            characterCount: parseInt(meta.playerCount) || 0,
             textType: "murder-mystery",
             createdAt: meta.splitAt || "",
             messageCount: parseInt(meta.clueCount) || 0,

@@ -30,6 +30,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
               topic: meta.title,
               textType: "murder-mystery",
               createdAt: meta.splitAt || "",
+              characterCount: parseInt(meta.playerCount) || 0,
               messageCount: parseInt(meta.clueCount) || 0,
               isSplit: true,
             });
@@ -314,7 +315,8 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
   if (allClues.length > 0) await loadClues(room.roomCode, allClues);
   await r2.sadd("rooms:open", room.roomCode);
   await removePlayer(room.roomCode, "system_dm");
-  return { roomCode: room.roomCode, title: parsed.title, characterCount: characterNames.length, characters: characterNames };
+  const onlyPlayerNames = characters.filter(c => c.roleType !== "npc").map(c => c.name);
+  return { roomCode: room.roomCode, title: parsed.title, characterCount: onlyPlayerNames.length, characters: onlyPlayerNames };
 }
 
 module.exports = { setupAdminRoutes, createGameRoom };

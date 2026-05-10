@@ -277,11 +277,16 @@ async function saveToRedis(sessionId, result) {
   });
 
   // 元数据
+  const playerCount = Object.values(result.characters).filter(c => c.roleType === "player").length;
+  const npcCount = Object.values(result.characters).filter(c => c.roleType === "npc").length;
+
   pipeline.hset(`split:${sessionId}:meta`, {
     title: result.meta.title || "",
     era: result.meta.era || "",
     location: result.meta.location || "",
     characterNames: JSON.stringify(result.meta.characterNames),
+    playerCount: String(playerCount),
+    npcCount: String(npcCount),
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
   });
