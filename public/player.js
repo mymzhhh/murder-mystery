@@ -80,7 +80,7 @@
       socket.on("character_selected", function(data) { gs.myCharacter = data.character; updateCharSelect(); });
       socket.on("game_started", function(data) { gs.phase = data.phase; gs.narrative = data.narrative || ""; renderGame(); });
       socket.on("phase_changed", function(data) { gs.phase = data.phase; gs.phaseConfig = data.config || {}; gs.narrative = data.narrative || ""; renderGame(); });
-      socket.on("clue_received", function(data) { gs.myClues.push(data.clue); renderInvestigation(); });
+      socket.on("clue_received", function(data) { data.clue.foundByName = data.foundBy; gs.myClues.push(data.clue); renderInvestigation(); });
       socket.on("chat_message", function(data) { gs.chatMessages.push(data); if (gs.phase.includes("discussion") || gs.phase === "round3" || gs.phase === "voting") renderDiscussion(); });
       socket.on("vote_recorded", function(data) { gs.voteTarget = data.target; renderVoting(); });
       socket.on("vote_update", function(data) { renderVoting(); });
@@ -357,7 +357,7 @@
         } else {
           for (var j = 0; j < gs.myClues.length; j++) {
             var c = gs.myClues[j];
-            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + '</div><div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
+            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div><div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
           }
         }
         h += '</div>';
@@ -497,7 +497,7 @@
       h += '<h4 style="margin:12px 0;">已获取的线索</h4>';
       h += '<div class="clue-grid">';
       for (const c of gs.myClues) {
-        h += `<div class="clue-card found"><div class="clue-id">${esc(c.id)}</div><div class="clue-body">${esc(c.content||'')}</div></div>`;
+        h += `<div class="clue-card found"><div class="clue-id">${esc(c.id)}${c.foundBy ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundBy) + ' 发现</span>' : ''}</div><div class="clue-body">${esc(c.content||'')}</div></div>`;
       }
       h += '</div>';
       h += `<button class="btn btn-primary" style="margin-top:16px;" onclick="investigate()">申请调查</button>`;

@@ -98,7 +98,8 @@ function validateAction(action, gameState, playerId) {
 function getAvailableCluesForPlayer(allClues, playerId, round) {
   return allClues.filter(c =>
     // 用 == 兼容 Redis 返回的字符串 round 值
-    c.round == round && (!c.foundBy || !c.foundBy.includes(playerId))
+    // 线索公开：已被任何人找到的线索不再可用
+    c.round == round && (!c.foundBy || c.foundBy.length === 0)
   );
 }
 

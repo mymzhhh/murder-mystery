@@ -37,12 +37,17 @@ function setupGameSocket(io) {
         const parsed = JSON.parse(room.parsedScript || "{}");
         const myPlayer = players.find(p => p.playerId === socket.id);
         const myCharacter = parsed.characters?.find(c => c.name === myPlayer?.characterName);
-        const myClues = await getPlayerClues(roomCode, socket.id);
+        // 线索公开：所有已发现的线索对所有玩家可见
+        const allCluesRaw = await getClues(roomCode);
+        const myClues = (allCluesRaw || []).filter(c => c.foundBy && c.foundBy.length > 0).map(c => {
+          const finder = players.find(p => p.playerId === c.foundBy[0]);
+          return { ...c, foundByName: finder?.characterName || finder?.playerName || "未知" };
+        });
 
         socket.emit("room_state", {
           room: { roomCode, status: room.status, phase: room.phase },
           players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected })),
-          myCharacter, myClues, allClues: await getClues(roomCode), chatMessages: await getChatMessages(roomCode, 50),
+          myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), phaseNarrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim },
         });
@@ -140,11 +145,13 @@ function setupGameSocket(io) {
         if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
         const parsed = JSON.parse(room.parsedScript || "{}");
         const player = players.find(p => p.playerId === socket.id);
+        const player = players.find(p => p.playerId === socket.id);
         const myChar = parsed.characters?.find(c => c.name === player?.characterName);
         const clue = await decideClueForPlayer(parsed, myChar || {}, available, playerClues, round, room.phase);
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
-        socket.emit("clue_received", { clue });
+        // 线索公开：广播给房间内所有玩家
+        io.to(roomCode).emit("clue_received", { clue, foundBy: player?.characterName || player?.playerName || "未知" });
       } catch (e) { socket.emit("error", { code: "INVESTIGATE_FAILED", message: e.message }); }
     });
 
