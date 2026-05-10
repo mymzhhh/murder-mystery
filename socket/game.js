@@ -85,6 +85,7 @@ function setupGameSocket(io) {
         const parsed = JSON.parse(room.parsedScript || "{}");
         const char = parsed.characters?.find(c => c.name === characterName);
         if (!char) return socket.emit("error", { code: "NOT_FOUND", message: "角色不存在" });
+        if (char.roleType === "npc") return socket.emit("error", { code: "NPC_CHAR", message: "NPC角色由AI控制，不可选择" });
         if (me?.characterName && me.characterName === characterName) return socket.emit("error", { code: "SAME_CHAR", message: "你已经选择了该角色" });
         if (players.some(p => p.characterName === characterName)) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
         await updatePlayer(roomCode, socket.id, { characterName, characterScript: JSON.stringify(char) });

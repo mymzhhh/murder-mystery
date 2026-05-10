@@ -247,7 +247,8 @@
       var sel = document.getElementById("charSelectEl");
       if (!sel) return;
       var assigned = gs.players.map(function(p) { return p.characterName; }).filter(Boolean);
-      var chars = (gs.parsedScript?.characters || (gs.myCharacter ? [gs.myCharacter] : []));
+      // 只显示玩家角色（gs.allCharacters 从 room_state 获取）
+      var chars = (gs.allCharacters || []).filter(function(c) { return c.roleType !== 'npc'; });
       if (chars.length === 0) { loadCharOptions(); return; }
       var me = gs.players.find(function(p) { return p.playerId === gs.playerId; });
       var myChar = me ? me.characterName : null;

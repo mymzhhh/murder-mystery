@@ -48,7 +48,7 @@ function setupPlayerRoutes(app, authMiddleware) {
           roomCode: code, status: room.status, phase: room.phase,
           title: parsed.title || "未命名", setting: parsed.setting || {},
           playerCount: players.length, maxPlayers: parseInt(room.maxPlayers) || 6,
-          availableCharacters: (parsed.characters || []).filter(c => !assigned.includes(c.name)).map(c => c.name),
+          availableCharacters: (parsed.characters || []).filter(c => c.roleType !== "npc" && !assigned.includes(c.name)).map(c => c.name),
         });
       }
     }
