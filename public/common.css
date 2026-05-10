@@ -178,6 +178,28 @@ body::before {
 .game-main { min-width: 0; }
 .game-sidebar { position: sticky; top: 80px; align-self: start; }
 
+/* ===================== 侧边栏标签 ===================== */
+.sidebar-tabs { display: flex; gap: 2px; margin-bottom: 8px; }
+.sidebar-tab {
+  flex: 1; padding: 6px 4px; font-size: 11px; cursor: pointer;
+  background: var(--surface); color: var(--text-dim); border: 1px solid var(--border);
+  border-radius: 6px 6px 0 0; transition: all 0.2s; text-align: center;
+}
+.sidebar-tab.active { background: var(--surface2); color: var(--gold); border-bottom-color: var(--surface2); font-weight: 600; }
+.sidebar-tab:hover:not(.active) { color: var(--text); }
+.sidebar-tab-content { min-height: 200px; }
+
+/* 侧边栏剧本 */
+.sidebar-script { max-height: 400px; overflow-y: auto; }
+.script-detail { margin-bottom: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--surface); }
+.script-detail summary { font-size: 12px; color: var(--gold); cursor: pointer; font-weight: 600; }
+.script-detail[open] summary { margin-bottom: 6px; }
+
+/* 侧边栏线索 */
+.sidebar-clues { max-height: 400px; overflow-y: auto; }
+.sidebar-clue-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 8px; margin-bottom: 6px; }
+.sidebar-clue-card .clue-id { font-size: 11px; color: var(--gold); font-weight: 700; margin-bottom: 4px; }
+
 /* ===================== 线索卡 ===================== */
 .clue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .clue-card {

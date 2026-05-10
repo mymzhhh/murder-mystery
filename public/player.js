@@ -290,38 +290,94 @@
       return h;
     }
 
-    // 右侧面板：玩家列表（含单人静音）+ 聊天
-    function sidePanel() {
-      var h = '<div class="panel" style="margin-bottom:8px;"><h4 style="font-size:13px;margin-bottom:8px;">玩家</h4>';
+    // 侧边栏当前激活的标签页
+    window._sidebarTab = "chat";
+
+    // 右侧面板：玩家列表 + 标签页（剧本/线索/聊天）
+    function sidePanel(activeTab) {
+      activeTab = activeTab || window._sidebarTab || "chat";
+      window._sidebarTab = activeTab;
       var myId = socket && socket.id;
+
+      var h = '';
+
+      // 玩家列表（紧凑）
+      h += '<div class="panel" style="margin-bottom:8px;"><h4 style="font-size:13px;margin-bottom:4px;">玩家</h4>';
       (gs.players||[]).forEach(function(p) {
         var isMe = p.playerId === myId;
         var muted = voiceCtx.mutedPeers && voiceCtx.mutedPeers[p.playerId];
-        h += '<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:12px;">';
+        h += '<div style="display:flex;align-items:center;gap:4px;padding:2px 0;font-size:11px;">';
         h += '<span style="flex:1;">' + esc(p.characterName||p.playerName) + (isMe?' (你)':'') + '</span>';
         if (!isMe && voiceCtx.enabled) {
-          h += '<button class="btn btn-outline btn-sm" style="padding:2px 6px;font-size:10px;" onclick="togglePeerMute(\'' + p.playerId + '\')">' + (muted?'取消静音':'静音') + '</button>';
+          h += '<button class="btn btn-outline btn-sm" style="padding:1px 5px;font-size:10px;" onclick="togglePeerMute(\'' + p.playerId + '\')">' + (muted?'🔇':'🔊') + '</button>';
         }
         h += '</div>';
       });
       h += '</div>';
 
-      // 紧凑聊天框
-      h += '<div class="chat-box" style="height:200px;"><div class="chat-messages" id="chatMsgs">';
-      (gs.chatMessages||[]).slice(-40).forEach(function(m) {
-        h += '<div class="chat-msg"><span class="sender">' + esc(m.characterName||m.playerName) + ':</span>' + esc(m.content) + '</div>';
-      });
-      h += '</div><div class="chat-input-row"><input id="chatIn" placeholder="输入消息..." onkeydown="if(event.key==&quot;Enter&quot;)doChat()" /><button onclick="doChat()">发送</button></div></div>';
+      // 标签导航
+      h += '<div class="sidebar-tabs">';
+      h += '<button class="sidebar-tab ' + (activeTab === 'script' ? 'active' : '') + '" onclick="switchSidebarTab(\'script\')">📜 剧本</button>';
+      h += '<button class="sidebar-tab ' + (activeTab === 'clues' ? 'active' : '') + '" onclick="switchSidebarTab(\'clues\')">🔍 线索</button>';
+      h += '<button class="sidebar-tab ' + (activeTab === 'chat' ? 'active' : '') + '" onclick="switchSidebarTab(\'chat\')">💬 聊天</button>';
+      h += '</div>';
+
+      // 标签内容
+      h += '<div class="sidebar-tab-content" id="sidebarTabContent">';
+
+      if (activeTab === 'script') {
+        // 剧本标签：显示角色剧本
+        var char = gs.myCharacter || {};
+        var s = char.script || {};
+        h += '<div class="sidebar-script">';
+        if (char.name) {
+          h += '<h4 style="color:var(--gold);margin-bottom:8px;">' + esc(char.name) + ' 的角色剧本</h4>';
+          if (char.isMurderer) h += '<div class="murderer-tag" style="margin-bottom:8px;">你是凶手</div>';
+        }
+        var sections = [['你的故事', s.story], ['你的秘密', s.secret], ['你的时间线', s.personalTimeline], ['你的目标', s.goals], ['你掌握的信息', s.knownInfo], ['你的物品', s.items]];
+        for (var i = 0; i < sections.length; i++) {
+          if (sections[i][1]) {
+            h += '<details class="script-detail"><summary>' + esc(sections[i][0]) + '</summary><div style="white-space:pre-wrap;font-size:12px;line-height:1.6;">' + esc(String(sections[i][1]).substring(0, 2000)) + '</div></details>';
+          }
+        }
+        h += '</div>';
+      } else if (activeTab === 'clues') {
+        // 线索标签：显示已收集线索
+        h += '<div class="sidebar-clues">';
+        if (gs.myClues.length === 0) {
+          h += '<p style="color:var(--text2);font-size:12px;">暂无线索</p>';
+        } else {
+          for (var j = 0; j < gs.myClues.length; j++) {
+            var c = gs.myClues[j];
+            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + '</div><div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
+          }
+        }
+        h += '</div>';
+      } else {
+        // 聊天标签
+        h += '<div class="chat-box" style="height:200px;"><div class="chat-messages" id="chatMsgs">';
+        (gs.chatMessages||[]).slice(-40).forEach(function(m) {
+          h += '<div class="chat-msg"><span class="sender">' + esc(m.characterName||m.playerName) + ':</span>' + esc(m.content) + '</div>';
+        });
+        h += '</div><div class="chat-input-row"><input id="chatIn" placeholder="输入消息..." onkeydown="if(event.key==&quot;Enter&quot;)doChat()" /><button onclick="doChat()">发送</button></div></div>';
+      }
+
+      h += '</div>'; // .sidebar-tab-content
       return h;
     }
 
-    function wrapWithSidebar(mainContent) {
-      return '<div class="game-layout"><div class="game-main">' + mainContent + '</div><div class="game-sidebar" id="gameSidebar">' + sidePanel() + '</div></div>';
+    function switchSidebarTab(tab) {
+      window._sidebarTab = tab;
+      refreshSidebar();
+    }
+
+    function wrapWithSidebar(mainContent, activeTab) {
+      return '<div class="game-layout"><div class="game-main">' + mainContent + '</div><div class="game-sidebar" id="gameSidebar">' + sidePanel(activeTab) + '</div></div>';
     }
 
     function refreshSidebar() {
       var el = document.getElementById("gameSidebar");
-      if (el) el.innerHTML = sidePanel();
+      if (el) el.innerHTML = sidePanel(window._sidebarTab);
     }
 
     window._bookData = { pages: [], current: 0 };
@@ -338,10 +394,10 @@
         if (secs[i][1]) sections.push({ label: secs[i][0], content: secs[i][1] });
       }
 
-      // Split into pages (~600 chars per page, roughly fitting a book spread)
+      // Split into pages (~380 chars per page for comfortable book reading)
       var pages = [];
       var currentPage = '';
-      var charsPerPage = 550;
+      var charsPerPage = 380;
 
       for (var j = 0; j < sections.length; j++) {
         var sec = sections[j];
@@ -349,7 +405,6 @@
         var body = sec.content || '';
 
         if (sec.isTitle) {
-          // Title gets its own page
           if (currentPage) { pages.push(currentPage); currentPage = ''; }
           var titleHtml = '<div style="text-align:center;padding-top:60px;"><h2 style="font-size:26px;">' + esc(sec.label) + '</h2>';
           if (sec.isMurderer) titleHtml += '<div class="murderer-tag">你是凶手</div>';
@@ -360,7 +415,20 @@
 
         var sectionText = '<h3>' + esc(header) + '</h3><p style="white-space:pre-wrap;">' + esc(body) + '</p>';
 
-        if (currentPage.length + sectionText.length > charsPerPage && currentPage.length > 0) {
+        // If a single section is too long, split it across multiple pages
+        if (sectionText.length > charsPerPage) {
+          if (currentPage) { pages.push(currentPage); currentPage = ''; }
+          // Split long section at paragraph boundaries
+          var paragraphs = sectionText.split(/\n{2,}/);
+          for (var k = 0; k < paragraphs.length; k++) {
+            if (currentPage.length + paragraphs[k].length > charsPerPage && currentPage.length > 0) {
+              pages.push(currentPage);
+              currentPage = paragraphs[k];
+            } else {
+              currentPage += (currentPage ? '\n\n' : '') + paragraphs[k];
+            }
+          }
+        } else if (currentPage.length + sectionText.length > charsPerPage && currentPage.length > 0) {
           pages.push(currentPage);
           currentPage = sectionText;
         } else {
@@ -546,8 +614,10 @@ function createPeerConnection(targetId) {
     var audio = new Audio();
     audio.srcObject = e.streams[0];
     audio.autoplay = true;
+    audio.playsinline = true;
     audio.setAttribute("data-peer", targetId);
     document.body.appendChild(audio);
+    audio.play().catch(function() { /* autoplay blocked, user needs to interact */ });
   };
 
   pc.onconnectionstatechange = function() {
@@ -593,7 +663,8 @@ if (typeof socket !== "undefined" && socket) {
       if (e.candidate) socket.emit("rtc_ice", { roomCode: gs.room && gs.room.roomCode, targetId: data.fromId, candidate: e.candidate });
     };
     pc.ontrack = function(e) {
-      var a = new Audio(); a.srcObject = e.streams[0]; a.autoplay = true; a.setAttribute("data-peer", data.fromId); document.body.appendChild(a);
+      var a = new Audio(); a.srcObject = e.streams[0]; a.autoplay = true; a.playsinline = true; a.setAttribute("data-peer", data.fromId); document.body.appendChild(a);
+      a.play().catch(function() {});
     };
     pc.onconnectionstatechange = function() {
       if (pc.connectionState === "failed" || pc.connectionState === "disconnected") closePeer(data.fromId);
@@ -652,87 +723,4 @@ var _origLeaveRoom = leaveRoom;
 leaveRoom = function() { closeAllPeers(); _origLeaveRoom(); };
 if (window._origLeftRoom) { /* already patched */ }
 
-// ==================== 沉浸式环境音效 ====================
-var ambientAudio = null;
-function playPhaseSound(phase) {
-  // 使用 Web Audio API 生成简单音效（无需外部文件）
-  try {
-    var ctx = new (window.AudioContext || window.webkitAudioContext)();
-    var osc = ctx.createOscillator();
-    var gain = ctx.createGain();
-    osc.connect(gain); gain.connect(ctx.destination);
-
-    if (phase === "truth_reveal") {
-      // 真相揭示：低频渐强
-      osc.type = "sine"; osc.frequency.setValueAtTime(80, ctx.currentTime);
-      osc.frequency.linearRampToValueAtTime(40, ctx.currentTime + 3);
-      gain.gain.setValueAtTime(0.01, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0.15, ctx.currentTime + 1);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 4);
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 4);
-    } else if (phase.includes("investigation")) {
-      // 搜证阶段：短促提示音
-      osc.type = "triangle"; osc.frequency.setValueAtTime(600, ctx.currentTime);
-      osc.frequency.linearRampToValueAtTime(800, ctx.currentTime + 0.15);
-      gain.gain.setValueAtTime(0.08, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.3);
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.3);
-    } else if (phase === "voting") {
-      // 投票：紧张的心跳节奏
-      osc.type = "sine"; osc.frequency.setValueAtTime(50, ctx.currentTime);
-      gain.gain.setValueAtTime(0.06, ctx.currentTime);
-      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + 0.8);
-      osc.start(ctx.currentTime); osc.stop(ctx.currentTime + 0.8);
-    }
-  } catch(e) { /* audio not supported */ }
-}
-
-// 阶段切换时播放对应音效
-var _origRenderGame = renderGame;
-renderGame = function() {
-  var prevPhase = gs._prevPhase;
-  if (gs.phase !== prevPhase) {
-    playPhaseSound(gs.phase);
-    gs._prevPhase = gs.phase;
-  }
-  _origRenderGame();
-};
-
-// 游戏开始/阶段变更也触发
-socket.on("phase_changed", function(data) {
-  if (data.phase) playPhaseSound(data.phase);
-});
-
-// 环境氛围音（可选，点击开启）
-function toggleAmbient() {
-  if (ambientAudio) { ambientAudio.pause(); ambientAudio = null; return; }
-  try {
-    var ctx = new (window.AudioContext || window.webkitAudioContext)();
-    // 生成棕色噪音（深沉氛围）
-    var bufferSize = ctx.sampleRate * 2;
-    var buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    var data = buffer.getChannelData(0);
-    var lastOut = 0;
-    for (var i = 0; i < bufferSize; i++) {
-      var white = Math.random() * 2 - 1;
-      data[i] = (lastOut + (0.02 * white)) / 1.02;
-      lastOut = data[i];
-      data[i] *= 0.1;
-    }
-    var source = ctx.createBufferSource();
-    source.buffer = buffer; source.loop = true;
-    var gain = ctx.createGain(); gain.gain.setValueAtTime(0.04, ctx.currentTime);
-    var filter = ctx.createBiquadFilter(); filter.type = "lowpass"; filter.frequency.setValueAtTime(300, ctx.currentTime);
-    source.connect(filter); filter.connect(gain); gain.connect(ctx.destination);
-    source.start(0);
-    ambientAudio = { source: source, gain: gain, stop: function() { source.stop(); } };
-  } catch(e) { /* ignore */ }
-}
-
-// 顶部加入氛围音开关
-var _origTopBar = topBar;
-topBar = function(phase) {
-  var h = _origTopBar(phase);
-  h = h.replace('进入下一阶段</button>', '进入下一阶段</button><button class="btn btn-outline btn-sm" style="margin-left:4px;" onclick="toggleAmbient()">氛围音</button>');
-  return h;
-};
+// 音效已移除
