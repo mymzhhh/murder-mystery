@@ -219,8 +219,8 @@ function setupGameSocket(io) {
       try {
         const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
-        const val = validateAction("send_chat", { phase: room.phase, players }, socket.id);
-        if (!val.ok) return socket.emit("error", { code: val.error, message: "当前阶段无法审讯NPC" });
+        // 审讯NPC在搜证和讨论阶段均可使用（阅读和投票阶段不可用）
+        if (room.phase === "reading" || room.phase === "lobby") return socket.emit("error", { code: "WRONG_PHASE", message: "当前阶段无法审讯NPC" });
         if (!question?.trim()) return socket.emit("error", { code: "EMPTY", message: "请输入问题" });
 
         const parsed = JSON.parse(room.parsedScript || "{}");
