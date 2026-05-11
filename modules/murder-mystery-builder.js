@@ -203,15 +203,16 @@ async function extractCharactersStructured(framework, cfg) {
 ]
 
 规则：
-1. 【玩家】角色 type = "player"
-2. 【NPC嫌疑人】角色 type = "npc"（无NPC章节时全部为player）
-3. 凶手有且仅有一个，isMurderer = true
-4. 按玩家先、NPC后的顺序排列
+1. 必须提取框架中出现的**每一个**角色（包括玩家和NPC），一个都不能漏
+2. 【玩家】角色 type = "player"，位于"玩家角色设定"章节
+3. 【NPC嫌疑人】角色 type = "npc"，位于"NPC嫌疑人设定"章节（无此章节则全部为player）
+4. 凶手有且仅有一个，isMurderer = true
+5. 按玩家先、NPC后的顺序排列
 
 故事框架：
 ${framework.substring(0, 8000)}
 
-请只输出 JSON 数组：`;
+请提取所有角色，只输出 JSON 数组：`;
 
   try {
     const result = await generate(
@@ -252,11 +253,24 @@ function extractCharactersFallback(framework, minExpected) {
     }
   }
 
-  const npcPattern = /(?:NPC\d|NPC嫌疑人)[：:]\s*(.{2,6})/g;
+  const npcPattern = /(?:NPC\d|NPC嫌疑人|NPC\s*\d)[：:\s]+(.{2,6})/g;
   while ((m = npcPattern.exec(framework)) !== null) {
-    const name = m[1].trim().replace(/[【\[].*$/, "");
+    const name = m[1].trim().replace(/[【\[].*$/g, "").replace(/\s*\[.*$/, "");
     if (name.length >= 2 && name.length <= 6 && !chars.find(c => c.name === name)) {
       chars.push({ name, type: "npc", isMurderer: false, occupation: "" });
+    }
+  }
+
+  // 补充：从NPC嫌疑人章节提取 - **姓名**：xxx 格式
+  const npcSection = (framework.match(/NPC嫌疑人设定[\s\S]*?(?=凶手设定|##\s*[五六七八九]、|重要约束)/) || [])[0] || "";
+  if (npcSection && chars.filter(c => c.type === "npc").length === 0) {
+    const namePattern = /\*\*姓名\*\*[：:]\s*(.{2,6})/g;
+    let nm;
+    while ((nm = namePattern.exec(npcSection)) !== null) {
+      const name = nm[1].trim();
+      if (name.length >= 2 && name.length <= 6 && !chars.find(c => c.name === name)) {
+        chars.push({ name, type: "npc", isMurderer: false, occupation: "" });
+      }
     }
   }
 
