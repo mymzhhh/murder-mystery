@@ -64,6 +64,17 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
 /**
  * 纯化一段玩家剧本
  */
+function extractLayoutFromMarkdown(markdown) {
+  try {
+    const jsonMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      if (data.rooms && data.rooms.length > 0) return data;
+    }
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
 async function purifyPlayerScript(characterName, rawScript, isMurderer) {
   const prompt = `请纯化玩家角色"${characterName}"的剧本。移除所有提示性、引导性内容（如"谎言建议"、"辩护策略"、"推理提示"、"如何圆谎"等），只保留角色自身的故事背景、个人时间线、任务目标、掌握的信息和随身物品。使用第一人称视角。
 
@@ -145,6 +156,9 @@ async function splitScript(sessionId, onProgress) {
   onProgress("parse", "正在解析剧本结构...");
   const parsed = parseScript(markdown);
 
+  // 从 markdown 中提取场景布局
+  const layout = extractLayoutFromMarkdown(markdown);
+
   const result = {
     sessionId,
     meta: {
@@ -154,6 +168,7 @@ async function splitScript(sessionId, onProgress) {
       victim: parsed.victim,
       characterNames: parsed.characters?.map(c => c.name) || [],
       clueCount: (parsed.clues?.round1?.length || 0) + (parsed.clues?.round2?.length || 0) + (parsed.clues?.round3?.length || 0),
+      layout,
     },
     characters: {},
     clues: [],
@@ -289,6 +304,7 @@ async function saveToRedis(sessionId, result) {
     npcCount: String(npcCount),
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
+    layout: result.meta.layout ? JSON.stringify(result.meta.layout) : "",
   });
 
   // 索引：将 sessionId 加入已切分剧本集合

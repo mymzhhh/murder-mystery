@@ -356,6 +356,7 @@
       h += '<button class="sidebar-tab ' + (activeTab === 'script' ? 'active' : '') + '" onclick="switchSidebarTab(\'script\')">📜 剧本</button>';
       h += '<button class="sidebar-tab ' + (activeTab === 'clues' ? 'active' : '') + '" onclick="switchSidebarTab(\'clues\')">🔍 线索</button>';
       if (hasNpcs) h += '<button class="sidebar-tab ' + (activeTab === 'interrogate' ? 'active' : '') + '" onclick="switchSidebarTab(\'interrogate\')">🎤 审讯</button>';
+      h += '<button class="sidebar-tab ' + (activeTab === 'layout' ? 'active' : '') + '" onclick="switchSidebarTab(\'layout\')">🗺️ 布局</button>';
       h += '<button class="sidebar-tab ' + (activeTab === 'chat' ? 'active' : '') + '" onclick="switchSidebarTab(\'chat\')">💬 聊天</button>';
       h += '</div>';
 
@@ -415,6 +416,35 @@
           if (npc.occupation) h += '<span style="font-size:11px;color:var(--text-dim);margin-left:6px;">' + esc(npc.occupation) + '</span>';
           h += '<span style="float:right;font-size:11px;color:var(--text-dim);">审讯 ▶</span>';
           h += '</div>';
+        }
+        h += '</div>';
+      } else if (activeTab === 'layout') {
+        // 布局标签：显示场景平面图
+        var layout = (gs.scriptSummary && gs.scriptSummary.layout) || null;
+        h += '<div class="sidebar-script" style="max-height:450px;">';
+        if (layout && layout.rooms) {
+          var rooms = layout.rooms || [];
+          var outdoor = layout.outdoor || [];
+          h += '<h4 style="color:var(--gold);margin-bottom:8px;">场景布局</h4>';
+          // 按楼层分组
+          var floors = {};
+          rooms.forEach(function(r) { var f = r.floor || 1; if (!floors[f]) floors[f] = []; floors[f].push(r); });
+          Object.keys(floors).sort().forEach(function(f) {
+            h += '<div style="margin-bottom:8px;font-size:12px;color:var(--text-dim);">' + (f > 1 ? 'F' + f : '一层') + '</div>';
+            h += '<div class="layout-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;">';
+            floors[f].forEach(function(r) {
+              var isCrime = r.isCrimeScene;
+              h += '<div class="layout-room" style="padding:6px 8px;border:1px solid ' + (isCrime ? 'var(--blood)' : 'var(--border)') + ';border-radius:6px;background:' + (isCrime ? 'rgba(139,26,26,0.2)' : 'var(--surface)') + ';font-size:11px;">';
+              h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(r.name || r.id) + '</strong>';
+              if (r.desc) h += '<div style="color:var(--text-dim);margin-top:2px;">' + esc(r.desc.substring(0, 40)) + '</div>';
+              if (r.features) h += '<div style="color:var(--text-dim);font-size:10px;">' + esc(r.features.join('、').substring(0, 50)) + '</div>';
+              h += '</div>';
+            });
+            h += '</div>';
+          });
+        } else {
+          h += '<p style="color:var(--text-dim);font-size:12px;">布局数据未生成或剧本中无布局描述。</p>';
+          h += '<p style="color:var(--text-dim);font-size:11px;">提示：新生成的剧本包含场景布局图。</p>';
         }
         h += '</div>';
       } else {

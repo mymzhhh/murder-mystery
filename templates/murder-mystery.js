@@ -60,6 +60,28 @@ module.exports = {
 ## 七、角色关系图
 描述所有角色之间错综复杂的关系网，确保每个人都有作案动机和秘密。
 
+## 八、场景布局图
+案发场所的详细平面布局。后续所有角色的时间线和线索发现地点都必须与此布局一致。
+
+### 整体描述
+（场所的总体概况：建筑名称/类型、楼层结构、周边环境，300字以上）
+
+### 房间列表（JSON格式）
+{
+  "rooms": [
+    { "id": "R1", "name": "房间名称", "floor": 1, "desc": "房间特征描述", "features": ["特征1","特征2"], "exitsTo": ["R2","R3"], "isCrimeScene": false },
+    { "id": "R2", "name": "死者房间", "floor": 1, "desc": "死者被发现的地点", "features": ["尸体","窗户碎裂"], "exitsTo": ["R1"], "isCrimeScene": true }
+  ],
+  "outdoor": [
+    { "id": "O1", "name": "花园", "desc": "...", "features": ["灌木丛","小径"] }
+  ]
+}
+要求：
+- 房间不少于5个，含走廊、大厅等公共区域
+- 每个房间标注出口连接（exitsTo），形成连通图
+- 标注案发现场（isCrimeScene: true）
+- 特征(features)要与线索系统对应
+
 ## 重要约束（必须严格遵守）：
 1. 玩家角色恰好{playerCount}人，编号玩家1-玩家{playerCount}
 2. {npcConstraint}

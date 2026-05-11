@@ -33,6 +33,12 @@ async function buildMurderMystery(userInput, onProgress, config) {
   const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE * 2, temperature: 0.75 });
   report.framework = frameworkResult.content;
 
+  // ========== 阶段 1.4：提取场景布局 ==========
+  onProgress("extract_layout", "正在提取场景布局图...");
+  const layout = extractLayout(report.framework);
+  report.layout = layout;
+  onProgress("extract_layout", layout ? `场景布局提取完成：${layout.rooms?.length || 0}个房间` : "未检测到布局数据");
+
   // ========== 阶段 1.5：结构化提取角色列表 ==========
   onProgress("extract", "正在解析角色列表（区分玩家/NPC/凶手）...");
   const characters = await extractCharactersStructured(report.framework, cfg);
@@ -79,15 +85,19 @@ async function buildMurderMystery(userInput, onProgress, config) {
 
   const frameworkSummary = buildStructuredSummary(report);
 
+  // 注入房间列表到线索/DM 阶段
+  const roomNames = (report.layout?.rooms || []).map(r => r.name).join('、');
+  const layoutContext = roomNames ? `\n\n## 场景布局（所有线索和行动必须对应以下房间）\n可用房间：${roomNames}\n案发现场：${(report.layout?.rooms || []).filter(r => r.isCrimeScene).map(r => r.name).join('、') || '未指定'}\n` : '';
+
   // ========== 阶段 3：线索系统 ==========
   onProgress("clues", "正在设计线索系统和证据链...");
-  const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary);
+  const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary + layoutContext);
   const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
   report.clues = cluesResult.content;
 
   // ========== 阶段 4：DM 手册 ==========
   onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
-  const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary);
+  const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary + layoutContext);
   const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
   report.dmGuide = dmResult.content;
 
@@ -130,6 +140,36 @@ ${userInput}`;
 }
 
 // ==================== 结构化角色提取 ====================
+
+function extractLayout(framework) {
+  try {
+    // 在框架中查找 JSON 格式的房间列表
+    const jsonMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      if (data.rooms) return data;
+    }
+  } catch (e) { /* JSON parse failed, fall through */ }
+
+  // 回退：从文本中提取房间名
+  const rooms = [];
+  const roomPattern = /(?:房间|区域|地点)[：:]\s*(.+?)(?:[（(].+?[）)])?\s*(?:[-–—]\s*(.+))?/g;
+  let m;
+  while ((m = roomPattern.exec(framework)) !== null) {
+    rooms.push({ name: m[1].trim(), desc: (m[2] || "").trim() });
+  }
+
+  // 也匹配 Markdown 列表中的房间名
+  const listPattern = /[-*]\s*\*\*([^*]+)\*\*[：:]\s*(.+)/g;
+  const listRooms = [];
+  while ((m = listPattern.exec(framework)) !== null) {
+    listRooms.push({ name: m[1].trim(), desc: m[2].trim() });
+  }
+
+  if (listRooms.length >= 3) return { rooms: listRooms };
+  if (rooms.length >= 3) return { rooms };
+  return null;
+}
 
 async function extractCharactersStructured(framework, cfg) {
   const minExpected = cfg.playerCount || LIMITS.minPlayers;
