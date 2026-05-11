@@ -58,11 +58,13 @@ async function buildMurderMystery(userInput, onProgress, config) {
   const characterResults = {};
   const isSolo = cfg.playerCount === 1;
 
-  // 从框架中提取时代背景，供NPC生成使用
+  // 从框架中提取时代背景和死者姓名
   const eraMatch = report.framework.match(/时代背景[：:]\s*(.+?)(?:\n|$)/);
   const locMatch = report.framework.match(/地点场景[：:]\s*(.+?)(?:\n|$)/);
+  const victimMatch = report.framework.match(/死者信息[\s\S]*?姓名与身份[：:]\s*(.+?)(?:\n|$)/);
   cfg.era = eraMatch ? eraMatch[1].trim() : "";
   cfg.location = locMatch ? locMatch[1].trim() : "";
+  cfg.victim = victimMatch ? victimMatch[1].trim() : "死者";
 
   for (let i = 0; i < playerChars.length; i++) {
     const ch = playerChars[i];
@@ -87,7 +89,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
     const ch = npcChars[i];
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
     const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
-    const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location });
+    const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location, victim: cfg?.victim });
     // 单人本NPC需要更丰富内容，token加量
     const npcTokens = isSolo ? TOKENS_PER_STAGE * 1.5 : TOKENS_PER_STAGE;
     const result = await generate(systemPrompt, prompt, { maxTokens: Math.floor(npcTokens), temperature: 0.7 });
@@ -334,8 +336,13 @@ ${instructions}
 
 function extractNpcRelevantSection(framework, npcName) {
   const parts = [];
-  // 基本设定+时代背景+死者（前3000字必含设定和死者）
-  parts.push(framework.substring(0, 3000));
+  // 死者信息单独提取（每个NPC必须围绕同一死者）
+  const victimSection = framework.match(/##\s*二、\s*死者信息[\s\S]*?(?=##\s*[三四五六七八九]、|$)/);
+  if (victimSection) {
+    parts.push('## 【核心】死者信息（所有NPC必须与此死者相关）\n' + victimSection[0].substring(0, 1500));
+  }
+  // 基本设定+时代背景（前2000字）
+  parts.push('## 时代背景与场景\n' + framework.substring(0, 2000));
 
   // NPC嫌疑人设定章节
   const npcChapter = framework.match(/##\s*[四五六]、\s*NPC嫌疑人设定[\s\S]*?(?=##\s*[五六七八]、|\n## 重要约束|$)/);
@@ -411,11 +418,12 @@ function buildCharacterSystemPrompt(ch) {
 function buildNpcSystemPrompt(ch, setting) {
   const era = setting?.era || "";
   const location = setting?.location || "";
-  const settingContext = `故事发生在${era}的${location}。`;
+  const victimName = setting?.victim || "死者";
+  const settingContext = `故事发生在${era}的${location}。死者是${victimName}。`;
 
   return ch.isMurderer
-    ? `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人 — 凶手】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至六），逐一详细填写。作案过程必须写明具体手法、时间、地点和留下的破绽。内容必须与${era}的时代背景一致——衣物、职业、语言、行为习惯等都应符合该时代。`
-    : `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至五），逐一详细填写。包含充分的作案动机、完整时间线和秘密，使其成为有说服力的嫌疑人。内容必须与${era}的时代背景一致。`;
+    ? `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人 — 凶手】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至六），逐一详细填写。作案过程必须写明具体手法、时间、地点和留下的破绽。**所有内容必须围绕死者${victimName}展开，不要自创其他死者。** 内容必须与${era}的时代背景一致。`
+    : `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至五），逐一详细填写。包含充分的作案动机、完整时间线和秘密，使其成为有说服力的嫌疑人。**所有内容必须围绕死者${victimName}展开，不要自创其他死者。** 内容必须与${era}的时代背景一致。`;
 }
 
 function getCluesSystemPrompt() {
