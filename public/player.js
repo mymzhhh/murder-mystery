@@ -375,7 +375,7 @@
         }
         // 优先显示完整剧本正文
         if (fullScript) {
-          h += '<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;max-height:500px;overflow-y:auto;">' + esc(String(fullScript || '')) + '</div>';
+          h += '<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;max-height:500px;overflow-y:auto;">' + md2html(String(fullScript || '')) + '</div>';
         }
         // 秘密单独显示
         if (s.secret) {
@@ -509,7 +509,7 @@
           continue;
         }
 
-        var sectionText = '<h3>' + esc(header) + '</h3><p style="white-space:pre-wrap;">' + esc(body) + '</p>';
+        var sectionText = '<h3>' + esc(header) + '</h3><div style="white-space:pre-wrap;">' + md2html(body) + '</div>';
 
         // If a single section is too long, split it across multiple pages
         if (sectionText.length > charsPerPage) {
@@ -772,6 +772,18 @@
 
     function esc(s) {
       const d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML;
+    }
+
+    // 将剧本中的简单Markdown转为HTML（##标题、**加粗**）
+    function md2html(text) {
+      var s = esc(String(text || ""));
+      // ## 标题 → 加粗变色
+      s = s.replace(/^#{2,3}\s+(.+?)$/gm, '<strong style="color:var(--gold);font-size:1.1em;">$1</strong>');
+      // **加粗** → <strong>
+      s = s.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--gold-light);">$1</strong>');
+      // 单个 *斜体* → <em>
+      s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+      return s;
     }
 
 // 音效和语音已移除
