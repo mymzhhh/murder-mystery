@@ -228,14 +228,15 @@ function extractCharacterScripts(markdown, characters) {
     const startIdx = headingMatch.index + headingMatch[0].length;
     let endIdx = markdown.length;
 
-    // 找到下一个同级别或更高级别的标题作为结束
-    const nextHeading = markdown.substring(startIdx).match(/\n#{2,4}\s+/);
-    if (nextHeading) {
-      endIdx = startIdx + nextHeading.index;
+    // 找到下一个角色标题或章节标题作为结束（而非内部##子标题）
+    const nextRoleOrSection = markdown.substring(startIdx).match(
+      /\n(?:#{2,4}\s*(?:玩家角色|NPC|角色)\s*\d+[：:]|#{2,3}\s*(?:玩家角色剧本|NPC嫌疑人信息|线索系统|DM\s*手册|证据链|场景布局|第[一二三四五六七八]))/i
+    );
+    if (nextRoleOrSection) {
+      endIdx = startIdx + nextRoleOrSection.index;
     }
 
     let section = markdown.substring(startIdx, endIdx);
-    // 把原标题也加回去
     section = headingMatch[0] + section;
 
     // 根据角色类型提取不同字段
