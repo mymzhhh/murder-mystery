@@ -181,7 +181,7 @@ function setupGameSocket(io) {
         io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative });
         io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative });
         (await getRedis()).srem("rooms:open", roomCode);
-        setTimeout(async () => { try { await autoAdvancePhase(io, roomCode, parsed); } catch (e) { /* ignore */ } }, 180000);
+        // 阶段推进改为全员确认机制，不再用自动计时器
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
     });
 
@@ -280,8 +280,30 @@ function setupGameSocket(io) {
     socket.on("ready", async ({ roomCode }) => {
       try {
         const room = await getRoom(roomCode);
-        if (room.phase === "truth_reveal" || room.phase === "finished") return;
-        await autoAdvancePhase(io, roomCode, JSON.parse(room.parsedScript || "{}"));
+        if (room.phase === "truth_reveal" || room.phase === "finished" || room.phase === "lobby") return;
+        const { getRedis } = require("../modules/game-manager");
+        const r = await getRedis();
+        const player = await getPlayer(roomCode, socket.id);
+        if (!player || player.isNPC) return;
+
+        // 将当前玩家加入就绪集合
+        const readyKey = `game:${roomCode}:ready`;
+        await r.sadd(readyKey, socket.id);
+        const readyCount = await r.scard(readyKey);
+
+        // 统计人类玩家数
+        const allPlayers = await getPlayers(roomCode);
+        const humanCount = allPlayers.filter(p => !p.isNPC && p.connected).length;
+
+        // 广播就绪状态
+        io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
+
+        // 所有人就绪则推进
+        if (readyCount >= humanCount) {
+          await r.del(readyKey);
+          io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: humanCount, advancing: true });
+          await autoAdvancePhase(io, roomCode, JSON.parse(room.parsedScript || "{}"));
+        }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
 

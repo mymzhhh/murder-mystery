@@ -80,12 +80,18 @@
       });
       socket.on("character_selected", function(data) { gs.myCharacter = data.character; updateCharSelect(); });
       socket.on("game_started", function(data) { gs.phase = data.phase; gs.narrative = data.narrative || ""; renderGame(); });
-      socket.on("phase_changed", function(data) { gs.phase = data.phase; gs.phaseConfig = data.config || {}; gs.narrative = data.narrative || ""; renderGame(); });
+      socket.on("phase_changed", function(data) { gs.phase = data.phase; gs.phaseConfig = data.config || {}; gs.narrative = data.narrative || ""; gs._amIReady = false; gs.readyCount = 0; renderGame(); });
       socket.on("clue_received", function(data) { data.clue.foundByName = data.foundBy; gs.myClues.push(data.clue); renderInvestigation(); });
       socket.on("chat_message", function(data) {
         gs.chatMessages.push(data);
         if (gs.phase.includes("discussion") || gs.phase === "round3" || gs.phase === "voting") renderDiscussion();
         else if (gs.phase.includes("investigation")) renderInvestigation();
+      });
+      socket.on("ready_update", function(data) {
+        gs.readyCount = data.readyCount;
+        gs.totalReadyCount = data.totalCount;
+        if (data.advancing) { gs.readyCount = 0; return; }
+        updateTopBarReady();
       });
       socket.on("vote_recorded", function(data) { gs.voteTarget = data.target; renderVoting(); });
       socket.on("vote_update", function(data) { renderVoting(); });
@@ -313,7 +319,11 @@
       h += '<span class="phase-indicator ' + cls + '">' + (labels[phase]||phase) + '</span>';
       h += '<span style="font-size:13px;color:var(--text2);">角色: ' + esc(gs.myCharacter?.name||'未选择') + '</span>';
       h += '<span style="flex:1;"></span>';
-      h += '<button class="btn btn-outline btn-sm" onclick="socket.emit(\'ready\',{roomCode:gs.room&&gs.room.roomCode})">进入下一阶段</button>';
+      var readyCount = gs.readyCount || 0;
+      var totalReady = gs.totalReadyCount || 0;
+      var btnText = readyCount > 0 ? ('就绪 ' + readyCount + '/' + totalReady) : '进入下一阶段';
+      var isReady = gs._amIReady;
+      h += '<button class="btn btn-outline btn-sm" id="readyBtn"' + (isReady ? ' disabled style="opacity:0.5;"' : '') + ' onclick="doReady()">' + btnText + '</button>';
       h += '</div>';
       return h;
     }
@@ -364,7 +374,7 @@
         }
         // 优先显示完整剧本正文
         if (fullScript) {
-          h += '<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;max-height:350px;overflow-y:auto;">' + esc(String(fullScript).substring(0, 5000)) + '</div>';
+          h += '<div style="white-space:pre-wrap;font-size:12px;line-height:1.7;max-height:500px;overflow-y:auto;">' + esc(String(fullScript || '')) + '</div>';
         }
         // 秘密单独显示
         if (s.secret) {
@@ -653,6 +663,21 @@
       h += '<p style="color:var(--text2);font-size:13px;margin-top:12px;">讨论中 — 使用右侧聊天框发送消息</p>';
       document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
       setTimeout(function(){var e=document.getElementById('chatMsgs');if(e)e.scrollTop=e.scrollHeight;},100);
+    }
+
+    function doReady() {
+      gs._amIReady = true;
+      updateTopBarReady();
+      socket.emit("ready", { roomCode: gs.room?.roomCode });
+    }
+
+    function updateTopBarReady() {
+      var btn = document.getElementById("readyBtn");
+      if (!btn) return;
+      var readyCount = gs.readyCount || 0;
+      var totalReady = gs.totalReadyCount || 0;
+      btn.textContent = readyCount > 0 ? ('就绪 ' + readyCount + '/' + totalReady) : '进入下一阶段';
+      if (gs._amIReady) { btn.disabled = true; btn.style.opacity = '0.5'; }
     }
 
     function doChat() {
