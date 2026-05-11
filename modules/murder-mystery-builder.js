@@ -58,6 +58,12 @@ async function buildMurderMystery(userInput, onProgress, config) {
   const characterResults = {};
   const isSolo = cfg.playerCount === 1;
 
+  // 从框架中提取时代背景，供NPC生成使用
+  const eraMatch = report.framework.match(/时代背景[：:]\s*(.+?)(?:\n|$)/);
+  const locMatch = report.framework.match(/地点场景[：:]\s*(.+?)(?:\n|$)/);
+  cfg.era = eraMatch ? eraMatch[1].trim() : "";
+  cfg.location = locMatch ? locMatch[1].trim() : "";
+
   for (let i = 0; i < playerChars.length; i++) {
     const ch = playerChars[i];
     const label = isSolo ? "侦探" : "玩家";
@@ -81,7 +87,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
     const ch = npcChars[i];
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
     const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
-    const systemPrompt = buildNpcSystemPrompt(ch);
+    const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location });
     // 单人本NPC需要更丰富内容，token加量
     const npcTokens = isSolo ? TOKENS_PER_STAGE * 1.5 : TOKENS_PER_STAGE;
     const result = await generate(systemPrompt, prompt, { maxTokens: Math.floor(npcTokens), temperature: 0.7 });
@@ -327,15 +333,16 @@ ${instructions}
 }
 
 function extractNpcRelevantSection(framework, npcName) {
-  // 提取框架中与指定NPC相关的段落
   const parts = [];
-  // 死者信息（前2000字必含）
-  const deadSection = framework.substring(0, 2000);
-  parts.push(deadSection);
+  // 基本设定+时代背景+死者（前3000字必含设定和死者）
+  parts.push(framework.substring(0, 3000));
 
   // NPC嫌疑人设定章节
   const npcChapter = framework.match(/##\s*[四五六]、\s*NPC嫌疑人设定[\s\S]*?(?=##\s*[五六七八]、|\n## 重要约束|$)/);
-  if (npcChapter) parts.push(npcChapter[0].substring(0, 3000));
+  if (npcChapter) {
+    // 提取与该NPC相关的具体条目
+    parts.push('## NPC嫌疑人章节\n' + npcChapter[0].substring(0, 2500));
+  }
 
   // 凶手设定章节
   const murdererChapter = framework.match(/##\s*[五六]、\s*凶手设定[\s\S]*?(?=##\s*[六七八]、|\n## 重要约束|$)/);
@@ -347,7 +354,9 @@ function extractNpcRelevantSection(framework, npcName) {
     const lines = timelineChapter[0].split('\n');
     const relevantLines = lines.filter(l => l.includes(npcName));
     if (relevantLines.length > 0) {
-      parts.push('## 时间线（' + npcName + '相关）\n' + relevantLines.join('\n'));
+      parts.push('## 时间线（' + npcName + '相关行）\n' + relevantLines.join('\n'));
+    } else {
+      parts.push('## 故事时间线（完整）\n' + timelineChapter[0].substring(0, 1500));
     }
   }
 
@@ -355,7 +364,7 @@ function extractNpcRelevantSection(framework, npcName) {
   const relationChapter = framework.match(/##\s*[七八九]、\s*角色关系图[\s\S]*?(?=##\s*[八九十]、|\n## 重要约束|$)/);
   if (relationChapter) parts.push(relationChapter[0].substring(0, 2000));
 
-  return parts.join('\n\n').substring(0, 6000);
+  return parts.join('\n\n').substring(0, 8000);
 }
 
 function buildNpcPrompt(ch, framework, index, total) {
@@ -399,10 +408,14 @@ function buildCharacterSystemPrompt(ch) {
     : `你是剧本杀角色剧本作家。为【玩家角色】"${ch.name}"撰写4000-6000字的深度个人剧本。使用第一人称纯叙事——只讲述角色的完整人生故事，刻画性格、经历和人际关系。不包含任何策略建议或玩法指导，由玩家自行判断和决策。`;
 }
 
-function buildNpcSystemPrompt(ch) {
+function buildNpcSystemPrompt(ch, setting) {
+  const era = setting?.era || "";
+  const location = setting?.location || "";
+  const settingContext = `故事发生在${era}的${location}。`;
+
   return ch.isMurderer
-    ? `你是剧本杀写作专家。为【NPC嫌疑人 — 凶手】"${ch.name}"撰写2000-3000字的客观信息。使用第三人称纯叙事，只陈述背景、秘密、行动和作案过程，不做任何玩法指导。`
-    : `你是剧本杀写作专家。为【NPC嫌疑人】"${ch.name}"撰写2000-3000字的客观信息。使用第三人称纯叙事，只陈述背景、秘密和时间线，不做任何玩法指导。`;
+    ? `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人 — 凶手】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至六），逐一详细填写。作案过程必须写明具体手法、时间、地点和留下的破绽。内容必须与${era}的时代背景一致——衣物、职业、语言、行为习惯等都应符合该时代。`
+    : `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至五），逐一详细填写。包含充分的作案动机、完整时间线和秘密，使其成为有说服力的嫌疑人。内容必须与${era}的时代背景一致。`;
 }
 
 function getCluesSystemPrompt() {
