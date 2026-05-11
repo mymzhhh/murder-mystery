@@ -57,6 +57,9 @@ function parseScript(markdown) {
     // === 角色个人剧本 ===
     extractCharacterScripts(markdown, result.characters);
 
+    // === 场景布局 ===
+    result.layout = extractLayout(markdown);
+
     // === 线索系统 ===
     result.clues = extractAllClues(markdown);
 
@@ -210,6 +213,17 @@ function extractCharacters(text, murdererName) {
   return chars;
 }
 
+function extractLayout(markdown) {
+  try {
+    const jsonMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      if (data.rooms && data.rooms.length > 0) return data;
+    }
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
 function extractCharacterScripts(markdown, characters) {
   // 按角色类型和名字找到剧本段落
   // assembleScript格式: ### 玩家角色N：姓名 或 ### NPC N：姓名
@@ -230,7 +244,7 @@ function extractCharacterScripts(markdown, characters) {
 
     // 找到下一个角色标题或章节标题作为结束（而非内部##子标题）
     const nextRoleOrSection = markdown.substring(startIdx).match(
-      /\n(?:#{2,4}\s*(?:玩家角色|NPC|角色)\s*\d+[：:]|#{2,3}\s*(?:玩家角色剧本|NPC嫌疑人信息|线索系统|DM\s*手册|证据链|场景布局|第[一二三四五六七八]))/i
+      /\n(?:#{1,4}\s*(?:玩家角色|NPC|角色)\s*\d+[：:]|#{1,3}\s*(?:玩家角色剧本|NPC嫌疑人信息|线索系统|DM\s*手册|证据链|场景布局|第[一二三四五六七八九十]、|第[一二三四五六七八九十]部分))/i
     );
     if (nextRoleOrSection) {
       endIdx = startIdx + nextRoleOrSection.index;
