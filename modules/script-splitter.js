@@ -181,7 +181,8 @@ async function splitScript(sessionId, onProgress) {
   for (let i = 0; i < playerChars.length; i++) {
     const char = playerChars[i];
     onProgress("player_script", `纯化玩家剧本 (${i + 1}/${playerChars.length}): ${char.name}`);
-    const rawScript = char.script?.fullScript || char.script?.story || JSON.stringify(char);
+    const rawScript = char.script?.fullScript || char.script?.story || '';
+if (!rawScript) continue;
     const purified = await purifyPlayerScript(char.name, rawScript, char.isMurderer);
 
     result.characters[char.name] = {
@@ -198,7 +199,8 @@ async function splitScript(sessionId, onProgress) {
   for (let i = 0; i < npcChars.length; i++) {
     const char = npcChars[i];
     onProgress("npc_script", `精简NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
-    const rawScript = char.script?.fullScript || char.script?.story || JSON.stringify(char);
+    const rawScript = char.script?.fullScript || char.script?.story || '';
+if (!rawScript) continue;
     const purified = await purifyNpcInfo(char.name, rawScript, char.isMurderer);
 
     result.characters[char.name] = {

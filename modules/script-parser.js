@@ -217,8 +217,10 @@ function extractCharacterScripts(markdown, characters) {
     // 尝试多种标题格式匹配角色剧本区域
     const patterns = [
       `(?:玩家角色|NPC|角色)\\s*\\d+[：:]\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=(?:玩家角色|NPC|角色)\\s*\\d+[：:]|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人|场景布局)|$)`,
-      // 松散匹配：角色名后直到下个角色或章节结束
+      // 松散匹配：角色名heading后直到下个同类heading或章节结束
       `#{2,4}\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=#{2,4}\\s*(?:${characters.map(c => escapeRegex(c.name)).join('|')})|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人)|$)`,
+      // 最松散fallback：角色名后到下一个###或##标题
+      `${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=#{2,4}\\s+|$)`,
     ];
 
     let section = null;
