@@ -1,26 +1,8 @@
 // 游戏房间管理 — Redis 持久化
-
+const { getRedis, scanKeys } = require("./redis-client");
 const { v4: uuidv4 } = require("uuid");
-const Redis = require("ioredis");
 
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
-let redis = null;
-
-function getRedis() {
-  if (!redis) {
-    var opts = { maxRetriesPerRequest: null, retryStrategy: function(t) { return Math.min(t * 1000, 10000); }, lazyConnect: true, enableOfflineQueue: true };
-    if (REDIS_URL.startsWith("rediss://")) opts.tls = { rejectUnauthorized: false };
-    redis = new Redis(REDIS_URL, opts);
-    redis.on("error", function() {});
-  }
-  return redis;
-}
-
-async function ensureConn() {
-  const r = getRedis();
-  if (r.status !== "ready" && r.status !== "connecting") await r.connect();
-  return r;
-}
+async function ensureConn() { return getRedis(); }
 
 function genRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";

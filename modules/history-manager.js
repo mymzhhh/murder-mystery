@@ -1,53 +1,12 @@
 // 历史会话管理模块 — Redis 存储
-
-const Redis = require("ioredis");
+const { getRedis } = require("./redis-client");
 const { v4: uuidv4 } = require("uuid");
-
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
-
-let redis = null;
-
-function getRedis() {
-  if (!redis) {
-    var opts = {
-      maxRetriesPerRequest: null,
-      retryStrategy: function(times) {
-        return Math.min(times * 1000, 10000);
-      },
-      lazyConnect: true,
-      enableOfflineQueue: true,
-    };
-    // Railway Redis 需要 TLS
-    if (REDIS_URL.startsWith("rediss://")) {
-      opts.tls = { rejectUnauthorized: false };
-    }
-    redis = new Redis(REDIS_URL, opts);
-
-    redis.on("error", function(err) {
-      console.error("Redis:", err.message);
-    });
-
-    redis.on("connect", () => {
-      console.log("Redis 已连接");
-    });
-  }
-  return redis;
-}
-
-// 确保连接（延迟连接）
-async function ensureConnection() {
-  const r = getRedis();
-  if (r.status !== "ready" && r.status !== "connecting") {
-    await r.connect();
-  }
-  return r;
-}
 
 /**
  * 创建新会话
  */
 async function createSession(metadata = {}) {
-  const r = await ensureConnection();
+  const r = getRedis();
   const sessionId = uuidv4();
   const now = new Date().toISOString();
   const timestamp = Date.now();
@@ -88,7 +47,7 @@ async function createSession(metadata = {}) {
  * 获取单个会话（含消息）
  */
 async function getSession(sessionId) {
-  const r = await ensureConnection();
+  const r = getRedis();
   const exists = await r.exists(`session:${sessionId}`);
   if (!exists) return null;
 
@@ -112,7 +71,7 @@ async function getSession(sessionId) {
  * 添加消息到会话
  */
 async function addMessage(sessionId, role, content) {
-  const r = await ensureConnection();
+  const r = getRedis();
   const exists = await r.exists(`session:${sessionId}`);
   if (!exists) return null;
 
@@ -140,7 +99,7 @@ async function addMessage(sessionId, role, content) {
  * 列出所有会话（按更新时间倒序）
  */
 async function listSessions() {
-  const r = await ensureConnection();
+  const r = getRedis();
 
   // 从有序集合中按时间倒序获取所有 session ID
   const ids = await r.zrevrange("sessions:index", 0, -1);
@@ -177,7 +136,7 @@ async function listSessions() {
  * 删除会话
  */
 async function deleteSession(sessionId) {
-  const r = await ensureConnection();
+  const r = getRedis();
   const exists = await r.exists(`session:${sessionId}`);
   if (!exists) return false;
 

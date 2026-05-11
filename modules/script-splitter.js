@@ -257,7 +257,7 @@ async function splitScript(sessionId, onProgress) {
  * 将切分结果存入 Redis
  */
 async function saveToRedis(sessionId, result) {
-  const { getRedis } = require("./game-manager");
+  const { getRedis, scanKeys } = require("./redis-client");
   const redis = await getRedis();
   if (redis.status !== "ready" && redis.status !== "connecting") await redis.connect();
 
@@ -317,14 +317,14 @@ async function saveToRedis(sessionId, result) {
  * 获取已切分的剧本数据
  */
 async function getSplitData(sessionId) {
-  const { getRedis } = require("./game-manager");
+  const { getRedis, scanKeys } = require("./redis-client");
   const redis = await getRedis();
 
   const meta = await redis.hgetall(`split:${sessionId}:meta`);
   if (!meta || !meta.title) return null;
 
-  const charKeys = await redis.keys(`split:${sessionId}:char:*`);
-  const clueKeys = await redis.keys(`split:${sessionId}:clue:*`);
+  const charKeys = await scanKeys(`split:${sessionId}:char:*`);
+  const clueKeys = await scanKeys(`split:${sessionId}:clue:*`);
   const dm = await redis.hgetall(`split:${sessionId}:dm`);
 
   const pipeline = redis.pipeline();

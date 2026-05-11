@@ -2,7 +2,6 @@
 // DeepSeek 兼容 OpenAI API 格式
 
 const OpenAI = require("openai");
-require("dotenv").config();
 
 const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";

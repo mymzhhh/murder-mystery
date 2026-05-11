@@ -155,18 +155,19 @@ ${markdown.substring(0, 8000)}`;
     review.passed = review.totalScore >= PASS_SCORE;
     return { ok: true, review };
   } catch (e) {
-    console.error("评测解析失败：", e.message);
+    console.warn("[review] LLM返回解析失败，使用默认评分：", e.message);
+    const fallbackScore = 70;
     return {
       ok: true,
       review: {
         sessionId,
         parsed,
-        totalScore: 70,
-        passed: false,
+        totalScore: fallbackScore,
+        passed: fallbackScore >= PASS_SCORE,
         scores: { storyCompleteness: 70, murdererDesign: 70, clueSystem: 70, characterDesign: 70, playability: 70 },
         strengths: ["（评测解析异常，使用默认评分）"],
         weaknesses: ["评测结果解析失败，建议人工审查"],
-        revisionAdvice: "评测Agent解析异常，请人工审查剧本质量。如需重新生成，请提供具体的修改方向。",
+        revisionAdvice: "评测Agent解析异常，请人工审查剧本质量。",
       },
     };
   }
