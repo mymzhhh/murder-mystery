@@ -67,20 +67,20 @@ module.exports = {
 （场所的总体概况：建筑名称/类型、楼层结构、周边环境，300字以上）
 
 ### 房间列表（JSON格式）
+房间总数限制：每个角色(玩家+NPC+死者)有1个专属房间 + 2-3个公共区域（走廊/大厅/厨房等），总数6-8个。严禁超过10个。
 {
   "rooms": [
-    { "id": "R1", "name": "房间名称", "floor": 1, "desc": "房间特征描述", "features": ["特征1","特征2"], "exitsTo": ["R2","R3"], "isCrimeScene": false },
-    { "id": "R2", "name": "死者房间", "floor": 1, "desc": "死者被发现的地点", "features": ["尸体","窗户碎裂"], "exitsTo": ["R1"], "isCrimeScene": true }
-  ],
-  "outdoor": [
-    { "id": "O1", "name": "花园", "desc": "...", "features": ["灌木丛","小径"] }
+    { "id": "R1", "name": "角色名 的房间", "floor": 1, "owner": "角色名", "desc": "房间特征", "features": ["特征1"], "exitsTo": ["R3"], "isCrimeScene": false },
+    { "id": "R2", "name": "走廊", "floor": 1, "desc": "公共通道", "features": ["地毯","壁画"], "exitsTo": ["R1","R3","R4"], "isCrimeScene": false },
+    { "id": "R3", "name": "死者房间", "floor": 1, "owner": "死者名", "desc": "案发现场", "features": ["尸体","血迹"], "exitsTo": ["R2"], "isCrimeScene": true }
   ]
 }
 要求：
-- 房间不少于5个，含走廊、大厅等公共区域
+- 每个角色(玩家+NPC+死者)各1个专属房间，标注owner
+- 2-3个公共区域（走廊、大厅、厨房、花园等）
+- 总数6-8个房间，严禁超过10个
 - 每个房间标注出口连接（exitsTo），形成连通图
-- 标注案发现场（isCrimeScene: true）
-- 特征(features)要与线索系统对应
+- 案发现场是死者的房间，isCrimeScene: true
 
 ## 重要约束（必须严格遵守）：
 1. 玩家角色恰好{playerCount}人，编号玩家1-玩家{playerCount}

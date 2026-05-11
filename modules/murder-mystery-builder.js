@@ -163,27 +163,27 @@ function extractLayout(framework) {
     const jsonMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
-      if (data.rooms) return data;
+      if (data.rooms && data.rooms.length <= 10) return data;
+      if (data.rooms && data.rooms.length > 10) {
+        // 截断到前10个
+        return { rooms: data.rooms.slice(0, 10), outdoor: data.outdoor };
+      }
     }
   } catch (e) { /* JSON parse failed, fall through */ }
 
-  // 回退：从文本中提取房间名
-  const rooms = [];
-  const roomPattern = /(?:房间|区域|地点)[：:]\s*(.+?)(?:[（(].+?[）)])?\s*(?:[-–—]\s*(.+))?/g;
-  let m;
-  while ((m = roomPattern.exec(framework)) !== null) {
-    rooms.push({ name: m[1].trim(), desc: (m[2] || "").trim() });
-  }
+  // 尝试修复截断的 JSON
+  try {
+    const partial = framework.match(/\{\s*"rooms"\s*:\s*\[([\s\S]*?)(?:\}\s*\])/);
+    if (partial) {
+      const inner = partial[1];
+      const items = inner.match(/\{[^}]+\}/g);
+      if (items && items.length >= 3 && items.length <= 10) {
+        const rooms = items.map(item => { try { return JSON.parse(item); } catch(e) { return null; } }).filter(Boolean);
+        if (rooms.length >= 3) return { rooms };
+      }
+    }
+  } catch (e) {}
 
-  // 也匹配 Markdown 列表中的房间名
-  const listPattern = /[-*]\s*\*\*([^*]+)\*\*[：:]\s*(.+)/g;
-  const listRooms = [];
-  while ((m = listPattern.exec(framework)) !== null) {
-    listRooms.push({ name: m[1].trim(), desc: m[2].trim() });
-  }
-
-  if (listRooms.length >= 3) return { rooms: listRooms };
-  if (rooms.length >= 3) return { rooms };
   return null;
 }
 
