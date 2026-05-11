@@ -305,6 +305,7 @@ async function saveToRedis(sessionId, result) {
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
     layout: result.meta.layout ? JSON.stringify(result.meta.layout) : "",
+    originalMarkdown: markdown ? markdown.substring(0, 50000) : "",
   });
 
   // 索引：将 sessionId 加入已切分剧本集合
