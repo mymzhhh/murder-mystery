@@ -247,6 +247,8 @@ async function splitScript(sessionId, onProgress) {
 
   // 4. 存入 Redis
   onProgress("save", "正在存入 Redis...");
+  // 把原始markdown挂在result上供saveToRedis使用
+  result.meta.originalMarkdown = markdown;
   await saveToRedis(sessionId, result);
 
   onProgress("done", `切分完成：${playerChars.length}玩家+${npcChars.length}NPC、${result.clues.length}条线索`);
@@ -305,7 +307,7 @@ async function saveToRedis(sessionId, result) {
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
     layout: result.meta.layout ? JSON.stringify(result.meta.layout) : "",
-    originalMarkdown: markdown ? markdown.substring(0, 50000) : "",
+    originalMarkdown: (result.meta.originalMarkdown || "").substring(0, 50000),
   });
 
   // 索引：将 sessionId 加入已切分剧本集合
