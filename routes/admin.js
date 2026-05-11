@@ -261,8 +261,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
             roleType: d.roleType || "player",
             isMurderer: d.isMurderer === "1",
             occupation: d.occupation || "",
-            script: d.playerScript.substring(0, 3000),
-            secret: (d.secret || "").substring(0, 1000),
+            script: d.playerScript || "",
+            secret: d.secret || "",
           });
         } else if (i >= charKeys.length) {
           clues.push({ id: d.id, content: (d.content || "").substring(0, 300), round: d.round, location: d.location || "" });
