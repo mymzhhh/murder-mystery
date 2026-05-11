@@ -102,11 +102,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     let currentSessionId = null;
 
     try {
+      // 提前创建 session 以便出错时能重试
+      currentSessionId = require("uuid").v4();
+      send("phase", { phase: "write", message: "正在生成剧本...", sessionId: currentSessionId });
+
       // Step 2: 生成
-      send("phase", { phase: "write", message: "正在生成剧本..." });
       const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
 
-      if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write" }); return res.end(); }
+      if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write", sessionId: currentSessionId }); return res.end(); }
       currentSessionId = writeResult.sessionId;
       send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
 

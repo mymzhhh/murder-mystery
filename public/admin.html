@@ -308,10 +308,10 @@
                   loadScripts();
                 } else if (et === "error") {
                   el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--danger);margin-top:8px;">' + esc(d.message) + '</div>';
-                  // 显示重试按钮
-                  if (_lastSessionId) {
-                    var btnLabel = _lastPhase === 'review' ? '重试评测+切分' : '重试切分';
-                    el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-primary" onclick="retryPipeline(\'' + _lastSessionId + '\')">' + btnLabel + '</button>' +
+                  var sid = d.sessionId || _lastSessionId;
+                  if (sid) {
+                    var btnLabel = (_lastPhase === 'review') ? '重试评测+切分' : (_lastPhase === 'write' || !_lastPhase ? '重新生成' : '重试切分');
+                    el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-primary" onclick="retryPipeline(\'' + sid + '\')">' + btnLabel + '</button>' +
                       '<button class="btn btn-outline" onclick="renderPipeline()" style="margin-left:4px;">重新开始</button></div>';
                   } else {
                     pipeActive(1);
