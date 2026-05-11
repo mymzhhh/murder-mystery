@@ -69,13 +69,13 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // ========== 阶段 3：线索系统 ==========
   onProgress("clues", "正在设计线索系统和证据链...");
   const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary);
-  const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: TOKENS_PER_STAGE });
+  const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
   report.clues = cluesResult.content;
 
   // ========== 阶段 4：DM 手册 ==========
   onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
   const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary);
-  const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: TOKENS_PER_STAGE });
+  const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
   report.dmGuide = dmResult.content;
 
   // ========== 组装 ==========

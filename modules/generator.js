@@ -8,8 +8,8 @@ const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const defaultModel = process.env.DEFAULT_MODEL || "deepseek-chat";
 
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 2000; // 初始重试间隔
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 1000; // 初始重试间隔
 
 let client = null;
 
@@ -34,8 +34,11 @@ function sleep(ms) {
  */
 function isRetryableError(err) {
   const msg = (err.message || "").toLowerCase();
-  return /network|timeout|econnrefused|econnreset|etimedout|429|502|503|504|socket|connect/i.test(msg)
-    || (err.status && [429, 502, 503, 504].includes(err.status));
+  const code = err.code || err.status || 0;
+  // 网络/超时/服务端错误均可重试
+  return /network|timeout|econnrefused|econnreset|etimedout|429|502|503|504|socket|connect|reset|abort|closed/i.test(msg)
+    || [429, 502, 503, 504].includes(code)
+    || (err.type === 'request' && !err.status); // 无响应的请求错误（很可能是超时）
 }
 
 /**
