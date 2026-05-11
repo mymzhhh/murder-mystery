@@ -211,25 +211,32 @@ function extractCharacters(text, murdererName) {
 }
 
 function extractCharacterScripts(markdown, characters) {
-  for (const char of characters) {
+  // 按角色类型和名字找到剧本段落
+  // assembleScript格式: ### 玩家角色N：姓名 或 ### NPC N：姓名
+  for (let idx = 0; idx < characters.length; idx++) {
+    const char = characters[idx];
     const escapedName = escapeRegex(char.name);
+    const typePrefix = char.roleType === "npc" ? "NPC" : "玩家角色";
 
-    // 尝试多种标题格式匹配角色剧本区域
-    const patterns = [
-      `(?:玩家角色|NPC|角色)\\s*\\d+[：:]\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=(?:玩家角色|NPC|角色)\\s*\\d+[：:]|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人|场景布局)|$)`,
-      // 松散匹配：角色名heading后直到下个同类heading或章节结束
-      `#{2,4}\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=#{2,4}\\s*(?:${characters.map(c => escapeRegex(c.name)).join('|')})|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人)|$)`,
-      // 最松散fallback：角色名后到下一个###或##标题
-      `${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=#{2,4}\\s+|$)`,
-    ];
+    // 精确匹配：### NPC N：姓名 或 ### 玩家角色 N：姓名，允许[凶手]后缀
+    const headingPattern = `#{2,4}\\s*(?:${typePrefix}|角色)\\s*\\d+[：:]\\s*${escapedName}(?:\\s*\\[.*?\\])?\\s*\\n`;
+    const headingRegex = new RegExp(headingPattern, "i");
+    const headingMatch = markdown.match(headingRegex);
 
-    let section = null;
-    for (const pat of patterns) {
-      const regex = new RegExp(pat, "i");
-      const match = markdown.match(regex);
-      if (match) { section = match[0]; break; }
+    if (!headingMatch) continue;
+
+    const startIdx = headingMatch.index + headingMatch[0].length;
+    let endIdx = markdown.length;
+
+    // 找到下一个同级别或更高级别的标题作为结束
+    const nextHeading = markdown.substring(startIdx).match(/\n#{2,4}\s+/);
+    if (nextHeading) {
+      endIdx = startIdx + nextHeading.index;
     }
-    if (!section) continue;
+
+    let section = markdown.substring(startIdx, endIdx);
+    // 把原标题也加回去
+    section = headingMatch[0] + section;
 
     // 根据角色类型提取不同字段
     const isNpc = char.roleType === "npc";
