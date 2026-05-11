@@ -30,7 +30,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // ========== 阶段 1：故事框架（注入动态角色数量） ==========
   onProgress("framework", `正在设计故事框架（${cfg.playerCount}玩家${cfg.npcCount > 0 ? ' + ' + cfg.npcCount + 'NPC' : ''}）...`);
   const frameworkPrompt = buildFrameworkPrompt(userInput, cfg);
-  const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE * 2, temperature: 0.75 });
+  const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.75 });
   report.framework = frameworkResult.content;
 
   // ========== 阶段 1.4：提取场景布局 ==========
