@@ -400,7 +400,9 @@
         } else {
           for (var j = 0; j < gs.myClues.length; j++) {
             var c = gs.myClues[j];
-            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div><div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
+            var isPhysical2 = c.clueType && !/人证/.test(c.clueType);
+            var locHtml2 = (isPhysical2 && c.location) ? '<div style="font-size:10px;color:var(--gold);">📍 ' + esc(c.location) + '</div>' : '';
+            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml2 + '<div style="font-size:11px;">' + esc(String(c.content||'').substring(0, 300)) + '</div></div>';
           }
         }
         h += '</div>';
@@ -583,7 +585,9 @@
       h += '<h4 style="margin:12px 0;">已获取的线索</h4>';
       h += '<div class="clue-grid">';
       for (const c of gs.myClues) {
-        h += `<div class="clue-card found"><div class="clue-id">${esc(c.id)}${c.foundBy ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundBy) + ' 发现</span>' : ''}</div><div class="clue-body">${esc(c.content||'')}</div></div>`;
+        var isPhysical = c.clueType && !/人证/.test(c.clueType);
+        var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);margin-bottom:2px;">📍 ' + esc(c.location) + '</div>' : '';
+        h += `<div class="clue-card found"><div class="clue-id">${esc(c.id)}${c.foundBy ? ' <span style="font-size:10px;color:var(--text-dim);">— ' + esc(c.foundBy) + ' 发现</span>' : ''}</div>${locHtml}<div class="clue-body">${esc(c.content||'')}</div></div>`;
       }
       h += '</div>';
       h += `<button class="btn btn-primary" style="margin-top:16px;" onclick="investigate()">申请调查</button>`;
