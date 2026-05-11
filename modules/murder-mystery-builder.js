@@ -48,9 +48,20 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // ========== 阶段 1.5：结构化提取角色列表 ==========
   onProgress("extract", "正在解析角色列表（区分玩家/NPC/凶手）...");
   const characters = await extractCharactersStructured(report.framework, cfg);
-  const playerChars = characters.filter(c => c.type === "player");
-  const npcChars = characters.filter(c => c.type === "npc");
-  report.characters = characters;
+  let playerChars = characters.filter(c => c.type === "player");
+  let npcChars = characters.filter(c => c.type === "npc");
+
+  // 强制按配置截断角色数量（LLM可能生成过多）
+  if (playerChars.length > cfg.playerCount) {
+    console.warn(`[builder] 玩家角色超限 ${playerChars.length}/${cfg.playerCount}，截断到${cfg.playerCount}`);
+    playerChars = playerChars.slice(0, cfg.playerCount);
+  }
+  if (npcChars.length > cfg.npcCount) {
+    console.warn(`[builder] NPC超限 ${npcChars.length}/${cfg.npcCount}，截断到${cfg.npcCount}`);
+    npcChars = npcChars.slice(0, cfg.npcCount);
+  }
+
+  report.characters = [...playerChars, ...npcChars];
 
   onProgress("characters", `角色解析完成：${playerChars.length}名玩家 + ${npcChars.length}名NPC（凶手：${characters.find(c => c.isMurderer)?.name || "未知"}）`);
 
