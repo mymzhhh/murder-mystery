@@ -781,8 +781,13 @@
     // 将剧本中的简单Markdown转为HTML（##标题、**加粗**）
     function md2html(text) {
       var s = esc(String(text || ""));
-      // ## 标题 → 加粗变色
-      s = s.replace(/^#{2,3}\s+(.+?)$/gm, '<strong style="color:var(--gold);font-size:1.1em;">$1</strong>');
+      // ## 或 ### 标题 → 独立行，加粗变大变色
+      s = s.replace(/^#{2,3}\s+(.+?)$/gm, '<div style="font-weight:700;color:var(--gold);font-size:1.15em;margin:12px 0 6px 0;">$1</div>');
+      // 中文序号标题（一、xxx 或 1. xxx）→ 加粗
+      s = s.replace(/^[（(]?[一二三四五六七八九十\d]+[）)、.]\s*.+$/gm, function(m) {
+        if (m.length < 30) return '<div style="font-weight:600;color:var(--gold-light);margin:8px 0 4px 0;">' + m + '</div>';
+        return m;
+      });
       // **加粗** → <strong>
       s = s.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--gold-light);">$1</strong>');
       // 单个 *斜体* → <em>
