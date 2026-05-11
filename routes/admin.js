@@ -402,6 +402,9 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       }
     }
 
+    let layoutData = null;
+    try { if (meta.layout) layoutData = JSON.parse(meta.layout); } catch(e) {}
+
     parsed = {
       title: meta.title,
       setting: { era: meta.era, location: meta.location },
@@ -410,6 +413,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
       dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
       victim: {},
+      layout: layoutData,
     };
   } else {
     // 回退：从旧 session 解析
