@@ -313,7 +313,41 @@ ${instructions}
 请直接输出角色剧本内容，不需要 JSON 包装。`;
 }
 
+function extractNpcRelevantSection(framework, npcName) {
+  // 提取框架中与指定NPC相关的段落
+  const parts = [];
+  // 死者信息（前2000字必含）
+  const deadSection = framework.substring(0, 2000);
+  parts.push(deadSection);
+
+  // NPC嫌疑人设定章节
+  const npcChapter = framework.match(/##\s*[四五六]、\s*NPC嫌疑人设定[\s\S]*?(?=##\s*[五六七八]、|\n## 重要约束|$)/);
+  if (npcChapter) parts.push(npcChapter[0].substring(0, 3000));
+
+  // 凶手设定章节
+  const murdererChapter = framework.match(/##\s*[五六]、\s*凶手设定[\s\S]*?(?=##\s*[六七八]、|\n## 重要约束|$)/);
+  if (murdererChapter) parts.push(murdererChapter[0].substring(0, 2000));
+
+  // 时间线中提及该NPC的段落
+  const timelineChapter = framework.match(/##\s*[六七八]、\s*故事时间线[\s\S]*?(?=##\s*[七八九]、|\n## 重要约束|$)/);
+  if (timelineChapter) {
+    const lines = timelineChapter[0].split('\n');
+    const relevantLines = lines.filter(l => l.includes(npcName));
+    if (relevantLines.length > 0) {
+      parts.push('## 时间线（' + npcName + '相关）\n' + relevantLines.join('\n'));
+    }
+  }
+
+  // 角色关系图
+  const relationChapter = framework.match(/##\s*[七八九]、\s*角色关系图[\s\S]*?(?=##\s*[八九十]、|\n## 重要约束|$)/);
+  if (relationChapter) parts.push(relationChapter[0].substring(0, 2000));
+
+  return parts.join('\n\n').substring(0, 6000);
+}
+
 function buildNpcPrompt(ch, framework, index, total) {
+  // 提取与NPC相关的框架段落
+  const npcSection = extractNpcRelevantSection(framework, ch.name);
   const instructions = stages.npcInstruction
     .replace("{characterName}", ch.name)
     .replace("{isMurdererExtra}", ch.isMurderer
@@ -335,11 +369,13 @@ function buildNpcPrompt(ch, framework, index, total) {
 - 身份：${ch.occupation || "详见框架"}
 - 是否是凶手：${ch.isMurderer ? "是（凶手是NPC！）" : "否"}
 
-## 完整故事框架（供参考）
-${framework.substring(0, 5000)}
+## 与该NPC相关的故事段落（必须基于此信息撰写）
+${npcSection}
 
 ## 要求
 ${instructions}
+
+严格约束：生成的内容必须与上述故事段落一致，不要编造与框架冲突的信息。
 
 请直接输出NPC信息内容，不需要 JSON 包装。`;
 }

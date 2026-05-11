@@ -282,35 +282,33 @@ function extractAllClues(markdown) {
 
 function parseClueSection(text, prefix, roundNum) {
   const clues = [];
-  // Split by "### Xn：" or "### Xn" headings (but not ## or # headings)
-  const clueBlocks = text.split(/\n(?=###\s+[A-C]\d+[：:\s])/);
+  // Split by "### Xn：" headings (A/B/C/M prefix)
+  const clueBlocks = text.split(/\n(?=###\s+[A-CM]\d+[：:\s])/);
 
   for (const block of clueBlocks) {
     // Extract clue ID: match "### A1" or "### A1："
-    const idMatch = block.match(/^###\s+([A-C]\d+)/m);
+    const idMatch = block.match(/^###\s+([A-CM]\d+)/m);
     if (!idMatch) continue;
 
     const id = idMatch[1];
-    const clue = { id, round: roundNum, content: "", pointsTo: "", clueType: "" };
+    const roundForClue = id.startsWith("M") ? roundNum : roundNum; // 误导线索归入当前轮
+    const clue = { id, round: roundForClue, content: "", pointsTo: "", clueType: "", location: "" };
 
     // Extract fields from bullet points with bold labels
     const contentMatch = block.match(/\*\*线索内容\*\*[：:]\s*([\s\S]+?)(?=\n- \*\*|\n---|\n$)/);
     if (contentMatch) clue.content = contentMatch[1].trim().replace(/\n/g, " ");
 
-    const pointMatch = block.match(/\*\*指向角色\/?事件\*\*[：:]\s*(.+)/);
-    if (pointMatch) clue.pointsTo = pointMatch[1].trim();
+    const locMatch = block.match(/\*\*发现地点\*\*[：:]\s*(.+)/);
+    if (locMatch) clue.location = locMatch[1].trim();
 
     const typeMatch = block.match(/\*\*线索类型\*\*[：:]\s*(.+)/);
     if (typeMatch) clue.clueType = typeMatch[1].trim();
 
-    // If content is still empty, try matching the entire description after the heading
+    // If content is still empty, take the entire body
     if (!clue.content) {
-      const bodyMatch = block.match(/^###\s+[A-C]\d+[：:\s]*[^\n]*\n([\s\S]+)/);
+      const bodyMatch = block.match(/^###\s+[A-CM]\d+[：:\s]*[^\n]*\n([\s\S]+)/);
       if (bodyMatch) {
-        const body = bodyMatch[1].trim();
-        // Take first meaningful paragraph
-        const firstPara = body.split(/\n- \*\*/)[0].trim();
-        clue.content = firstPara.substring(0, 500);
+        clue.content = bodyMatch[1].trim().substring(0, 500);
       }
     }
 
