@@ -421,25 +421,29 @@
         }
         h += '</div>';
       } else if (activeTab === 'layout') {
-        // 布局标签：显示场景平面图
+        // 布局标签：场景平面图（带连接关系）
         var layout = (gs.scriptSummary && gs.scriptSummary.layout) || null;
-        h += '<div class="sidebar-script" style="max-height:450px;">';
+        h += '<div class="sidebar-script" style="max-height:500px;">';
         if (layout && layout.rooms) {
           var rooms = layout.rooms || [];
-          var outdoor = layout.outdoor || [];
-          h += '<h4 style="color:var(--gold);margin-bottom:8px;">场景布局</h4>';
+          h += '<h4 style="color:var(--gold);margin-bottom:6px;">📍 场景布局</h4>';
+          // 构建房间ID到名称的映射
+          var nameMap = {};
+          rooms.forEach(function(r) { nameMap[r.id] = r.name; });
           // 按楼层分组
           var floors = {};
           rooms.forEach(function(r) { var f = r.floor || 1; if (!floors[f]) floors[f] = []; floors[f].push(r); });
           Object.keys(floors).sort().forEach(function(f) {
-            h += '<div style="margin-bottom:8px;font-size:12px;color:var(--text-dim);">' + (f > 1 ? 'F' + f : '一层') + '</div>';
-            h += '<div class="layout-grid" style="display:grid;grid-template-columns:repeat(2,1fr);gap:4px;">';
+            h += '<div style="margin-bottom:6px;font-size:11px;color:var(--text-dim);">' + (f > 1 ? 'F' + f : '一层') + '</div>';
+            h += '<div style="display:flex;flex-wrap:wrap;gap:6px;">';
             floors[f].forEach(function(r) {
               var isCrime = r.isCrimeScene;
-              h += '<div class="layout-room" style="padding:6px 8px;border:1px solid ' + (isCrime ? 'var(--blood)' : 'var(--border)') + ';border-radius:6px;background:' + (isCrime ? 'rgba(139,26,26,0.2)' : 'var(--surface)') + ';font-size:11px;">';
-              h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(r.name || r.id) + '</strong>';
-              if (r.desc) h += '<div style="color:var(--text-dim);margin-top:2px;">' + esc(r.desc.substring(0, 40)) + '</div>';
-              if (r.features) h += '<div style="color:var(--text-dim);font-size:10px;">' + esc(r.features.join('、').substring(0, 50)) + '</div>';
+              var exits = (r.exitsTo || []).map(function(e) { return nameMap[e] || e; }).join(', ');
+              h += '<div style="flex:1;min-width:45%;padding:8px 10px;border:1px solid ' + (isCrime ? 'var(--blood)' : 'var(--border)') + ';border-radius:8px;background:' + (isCrime ? 'rgba(139,26,26,0.25)' : 'var(--surface)') + ';font-size:11px;">';
+              h += '<div style="font-weight:700;color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';margin-bottom:2px;">' + (isCrime ? '🔪 ' : '') + esc(r.name || r.id) + (r.owner ? ' <span style="font-size:10px;color:var(--text-dim);">(' + esc(r.owner) + ')</span>' : '') + '</div>';
+              if (r.desc) h += '<div style="color:var(--text);font-size:10px;line-height:1.4;margin-bottom:2px;">' + esc(r.desc.substring(0, 60)) + '</div>';
+              if (r.features) h += '<div style="color:#fcd34d;font-size:9px;">🔎 ' + esc(r.features.join('、').substring(0, 60)) + '</div>';
+              if (exits) h += '<div style="color:var(--mystic-light);font-size:9px;margin-top:2px;">↔ ' + esc(exits) + '</div>';
               h += '</div>';
             });
             h += '</div>';
