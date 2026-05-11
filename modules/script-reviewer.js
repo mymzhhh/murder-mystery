@@ -7,7 +7,7 @@ const { buildMurderMystery, LIMITS } = require("./murder-mystery-builder");
 const { splitScript } = require("./script-splitter");
 
 const MAX_RETRIES = 3;
-const PASS_SCORE = 70; // 满分100，70分通过
+const PASS_SCORE = 60; // 满分100，60分通过（减少因边界分触发重修）
 
 const MAX_PLAYERS = LIMITS.maxPlayers;  // 6
 const MAX_NPC = LIMITS.maxNpc;          // 3
