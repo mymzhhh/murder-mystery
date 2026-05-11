@@ -60,8 +60,23 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   });
 
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
-    if (!(await deleteSession(req.params.id))) return res.status(404).json({ error: "剧本不存在" });
-    res.json({ success: true });
+    try {
+      const sid = req.params.id;
+      let deleted = false;
+      // 删除 session 数据
+      if (await deleteSession(sid)) deleted = true;
+      // 删除 split 数据
+      const { getRedis } = require("../modules/game-manager");
+      const r2 = await getRedis();
+      const splitKeys = await r2.keys(`split:${sid}:*`);
+      if (splitKeys.length > 0) {
+        await r2.del(...splitKeys);
+        await r2.srem("scripts:split", sid);
+        deleted = true;
+      }
+      if (!deleted) return res.status(404).json({ error: "剧本不存在" });
+      res.json({ success: true });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // ===== 流水线 API =====
@@ -164,10 +179,83 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   app.get("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
     const s = await getSession(req.params.id);
-    if (!s) return res.status(404).json({ error: "剧本不存在" });
-    const markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+    let markdown = "";
+    let topic = "";
+    if (s) {
+      markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+      topic = s.metadata?.topic || "";
+    }
+    // 如果session不存在，尝试从split数据恢复
+    if (!markdown) {
+      const { getRedis } = require("../modules/game-manager");
+      const r = await getRedis();
+      const meta = await r.hgetall(`split:${req.params.id}:meta`);
+      if (meta?.title) {
+        const charKeys = await r.keys(`split:${req.params.id}:char:*`);
+        const pipe = r.pipeline();
+        charKeys.forEach(k => pipe.hgetall(k));
+        const results = await pipe.exec();
+        let text = '# ' + (meta.title || '') + '\n\n';
+        text += '时代: ' + (meta.era || '') + ' | 地点: ' + (meta.location || '') + '\n\n';
+        for (const [err, d] of results) {
+          if (d && d.name) {
+            text += '## ' + (d.roleType === 'npc' ? 'NPC' : '玩家') + ': ' + d.name + '\n';
+            text += (d.playerScript || '') + '\n\n';
+            if (d.secret) text += '秘密: ' + d.secret + '\n\n';
+          }
+        }
+        markdown = text;
+        topic = meta.title;
+      }
+    }
+    if (!markdown) return res.status(404).json({ error: "剧本不存在" });
     const parsed = parseScript(markdown);
-    res.json({ session: { sessionId: s.sessionId, createdAt: s.createdAt, topic: s.metadata?.topic }, parsed });
+    res.json({ session: { sessionId: req.params.id, createdAt: "", topic }, parsed, markdown });
+  });
+
+  // 查看切分后的剧本文件
+  app.get("/api/admin/scripts/:id/split-view", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { getRedis } = require("../modules/game-manager");
+      const r2 = await getRedis();
+      const meta = await r2.hgetall(`split:${req.params.id}:meta`);
+      if (!meta || !meta.title) return res.status(404).json({ error: "切分数据不存在" });
+
+      const charKeys = await r2.keys(`split:${req.params.id}:char:*`);
+      const clueKeys = await r2.keys(`split:${req.params.id}:clue:*`);
+      const dmData = await r2.hgetall(`split:${req.params.id}:dm`);
+
+      const pipeline = r2.pipeline();
+      charKeys.forEach(k => pipeline.hgetall(k));
+      clueKeys.forEach(k => pipeline.hgetall(k));
+      const results = await pipeline.exec();
+
+      const characters = [];
+      const clues = [];
+      for (let i = 0; i < results.length; i++) {
+        const d = results[i][1];
+        if (!d) continue;
+        if (i < charKeys.length && d.playerScript) {
+          characters.push({
+            name: d.name,
+            roleType: d.roleType || "player",
+            isMurderer: d.isMurderer === "1",
+            occupation: d.occupation || "",
+            script: d.playerScript.substring(0, 3000),
+            secret: (d.secret || "").substring(0, 1000),
+          });
+        } else if (i >= charKeys.length) {
+          clues.push({ id: d.id, content: (d.content || "").substring(0, 300), round: d.round, location: d.location || "" });
+        }
+      }
+
+      res.json({
+        meta: { ...meta, characterNames: JSON.parse(meta.characterNames || "[]") },
+        characters,
+        clues,
+        dm: dmData || {},
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // 用户管理
