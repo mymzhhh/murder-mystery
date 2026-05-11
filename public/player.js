@@ -323,7 +323,7 @@
       var totalReady = gs.totalReadyCount || 0;
       var btnText = readyCount > 0 ? ('就绪 ' + readyCount + '/' + totalReady) : '进入下一阶段';
       var isReady = gs._amIReady;
-      h += '<button class="btn btn-outline btn-sm" id="readyBtn"' + (isReady ? ' disabled style="opacity:0.5;"' : '') + ' onclick="doReady()">' + btnText + '</button>';
+      h += '<button class="btn btn-outline btn-sm" id="readyBtn" onclick="doReady()">' + btnText + '</button>';
       h += '</div>';
       return h;
     }
@@ -667,8 +667,8 @@
 
     function doReady() {
       gs._amIReady = true;
-      updateTopBarReady();
       socket.emit("ready", { roomCode: gs.room?.roomCode });
+      updateTopBarReady();
     }
 
     function updateTopBarReady() {
@@ -676,8 +676,15 @@
       if (!btn) return;
       var readyCount = gs.readyCount || 0;
       var totalReady = gs.totalReadyCount || 0;
-      btn.textContent = readyCount > 0 ? ('就绪 ' + readyCount + '/' + totalReady) : '进入下一阶段';
-      if (gs._amIReady) { btn.disabled = true; btn.style.opacity = '0.5'; }
+      if (readyCount > 0) {
+        btn.textContent = '就绪 ' + readyCount + '/' + totalReady;
+        btn.disabled = false;
+        btn.style.opacity = '';
+      } else {
+        btn.textContent = gs._amIReady ? '等待其他人...' : '进入下一阶段';
+        btn.disabled = false;
+        btn.style.opacity = '';
+      }
     }
 
     function doChat() {
