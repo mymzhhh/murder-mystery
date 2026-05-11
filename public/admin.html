@@ -413,6 +413,16 @@
       document.getElementById("btnGenerate").disabled = false;
     }
 
+    var stageColor = function(stage) {
+      if (stage.includes('player_script')) return 'var(--mystic-light)';
+      if (stage.includes('npc_script')) return 'var(--gold)';
+      if (stage.includes('clue')) return '#4ade80';
+      if (stage.includes('dm') || stage.includes('save')) return '#93c5fd';
+      if (stage.includes('passed') || stage.includes('done')) return 'var(--success)';
+      if (stage.includes('fail') || stage.includes('revise')) return 'var(--warning)';
+      return 'var(--text-dim)';
+    };
+
     async function splitScriptBtn(id) {
       if (!confirm("切分将解析剧本并用AI纯化角色剧本和线索，可能需要数分钟。继续？")) return;
       var prog = document.getElementById("genProgress");
@@ -432,15 +442,16 @@
             else if (lines[i].startsWith("data: ")) {
               try {
                 var d = JSON.parse(lines[i].slice(6));
-                if (et === "progress") { prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:var(--text2);padding:2px 0;">' + d.stage + ': ' + d.message + '</div>'; }
+                if (et === "progress") { prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:' + stageColor(d.stage) + ';padding:2px 0;">' + d.stage + ': ' + d.message + '</div>'; }
                 else if (et === "complete") {
-                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;">切分完成！' + d.meta.characterNames.length + '个角色、' + d.meta.clueCount + '条线索已存入Redis (split:* 命名空间)</div>';
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;font-weight:600;">✅ 切分完成！已入库</div>';
+                  loadScripts();
                 }
               } catch (e) { /* skip */ }
             }
           }
         }
-      } catch (e) { prog.innerHTML += '<span style="color:var(--danger);">切分失败: ' + e.message + '</span>'; }
+      } catch (e) { prog.innerHTML += '<div style="color:var(--danger);margin-top:8px;">❌ 切分失败: ' + e.message + '</div>'; }
     }
 
     async function viewScript(id) {
@@ -485,19 +496,26 @@
     async function reviewScript(id) {
       var prog = document.getElementById("genProgress");
       prog.style.display = "block";
-      prog.innerHTML = '<div class="progress-steps"><div>评测中...</div></div>';
+      prog.innerHTML = '<h4 style="color:var(--gold);margin-bottom:8px;">📊 剧本评测</h4><div class="progress-steps"><div style="color:var(--mystic-light);">⏳ AI 正在多维度评测中...</div></div>';
       try {
         var res = await api("/api/admin/scripts/" + id + "/review", { method: "POST" });
         var data = await res.json();
         if (!res.ok) { prog.innerHTML = '<span style="color:var(--danger);">' + esc(data.error || '评测失败') + '</span>'; return; }
         var scores = data.scores || {};
-        var passed = data.totalScore >= 75;
-        prog.innerHTML = '<div style="padding:12px;background:' + (passed ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)') + ';border-radius:8px;margin-top:8px;">' +
-          '<h4 style="margin-bottom:8px;">' + (passed ? '✅ 评测通过 (' : '⚠️ 评测未通过 (') + data.totalScore + '分)</h4>' +
-          '<div style="font-size:12px;margin:4px 0;">故事: ' + (scores.storyCompleteness||'-') + ' | 凶手: ' + (scores.murdererDesign||'-') + ' | 线索: ' + (scores.clueSystem||'-') + ' | 角色: ' + (scores.characterDesign||'-') + ' | 可玩性: ' + (scores.playability||'-') + '</div>' +
-          (data.strengths ? '<div style="font-size:12px;color:var(--success);margin-top:4px;">优点: ' + esc(data.strengths.join('、')) + '</div>' : '') +
-          (data.weaknesses ? '<div style="font-size:12px;color:var(--warning);margin-top:4px;">问题: ' + esc(data.weaknesses.join('、')) + '</div>' : '') +
-          (data.revisionAdvice ? '<div style="font-size:12px;color:var(--text2);margin-top:4px;white-space:pre-wrap;">修改建议: ' + esc(data.revisionAdvice) + '</div>' : '') +
+        var passed = data.passed;
+        prog.querySelector(".progress-steps").innerHTML =
+          '<div style="color:' + (passed ? 'var(--success)' : 'var(--warning)') + ';font-size:14px;font-weight:600;">' + (passed ? '✅ 评测通过' : '⚠️ 评测未通过') + ' — ' + data.totalScore + '分</div>' +
+          '<div style="margin-top:12px;padding:12px;background:var(--surface);border-radius:8px;">' +
+          '<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;text-align:center;">' +
+          '<div><div style="font-size:24px;color:var(--gold);">' + (scores.storyCompleteness||'-') + '</div><div style="font-size:10px;color:var(--text-dim);">故事</div></div>' +
+          '<div><div style="font-size:24px;color:var(--blood-light);">' + (scores.murdererDesign||'-') + '</div><div style="font-size:10px;color:var(--text-dim);">凶手</div></div>' +
+          '<div><div style="font-size:24px;color:#4ade80;">' + (scores.clueSystem||'-') + '</div><div style="font-size:10px;color:var(--text-dim);">线索</div></div>' +
+          '<div><div style="font-size:24px;color:var(--mystic-light);">' + (scores.characterDesign||'-') + '</div><div style="font-size:10px;color:var(--text-dim);">角色</div></div>' +
+          '<div><div style="font-size:24px;color:#fcd34d;">' + (scores.playability||'-') + '</div><div style="font-size:10px;color:var(--text-dim);">可玩性</div></div>' +
+          '</div>' +
+          (data.strengths && data.strengths.length ? '<div style="margin-top:8px;font-size:12px;color:var(--success);">👍 ' + esc(data.strengths.join('；')) + '</div>' : '') +
+          (data.weaknesses && data.weaknesses.length ? '<div style="margin-top:4px;font-size:12px;color:var(--warning);">⚠️ ' + esc(data.weaknesses.join('；')) + '</div>' : '') +
+          (data.revisionAdvice ? '<div style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--text);">💡 ' + esc(data.revisionAdvice) + '</div>' : '') +
           '</div>';
       } catch (e) { prog.innerHTML = '<span style="color:var(--danger);">评测失败: ' + e.message + '</span>'; }
     }
@@ -506,7 +524,7 @@
       if (!confirm("评测+修复将进行最多3轮评测和重新生成，每轮可能需要数分钟。确定继续？")) return;
       var prog = document.getElementById("genProgress");
       prog.style.display = "block";
-      prog.innerHTML = '<div class="progress-steps"></div>';
+      prog.innerHTML = '<h4 style="color:var(--gold);margin-bottom:8px;">🔄 评测+修复</h4><div class="progress-steps"></div>';
       try {
         var res = await fetch("/api/admin/scripts/" + id + "/review-revise", {
           method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }
@@ -525,7 +543,7 @@
               try {
                 var d = JSON.parse(lines[i].slice(6));
                 if (et === "progress") {
-                  prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:var(--text2);padding:2px 0;">' + d.stage + ': ' + d.message + '</div>';
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:' + stageColor(d.stage) + ';padding:2px 0;">' + d.stage + ': ' + d.message + '</div>';
                 } else if (et === "complete") {
                   var result = d;
                   var pts = result.passed ? '✅ 通过！最终分数: ' + result.finalScore : '⚠️ ' + result.totalRounds + '轮后未通过，最终分数: ' + result.finalScore;
