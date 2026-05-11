@@ -65,15 +65,26 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       let deleted = false;
       // 删除 session 数据
       if (await deleteSession(sid)) deleted = true;
-      // 删除 split 数据
+      // 删除 split 数据（同时尝试多种 key pattern）
       const { getRedis } = require("../modules/game-manager");
       const r2 = await getRedis();
-      const splitKeys = await r2.keys(`split:${sid}:*`);
-      if (splitKeys.length > 0) {
-        await r2.del(...splitKeys);
-        await r2.srem("scripts:split", sid);
-        deleted = true;
+      if (r2.status !== "ready" && r2.status !== "connecting") await r2.connect();
+      const patterns = [
+        `split:${sid}:*`,
+        `split:${sid}`,
+      ];
+      for (const pattern of patterns) {
+        try {
+          const keys = await r2.keys(pattern);
+          if (keys.length > 0) {
+            await r2.del(...keys);
+            deleted = true;
+            console.log(`[delete] 已删除 ${keys.length} 个 key (pattern: ${pattern})`);
+          }
+        } catch (e) { console.warn(`[delete] keys(${pattern}) 失败:`, e.message); }
       }
+      // 从索引中移除
+      await r2.srem("scripts:split", sid);
       if (!deleted) return res.status(404).json({ error: "剧本不存在" });
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
