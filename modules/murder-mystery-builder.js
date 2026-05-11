@@ -163,10 +163,9 @@ function extractLayout(framework) {
     const jsonMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
-      if (data.rooms && data.rooms.length <= 10) return data;
-      if (data.rooms && data.rooms.length > 10) {
-        // 截断到前10个
-        return { rooms: data.rooms.slice(0, 10), outdoor: data.outdoor };
+      if (data.rooms && data.rooms.length <= 14) return data;
+      if (data.rooms && data.rooms.length > 14) {
+        return { rooms: data.rooms.slice(0, 14), outdoor: data.outdoor };
       }
     }
   } catch (e) { /* JSON parse failed, fall through */ }
@@ -177,7 +176,7 @@ function extractLayout(framework) {
     if (partial) {
       const inner = partial[1];
       const items = inner.match(/\{[^}]+\}/g);
-      if (items && items.length >= 3 && items.length <= 10) {
+      if (items && items.length >= 3 && items.length <= 14) {
         const rooms = items.map(item => { try { return JSON.parse(item); } catch(e) { return null; } }).filter(Boolean);
         if (rooms.length >= 3) return { rooms };
       }
