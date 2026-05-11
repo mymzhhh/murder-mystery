@@ -236,24 +236,23 @@ function extractCharacterScripts(markdown, characters) {
     if (isNpc) {
       // NPC：提取背景故事、动机、秘密、时间线、物品等
       char.script = {
-        story: extractSection(section, "背景故事", 3000) || section.substring(0, 3000),
-        secret: extractField(section, "秘密") || extractSection(section, "秘密", 1000),
-        motive: extractSection(section, "作案动机", 1500),
-        personalTimeline: extractSection(section, "时间线", 2000),
-        items: extractSection(section, "相关物品", 1000),
-        method: extractSection(section, "作案过程", 3000),
-        fullScript: section.substring(0, 8000),
+        story: extractSection(section, "背景故事", 4000) || section.substring(0, 4000),
+        secret: extractField(section, "秘密") || extractSection(section, "秘密", 2000),
+        motive: extractSection(section, "作案动机", 2000),
+        personalTimeline: extractSection(section, "时间线", 5000),
+        items: extractSection(section, "相关物品", 2000),
+        method: extractSection(section, "作案过程", 5000),
+        fullScript: section.substring(0, 12000),
       };
     } else {
-      // 玩家/侦探：提取故事、秘密、时间线、目标等
       char.script = {
-        story: extractField(section, "你的故事") || extractSection(section, "你的故事", 3000) || extractSection(section, "背景故事", 3000),
-        secret: extractField(section, "你的秘密") || extractSection(section, "你的秘密", 1000) || extractField(section, "秘密"),
-        personalTimeline: extractSection(section, "你的时间线", 2000) || extractSection(section, "时间线", 2000),
-        goals: extractSection(section, "你的目标", 1000) || extractSection(section, "调查目标", 1500),
-        knownInfo: extractSection(section, "你掌握的信息", 2000) || extractSection(section, "初步信息", 2000),
-        items: extractSection(section, "你的物品", 1000) || extractSection(section, "物品", 1000),
-        fullScript: section.substring(0, 8000),
+        story: extractField(section, "你的故事") || extractSection(section, "你的故事", 4000) || extractSection(section, "背景故事", 4000),
+        secret: extractField(section, "你的秘密") || extractSection(section, "你的秘密", 2000) || extractField(section, "秘密"),
+        personalTimeline: extractSection(section, "你的时间线", 3000) || extractSection(section, "时间线", 3000),
+        goals: extractSection(section, "你的目标", 2000) || extractSection(section, "调查目标", 2000),
+        knownInfo: extractSection(section, "你掌握的信息", 3000) || extractSection(section, "初步信息", 3000),
+        items: extractSection(section, "你的物品", 2000) || extractSection(section, "物品", 2000),
+        fullScript: section.substring(0, 10000),
       };
     }
   }
