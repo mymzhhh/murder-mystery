@@ -59,6 +59,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
     const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
     const systemPrompt = buildNpcSystemPrompt(ch);
+    // NPC剧本3000-4000字，需要与玩家剧本相同的token预算
     const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
     characterResults[ch.name] = result.content;
   }
@@ -248,11 +249,18 @@ function buildNpcPrompt(ch, framework, index, total) {
   const instructions = stages.npcInstruction
     .replace("{characterName}", ch.name)
     .replace("{isMurdererExtra}", ch.isMurderer
-      ? `### 五、作案过程
-该NPC实施犯罪的完整过程。包括策划、具体手法、使用的工具、制造不在场证明的方式、事后处理、以及留下的破绽。用第三人称客观叙述。`
+      ? `### 六、完整的作案过程（800-1200字，仅供DM掌握）
+该NPC是凶手。详细描述完整的谋杀经过：
+- 作案的时间、地点、使用的工具和方法
+- 从策划到实施的每一个步骤
+- 如何伪造不在场证明、如何处理证据
+- 作案中出现的意外情况及其应对
+- 留下的破绽（必须与线索系统中的具体线索对应）
+- 案发后的伪装策略和心理状态
+此节仅供DM掌握真相，不会被玩家直接看到。`
       : "");
 
-  return `请为【NPC嫌疑人${index}/${total}】撰写精简信息。
+  return `请为【NPC嫌疑人${index}/${total}】撰写详尽角色信息。
 
 ## NPC基本信息
 - 姓名：${ch.name}
