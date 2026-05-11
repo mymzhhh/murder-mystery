@@ -212,27 +212,50 @@ function extractCharacters(text, murdererName) {
 
 function extractCharacterScripts(markdown, characters) {
   for (const char of characters) {
-    // 定位该角色的个人剧本区域
-    const regex = new RegExp(
-      `角色\\s*\\d+[：:]\\s*${escapeRegex(char.name)}[\\s\\S]*?(?=角色\\s*\\d+[：:]|#{1,3}\\s*(?:第[三四]|线索|DM)|$)`,
-      "i"
-    );
-    const match = markdown.match(regex);
-    if (!match) continue;
+    const escapedName = escapeRegex(char.name);
 
-    const section = match[0];
+    // 尝试多种标题格式匹配角色剧本区域
+    const patterns = [
+      `(?:玩家角色|NPC|角色)\\s*\\d+[：:]\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=(?:玩家角色|NPC|角色)\\s*\\d+[：:]|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人|场景布局)|$)`,
+      // 松散匹配：角色名后直到下个角色或章节结束
+      `#{2,4}\\s*${escapedName}(?:\\s*\\[.*?\\])?[\\s\\S]*?(?=#{2,4}\\s*(?:${characters.map(c => escapeRegex(c.name)).join('|')})|#{1,3}\\s*(?:第[三四五六]|线索|DM|NPC嫌疑人)|$)`,
+    ];
 
-    char.script = {
-      story: extractField(section, "你的故事") || extractSection(section, "你的故事", 2000),
-      secret: extractField(section, "你的秘密") || extractSection(section, "你的秘密", 1000),
-      personalTimeline: extractSection(section, "你的时间线", 1500),
-      goals: extractSection(section, "你的目标", 800),
-      knownInfo: extractSection(section, "你掌握的信息", 1500),
-      items: extractSection(section, "你的物品", 800),
-      lies: extractSection(section, "你的谎言", 1000),
-      defenseStrategy: extractSection(section, "如果被指认|辩护", 1000),
-      fullScript: section.substring(0, 5000),
-    };
+    let section = null;
+    for (const pat of patterns) {
+      const regex = new RegExp(pat, "i");
+      const match = markdown.match(regex);
+      if (match) { section = match[0]; break; }
+    }
+    if (!section) continue;
+
+    // 根据角色类型提取不同字段
+    const isNpc = char.roleType === "npc";
+    const isPlayer = char.roleType === "player" || !isNpc;
+
+    if (isNpc) {
+      // NPC：提取背景故事、动机、秘密、时间线、物品等
+      char.script = {
+        story: extractSection(section, "背景故事", 3000) || section.substring(0, 3000),
+        secret: extractField(section, "秘密") || extractSection(section, "秘密", 1000),
+        motive: extractSection(section, "作案动机", 1500),
+        personalTimeline: extractSection(section, "时间线", 2000),
+        items: extractSection(section, "相关物品", 1000),
+        method: extractSection(section, "作案过程", 3000),
+        fullScript: section.substring(0, 8000),
+      };
+    } else {
+      // 玩家/侦探：提取故事、秘密、时间线、目标等
+      char.script = {
+        story: extractField(section, "你的故事") || extractSection(section, "你的故事", 3000) || extractSection(section, "背景故事", 3000),
+        secret: extractField(section, "你的秘密") || extractSection(section, "你的秘密", 1000) || extractField(section, "秘密"),
+        personalTimeline: extractSection(section, "你的时间线", 2000) || extractSection(section, "时间线", 2000),
+        goals: extractSection(section, "你的目标", 1000) || extractSection(section, "调查目标", 1500),
+        knownInfo: extractSection(section, "你掌握的信息", 2000) || extractSection(section, "初步信息", 2000),
+        items: extractSection(section, "你的物品", 1000) || extractSection(section, "物品", 1000),
+        fullScript: section.substring(0, 8000),
+      };
+    }
   }
 }
 
