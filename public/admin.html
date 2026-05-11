@@ -186,12 +186,72 @@
 
     // Step 2-5: 生成→评测→切分
     var _abortController = null;
-    var _scriptConfig = null; // 存储 prompt-agent 输出的剧本配置
+    var _scriptConfig = null;
+    var _lastSessionId = null;
+    var _lastPhase = null;
 
     function cancelPipeline() {
       if (_abortController) { _abortController.abort(); _abortController = null; }
       pipeActive(1);
       renderPipeline();
+    }
+
+    // 从当前阶段重试（评测或切分）
+    function retryPipeline(sessionId) {
+      if (!sessionId) return;
+      _lastSessionId = sessionId;
+      var isReviewPhase = _lastPhase === 'review';
+      pipeActive(isReviewPhase ? 4 : 5);
+      var el = document.getElementById("pipelineContent");
+      el.innerHTML = '<div class="progress-steps"></div>';
+      el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-danger btn-sm" onclick="cancelPipeline()">取消生成</button></div>';
+
+      _abortController = new AbortController();
+      var url = isReviewPhase
+        ? "/api/admin/scripts/" + sessionId + "/review-revise"
+        : "/api/admin/scripts/" + sessionId + "/split";
+
+      fetch(url, {
+        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        signal: _abortController.signal,
+      }).then(async function(res) {
+        var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
+        while (true) {
+          var rd = await reader.read(); if (rd.done) break;
+          buf += dec.decode(rd.value, { stream: true });
+          var lines = buf.split("\n"); buf = lines.pop() || ""; var et = "";
+          for (var i = 0; i < lines.length; i++) {
+            if (lines[i].startsWith("event: ")) et = lines[i].slice(7);
+            else if (lines[i].startsWith("data: ")) {
+              try {
+                var d = JSON.parse(lines[i].slice(6));
+                if (et === "progress") {
+                  el.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:var(--text-dim);padding:2px 0;">' + esc(d.stage + ': ' + d.message) + '</div>';
+                } else if (et === "complete") {
+                  if (d.ok) {
+                    pipeActive(5); el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;font-weight:600;">完成！</div>';
+                  } else {
+                    el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--warning);margin-top:8px;">' + esc(d.message || '未通过') + '</div>';
+                  }
+                  el.innerHTML += '<div class="pipeline-buttons"><button class="btn btn-primary" onclick="renderPipeline()">生成新剧本</button></div>';
+                  loadScripts();
+                } else if (et === "error") {
+                  el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--danger);margin-top:8px;">' + esc(d.message) + '</div>';
+                  if (_lastSessionId) {
+                    el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-primary" onclick="retryPipeline(\'' + _lastSessionId + '\')">再次重试</button>' +
+                      '<button class="btn btn-outline" onclick="renderPipeline()" style="margin-left:4px;">重新开始</button></div>';
+                  }
+                }
+              } catch (e) { /* skip */ }
+            }
+          }
+        }
+      }).catch(function(e) {
+        if (e.name !== "AbortError") {
+          el.innerHTML += '<div style="color:var(--danger);margin-top:8px;">重试失败: ' + e.message + '</div>';
+          el.innerHTML += '<div class="pipeline-buttons"><button class="btn btn-primary" onclick="retryPipeline(\'' + sessionId + '\')">再次重试</button></div>';
+        }
+      }).finally(function() { _abortController = null; });
     }
 
     async function step2Generate() {
@@ -234,6 +294,8 @@
                   if (d.phase === "write") pipeActive(3);
                   else if (d.phase === "review") pipeActive(4);
                   else if (d.phase === "split") pipeActive(5);
+                  if (d.phase === "write_done" && d.sessionId) _lastSessionId = d.sessionId;
+                  _lastPhase = d.phase;
                   el.querySelector(".progress-steps").innerHTML += '<div style="font-size:13px;color:var(--gold);padding:4px 0;font-weight:600;">' + esc(d.message) + '</div>';
                 } else if (et === "complete") {
                   if (d.status === "done") {
@@ -246,7 +308,14 @@
                   loadScripts();
                 } else if (et === "error") {
                   el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--danger);margin-top:8px;">' + esc(d.message) + '</div>';
-                  pipeActive(1);
+                  // 显示重试按钮
+                  if (_lastSessionId) {
+                    var btnLabel = _lastPhase === 'review' ? '重试评测+切分' : '重试切分';
+                    el.innerHTML += '<div class="pipeline-buttons" style="margin-top:8px;"><button class="btn btn-primary" onclick="retryPipeline(\'' + _lastSessionId + '\')">' + btnLabel + '</button>' +
+                      '<button class="btn btn-outline" onclick="renderPipeline()" style="margin-left:4px;">重新开始</button></div>';
+                  } else {
+                    pipeActive(1);
+                  }
                 }
               } catch (e) { /* skip */ }
             }
