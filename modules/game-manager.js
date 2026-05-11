@@ -51,14 +51,12 @@ async function updateRoom(code, fields) {
 
 async function deleteRoom(code) {
   const r = await ensureConn();
-  await r.multi()
-    .del(`game:${code}`)
-    .del(`game:${code}:players`)
-    .del(`game:${code}:clues`)
-    .del(`game:${code}:votes`)
-    .del(`game:${code}:chat`)
-    .zrem("games:index", code)
-    .exec();
+  // 用 scanKeys 确保删除所有 game:{code}* 的 key（包括 :ready 等）
+  const allKeys = await scanKeys(`game:${code}*`);
+  if (allKeys.length > 0) {
+    await r.del(...allKeys);
+  }
+  await r.zrem("games:index", code);
 }
 
 async function listRooms() {
