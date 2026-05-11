@@ -18,10 +18,11 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
 ## 硬性约束（不合格直接低分，无法通过）
 
 1. **角色数量合规**：
-   - 玩家角色：2-6人（少于2人或超过6人都不合格）
+   - 玩家角色：1-6人
    - NPC嫌疑人：0-3人
    - 总角色数：≤9人
    - 必须明确区分【玩家】和【NPC嫌疑人】角色类型
+   - **单人侦探本特别检查**：玩家=1时，NPC必须恰好3人，凶手必须是NPC，玩家不可为凶手
 
 2. **凶手唯一性**：有且仅有一个凶手
 
@@ -31,28 +32,29 @@ const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需�
    - 故事是否有清晰的开端、发展、高潮、结局？
    - 世界观设定是否自洽？
    - 人物关系是否完整且合理？
-   - 角色背景故事是否足够丰满（玩家剧本应达到4000-6000字）？
 
 2. **凶手设计 (25%)**：
    - 凶手的动机是否充分且深刻？（不能是简单的仇杀或财杀）
    - 作案手法是否新颖且符合世界观？
-   - 手法在故事背景下是否真实可行？
+   - 作案过程是否详细描述？（单人本尤其重要，凶手作案过程需800字以上）
+   - **单人本**：凶手必须来自NPC，不可来自玩家
 
 3. **线索系统 (20%)**：
    - 线索是否分层清晰？（表面→深入→关键）
-   - 证据链是否完整可推理？
-   - 是否存在无效或冗余线索？
+   - 物证是否标注发现地点？
+   - 证据链是否完整可推理？**单人本**线索需能独立指向凶手
 
 4. **角色设计 (15%)**：
-   - 每个玩家角色是否都有完整的故事和秘密？
-   - NPC嫌疑人是否有合理的动机和背景？
+   - **常规本**：每个玩家角色是否都有完整的故事、秘密和时间线？
+   - **单人本**：侦探剧本是否包含初步调查信息和各NPC的嫌疑概述？
+   - NPC嫌疑人是否有充分的动机、时间线和秘密？（单人本NPC剧本需尤其详尽）
    - 角色之间是否有复杂的利益纠葛？
    - 剧本是否为纯叙事（不包含"你应该"、"可以撒谎"等策略建议）？
 
 5. **可玩性 (15%)**：
-   - 玩家能否通过线索推理出凶手？
-   - 推理难度是否合适？
-   - 角色信息是否平衡（无人拥有过多或过少信息）？
+   - 玩家能否通过线索+审讯推理出凶手？
+   - 推理难度是否合适？（单人本需有足够挑战性，不能太容易）
+   - NPC嫌疑均衡：三个NPC是否有相对均衡的嫌疑，不出现一人明显无辜或明显有罪
 
 ## 输出格式（JSON）
 {
@@ -90,9 +92,21 @@ async function reviewScript(sessionId) {
   if (playerCount < LIMITS.minPlayers) constraintErrors.push(`玩家角色数不足(${playerCount}，需要至少${LIMITS.minPlayers}人)`);
   if (npcCount > MAX_NPC) constraintErrors.push(`NPC数超限(${npcCount}/${MAX_NPC})`);
 
+  // 单人本特别检查
+  const isSolo = playerCount === 1;
+  if (isSolo && npcCount !== 3) constraintErrors.push(`单人本需要恰好3个NPC嫌疑人(当前${npcCount}个)`);
+
   // 统计是否有明确的凶手
   const hasClearMurderer = !!(parsed.murderer?.name && parsed.murderer.name.length >= 2);
   if (!hasClearMurderer) constraintErrors.push("未明确标注凶手");
+
+  // 单人本凶手必须是NPC
+  if (isSolo && hasClearMurderer) {
+    const murdererChar = chars.find(c => c.name === parsed.murderer.name);
+    if (murdererChar && murdererChar.roleType !== "npc") {
+      constraintErrors.push("单人本凶手必须是NPC嫌疑人");
+    }
+  }
 
   if (constraintErrors.length > 0) {
     return {
@@ -110,7 +124,9 @@ async function reviewScript(sessionId) {
   }
 
   // 构建评测上下文
+  const gameMode = isSolo ? "【单人侦探本】玩家扮演侦探，需从3个NPC中找出凶手" : (npcCount > 0 ? "【PVE】玩家+NPC嫌疑人" : "【PVP】纯玩家互疑");
   const context = `## 剧本基本信息
+- 游戏模式：${gameMode}
 - 标题：《${parsed.title || "未知"}》
 - 时代背景：${parsed.setting?.era || "未知"}
 - 地点：${parsed.setting?.location || "未知"}
