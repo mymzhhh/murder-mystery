@@ -180,13 +180,11 @@ async function splitScript(sessionId, onProgress) {
   // 处理玩家角色（完整剧本纯化）
   for (let i = 0; i < playerChars.length; i++) {
     const char = playerChars[i];
-    onProgress("player_script", `纯化玩家剧本 (${i + 1}/${playerChars.length}): ${char.name}`);
+    onProgress("player_script", `提取玩家剧本 (${i + 1}/${playerChars.length}): ${char.name}`);
     const rawScript = char.script?.fullScript || char.script?.story || '';
 if (!rawScript) continue;
-    const purified = await purifyPlayerScript(char.name, rawScript, char.isMurderer);
-
     result.characters[char.name] = {
-      playerScript: purified,
+      playerScript: rawScript,
       secret: char.script?.secret || char.secret || "",
       isMurderer: char.isMurderer || false,
       occupation: char.occupation || "",
@@ -198,13 +196,11 @@ if (!rawScript) continue;
   // 处理NPC（精简信息，更短的prompt上下文）
   for (let i = 0; i < npcChars.length; i++) {
     const char = npcChars[i];
-    onProgress("npc_script", `精简NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
+    onProgress("npc_script", `提取NPC信息 (${i + 1}/${npcChars.length}): ${char.name}`);
     const rawScript = char.script?.fullScript || char.script?.story || '';
 if (!rawScript) continue;
-    const purified = await purifyNpcInfo(char.name, rawScript, char.isMurderer);
-
     result.characters[char.name] = {
-      playerScript: purified,
+      playerScript: rawScript,
       secret: char.script?.secret || char.secret || "",
       isMurderer: char.isMurderer || false,
       occupation: char.occupation || "",
@@ -213,7 +209,7 @@ if (!rawScript) continue;
     };
   }
 
-  // 2. 切分线索（批量处理）
+  // 2. 线索（直接使用，无需LLM纯化）
   const allClues = [
     ...(parsed.clues?.round1 || []).map(c => ({ ...c, round: 1 })),
     ...(parsed.clues?.round2 || []).map(c => ({ ...c, round: 2 })),
@@ -221,12 +217,12 @@ if (!rawScript) continue;
   ];
 
   if (allClues.length > 0) {
-    onProgress("clue", `纯化线索 (共 ${allClues.length} 条)...`);
-    for (let i = 0; i < allClues.length; i += 5) {
-      const batch = allClues.slice(i, i + 5);
-      const purified = await Promise.all(batch.map(c => purifyClue(c, c.round)));
-      result.clues.push(...purified);
-      onProgress("clue", `纯化线索 (${Math.min(i + 5, allClues.length)}/${allClues.length})`);
+    onProgress("clue", `提取线索 (共 ${allClues.length} 条)...`);
+    for (const c of allClues) {
+      result.clues.push({
+        id: c.id, name: "", content: (c.content || "").substring(0, 500),
+        location: c.location || "", round: c.round, clueType: c.clueType || ""
+      });
     }
   }
 
