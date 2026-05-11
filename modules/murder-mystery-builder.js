@@ -27,10 +27,16 @@ async function buildMurderMystery(userInput, onProgress, config) {
   cfg.playerCount = Math.max(LIMITS.minPlayers, Math.min(LIMITS.maxPlayers, cfg.playerCount));
   cfg.npcCount = Math.max(0, Math.min(LIMITS.maxNpc, cfg.npcCount));
 
-  // ========== 阶段 1：故事框架（注入动态角色数量） ==========
+  // ========== 阶段 1：故事框架 ==========
   onProgress("framework", `正在设计故事框架（${cfg.playerCount}玩家${cfg.npcCount > 0 ? ' + ' + cfg.npcCount + 'NPC' : ''}）...`);
   const frameworkPrompt = buildFrameworkPrompt(userInput, cfg);
-  const frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.75 });
+  let frameworkResult;
+  try {
+    frameworkResult = await generate(stages.framework, frameworkPrompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.75 });
+  } catch (e) {
+    console.error("[framework] 生成失败:", e.message, e.name, e.status, e.code);
+    throw new Error("故事框架生成失败: " + (e.message || "网络超时，请重试"));
+  }
   report.framework = frameworkResult.content;
 
   // ========== 阶段 1.4：提取场景布局 ==========
@@ -91,15 +97,25 @@ async function buildMurderMystery(userInput, onProgress, config) {
 
   // ========== 阶段 3：线索系统 ==========
   onProgress("clues", "正在设计线索系统和证据链...");
-  const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary + layoutContext);
-  const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
-  report.clues = cluesResult.content;
+  try {
+    const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000) + layoutContext);
+    const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
+    report.clues = cluesResult.content;
+  } catch (e) {
+    console.error("[clues] 生成失败:", e.message, e.name, e.status);
+    throw new Error("线索系统生成失败: " + (e.message || "未知错误"));
+  }
 
   // ========== 阶段 4：DM 手册 ==========
   onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
-  const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary + layoutContext);
-  const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
-  report.dmGuide = dmResult.content;
+  try {
+    const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000) + layoutContext);
+    const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
+    report.dmGuide = dmResult.content;
+  } catch (e) {
+    console.error("[dmGuide] 生成失败:", e.message, e.name, e.status);
+    throw new Error("DM手册生成失败: " + (e.message || "未知错误"));
+  }
 
   // ========== 组装 ==========
   onProgress("assemble", "正在组装完整剧本...");
