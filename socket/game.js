@@ -136,7 +136,11 @@ function setupGameSocket(io) {
         }
         const curPlayers = await getPlayers(roomCode);
         const humanPlayers = curPlayers.filter(p => !p.isNPC);
-        if (humanPlayers.length < 2) return socket.emit("error", { code: "NOT_ENOUGH", message: "至少需要2名玩家" });
+        if (humanPlayers.length < 1) return socket.emit("error", { code: "NOT_ENOUGH", message: "至少需要1名玩家" });
+
+        // 单人本检查：必须有NPC嫌疑人
+        const npcCount = (parsed.characters || []).filter(c => c.roleType === "npc").length;
+        if (humanPlayers.length === 1 && npcCount === 0) return socket.emit("error", { code: "NEED_NPC", message: "单人本需要NPC嫌疑人" });
 
         const parsed = JSON.parse(room.parsedScript || "{}");
         const totalSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;

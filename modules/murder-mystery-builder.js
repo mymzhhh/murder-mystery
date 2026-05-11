@@ -44,14 +44,25 @@ async function buildMurderMystery(userInput, onProgress, config) {
 
   // ========== 阶段 2：角色内容 ==========
   const characterResults = {};
+  const isSolo = cfg.playerCount === 1;
 
   for (let i = 0; i < playerChars.length; i++) {
     const ch = playerChars[i];
-    onProgress("player_script", `撰写玩家角色剧本 (${i + 1}/${playerChars.length}): ${ch.name}`);
-    const prompt = buildCharacterPrompt(ch, report.framework, i + 1, playerChars.length);
-    const systemPrompt = buildCharacterSystemPrompt(ch);
-    const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
-    characterResults[ch.name] = result.content;
+    const label = isSolo ? "侦探" : "玩家";
+    onProgress("player_script", `撰写${label}角色剧本 (${i + 1}/${playerChars.length}): ${ch.name}`);
+    if (isSolo) {
+      // 单人侦探模式：用专用模板
+      const instructions = stages.soloDetectiveInstruction.replace("{characterName}", ch.name);
+      const prompt = `请为【侦探角色】撰写调查者剧本。\n\n## 角色基本信息\n- 姓名：${ch.name}\n- 身份：调查者/侦探\n\n## 完整故事框架（供参考）\n${report.framework.substring(0, 5000)}\n\n## 要求\n${instructions}\n\n请直接输出剧本内容。`;
+      const systemPrompt = `你是剧本杀写作专家。现在为【调查者】"${ch.name}"撰写侦探剧本。使用第一人称，重点是调查视角和初步线索。`;
+      const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
+      characterResults[ch.name] = result.content;
+    } else {
+      const prompt = buildCharacterPrompt(ch, report.framework, i + 1, playerChars.length);
+      const systemPrompt = buildCharacterSystemPrompt(ch);
+      const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
+      characterResults[ch.name] = result.content;
+    }
   }
 
   for (let i = 0; i < npcChars.length; i++) {
@@ -59,8 +70,9 @@ async function buildMurderMystery(userInput, onProgress, config) {
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
     const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
     const systemPrompt = buildNpcSystemPrompt(ch);
-    // NPC剧本3000-4000字，需要与玩家剧本相同的token预算
-    const result = await generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 });
+    // 单人本NPC需要更丰富内容，token加量
+    const npcTokens = isSolo ? TOKENS_PER_STAGE * 1.5 : TOKENS_PER_STAGE;
+    const result = await generate(systemPrompt, prompt, { maxTokens: Math.floor(npcTokens), temperature: 0.7 });
     characterResults[ch.name] = result.content;
   }
   report.characterScripts = characterResults;

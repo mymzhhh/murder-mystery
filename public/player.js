@@ -207,7 +207,7 @@
       const humanPlayers = (gs.players || []).filter(function(p) { return !p.isNPC; });
       const totalSlots = gs.totalSlots || (gs.allCharacters || []).filter(function(c) { return c.roleType !== 'npc'; }).length;
       const assignedCount = humanPlayers.filter(function(p) { return p.characterName; }).length;
-      const canStart = humanPlayers.length >= totalSlots && assignedCount >= humanPlayers.length && humanPlayers.length >= 2;
+      const canStart = humanPlayers.length >= totalSlots && assignedCount >= humanPlayers.length && humanPlayers.length >= 1;
 
       let h = `<div class="panel"><div style="text-align:center;margin:20px 0;">
         <h3>房间 ${gs.room?.roomCode}</h3>

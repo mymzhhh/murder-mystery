@@ -7,7 +7,7 @@ const PROMPT_SYSTEM = `你是一个剧本杀需求分析专家。你需要分析
 ## 核心规则
 
 ### 角色数量约束（不可违反）
-- **玩家角色**：2-6人（最少2人，最多6人）
+- **玩家角色**：1-6人（1人为单人侦探本，2-6人为常规剧本杀）
 - **NPC嫌疑人**：0-3人
 - **总角色数**：≤9人
 - 如果用户要求超过限制，自动调整为最接近的合法值
@@ -51,7 +51,7 @@ async function optimizePrompt(userInput) {
 
     // 强制人数约束
     if (data.playerCount > 6) data.playerCount = 6;
-    if (data.playerCount < 2) data.playerCount = 4;
+    if (data.playerCount < 1) data.playerCount = 4;
     if (data.npcCount > 3) data.npcCount = 3;
     if (data.npcCount < 0) data.npcCount = 0;
 
