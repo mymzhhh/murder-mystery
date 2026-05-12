@@ -57,9 +57,6 @@ function parseScript(markdown) {
     // === 角色个人剧本 ===
     extractCharacterScripts(markdown, result.characters);
 
-    // === 场景布局 ===
-    result.layout = extractLayout(markdown);
-
     // === 线索系统 ===
     result.clues = extractAllClues(markdown);
 
@@ -211,24 +208,6 @@ function extractCharacters(text, murdererName) {
   }
 
   return chars;
-}
-
-function extractLayout(markdown) {
-  try {
-    // 新格式：{floors: [...]}
-    const fMatch = markdown.match(/\{\s*"floors"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (fMatch) {
-      const data = JSON.parse(fMatch[0]);
-      if (data.floors) return data;
-    }
-    // 旧格式兼容
-    const rMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (rMatch) {
-      const data = JSON.parse(rMatch[0]);
-      if (data.rooms) return { floors: [{ level: 1, label: "一层", rooms: data.rooms }] };
-    }
-  } catch (e) { /* fall through */ }
-  return null;
 }
 
 function extractCharacterScripts(markdown, characters) {

@@ -28,16 +28,6 @@ const DM_SYSTEM_PROMPT = `你是一位专业剧本杀DM（主持人），负责�
 /**
  * 生成阶段开场叙事
  */
-function getRoomNames(script) {
-  const layout = script.layout;
-  if (!layout || !layout.floors) return [];
-  const names = [];
-  (layout.floors || []).forEach(f => (f.rooms || []).forEach(r => names.push(r.name)));
-  // 兼容旧格式
-  if (layout.rooms) layout.rooms.forEach(r => names.push(r.name));
-  return names;
-}
-
 async function generatePhaseNarrative(script, phase, gameState) {
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
   const players = (script.characters || []).filter(c => c.roleType !== "npc");
@@ -45,16 +35,11 @@ async function generatePhaseNarrative(script, phase, gameState) {
   const npcInfo = npcs.length > 0
     ? `\n**NPC嫌疑人（由DM扮演）**：${npcNames}\n这些NPC是案件的重要嫌疑人，他们不会主动发言，但DM会在适当时机提供关于他们的信息。`
     : "";
-  const roomNames = getRoomNames(script);
-  const roomList = roomNames.length > 0 ? `\n**场景房间**：${roomNames.join('、')}` : "";
-  const crimeScene = roomNames.length > 0 ? (roomNames.find(n => n.includes('书') || n.includes('房') || n.includes('室')) || roomNames[0]) : "案发现场";
-
   const phaseDescriptions = {
-    reading: `玩家们正在阅读各自的角色剧本。请生成一段简短的开场白，欢迎玩家进入游戏。${npcInfo}${roomList}`,
+    reading: `玩家们正在阅读各自的角色剧本。请生成一段简短的开场白，欢迎玩家进入游戏。${npcInfo}`,
 
     round1_investigation: `第一轮搜证开始。请生成一段叙事，描述${crimeScene}的基本情况。
-${npcInfo}${roomList}
-引导玩家调查以下具体地点：${roomNames.slice(0, 5).join('、')}等。${npcs.length > 0 ? '同时提醒玩家：可以向DM询问NPC嫌疑人的相关信息。' : ''}
+${npcInfo}${npcs.length > 0 ? '同时提醒玩家：可以向DM询问NPC嫌疑人的相关信息。' : ''}
 列出3-4个可以调查的具体地点。
 剧本设定：${script.setting?.location || '未知地点'}，时代：${script.setting?.era || '未知'}，死者：${script.victim?.name || '未知'}。`,
 
@@ -62,8 +47,7 @@ ${npcInfo}${roomList}
 请生成2-3个引导性问题，帮助玩家整理线索、交流发现。不要直接指出凶手。`,
 
     round2_investigation: `第二轮搜证开始。请生成一段叙事，描述深入调查的过程。
-${npcInfo}${roomList}
-引导玩家调查每个人的房间：${[...players.slice(0, 3).map(c => c.name + '的房间'), ...(npcs.length > 0 ? npcs.map(c => c.name + '的房间') : [])].join('、')}。
+${npcInfo}引导玩家调查：${[...players.slice(0, 3).map(c => c.name), ...(npcs.length > 0 ? npcs.map(c => c.name) : [])].join('、')}等人的活动轨迹。
 列出新的可调查方向。`,
 
     round2_discussion: `第二轮讨论开始。${npcs.length > 0 ? '经过深入调查，NPC嫌疑人' + npcNames + '的可疑之处逐渐浮现。' : ''}

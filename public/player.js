@@ -332,32 +332,6 @@
     window._sidebarTab = "chat";
 
     // 右侧面板：玩家列表 + 标签页（剧本/线索/聊天）
-    function renderAsciiMap(layout) {
-      // 支持新格式{floors}和旧格式{rooms}
-      var allFloors = layout.floors || (layout.rooms ? [{level:1, label:'一层', rooms:layout.rooms}] : []);
-      if (allFloors.length === 0) return '<p style="color:var(--text-dim);">无布局数据</p>';
-
-      var h = '';
-      allFloors.forEach(function(fl) {
-        var list = fl.rooms || [];
-        var flLabel = fl.label || (fl.level > 1 ? 'F' + fl.level : '一层');
-        h += '<div style="font-size:12px;color:var(--gold);margin:8px 0 4px;font-weight:600;">' + esc(flLabel) + '</div>';
-        list.forEach(function(room) {
-          var isCrime = room.isCrimeScene;
-          var owner = room.owner ? ' <span style="color:var(--text-dim);">(' + esc(room.owner) + '的房间)</span>' : '';
-          h += '<div style="margin:2px 0;padding:4px 6px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.12)' : 'transparent') + ';font-size:11px;">';
-          h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>' + owner;
-          if (room.desc) h += ' <span style="color:var(--text-dim);">— ' + esc(room.desc.substring(0, 80)) + '</span>';
-          if (room.features && room.features.length) h += ' <span style="color:#fcd34d;font-size:10px;">🔎' + esc(room.features.join('、').substring(0, 60)) + '</span>';
-          if (room.exitsTo && room.exitsTo.length) h += ' <span style="color:var(--mystic-light);font-size:10px;"> ↔' + esc(room.exitsTo.join('、')) + '</span>';
-          if (room.stairTo && room.stairTo.length) h += ' <span style="color:var(--warning);font-size:10px;"> 🪜' + esc(room.stairTo.join('、')) + '</span>';
-          if (isCrime) h += ' <span style="color:var(--blood-light);font-size:10px;">★案发现场</span>';
-          h += '</div>';
-        });
-      });
-      return h;
-    }
-
     function sidePanel(activeTab) {
       activeTab = activeTab || window._sidebarTab || "chat";
       window._sidebarTab = activeTab;

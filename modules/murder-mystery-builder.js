@@ -39,12 +39,6 @@ async function buildMurderMystery(userInput, onProgress, config) {
   }
   report.framework = frameworkResult.content;
 
-  // ========== 阶段 1.4：提取场景布局 ==========
-  onProgress("extract_layout", "正在提取场景布局图...");
-  const layout = extractLayout(report.framework);
-  report.layout = layout;
-  onProgress("extract_layout", layout ? `场景布局提取完成：${layout.rooms?.length || 0}个房间` : "未检测到布局数据");
-
   // ========== 阶段 1.5：结构化提取角色列表 ==========
   onProgress("extract", "正在解析角色列表（区分玩家/NPC/凶手）...");
   const characters = await extractCharactersStructured(report.framework, cfg);
@@ -111,14 +105,10 @@ async function buildMurderMystery(userInput, onProgress, config) {
 
   const frameworkSummary = buildStructuredSummary(report);
 
-  // 注入房间列表到线索/DM 阶段
-  const roomNames = (report.layout?.rooms || []).map(r => r.name).join('、');
-  const layoutContext = roomNames ? `\n\n## 场景布局（所有线索和行动必须对应以下房间）\n可用房间：${roomNames}\n案发现场：${(report.layout?.rooms || []).filter(r => r.isCrimeScene).map(r => r.name).join('、') || '未指定'}\n` : '';
-
   // ========== 阶段 3：线索系统 ==========
   onProgress("clues", "正在设计线索系统和证据链...");
   try {
-    const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000) + layoutContext);
+    const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000));
     const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
     report.clues = cluesResult.content;
   } catch (e) {
@@ -129,7 +119,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // ========== 阶段 4：DM 手册 ==========
   onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
   try {
-    const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000) + layoutContext);
+    const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000));
     const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
     report.dmGuide = dmResult.content;
   } catch (e) {
@@ -184,36 +174,6 @@ ${userInput}`;
 }
 
 // ==================== 结构化角色提取 ====================
-
-function extractLayout(framework) {
-  try {
-    // 新格式：{floors: [{level, label, rooms: [...]}]}
-    const floorsMatch = framework.match(/\{\s*"floors"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (floorsMatch) {
-      const data = JSON.parse(floorsMatch[0]);
-      if (data.floors) return normalizeLayout(data);
-    }
-    // 旧格式兼容：{rooms: [...]}
-    const roomsMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (roomsMatch) {
-      const data = JSON.parse(roomsMatch[0]);
-      if (data.rooms) return { floors: [{ level: 1, label: "一层", rooms: data.rooms.slice(0, 14) }] };
-    }
-  } catch (e) { /* fall through */ }
-  return null;
-}
-
-// 规范化：确保所有房间有id
-function normalizeLayout(data) {
-  var idx = 1;
-  (data.floors || []).forEach(function(f) {
-    (f.rooms || []).forEach(function(r) {
-      if (!r.id) r.id = 'R' + (idx++);
-      else idx = Math.max(idx, parseInt(r.id.substring(1)) || 0);
-    });
-  });
-  return data;
-}
 
 async function extractCharactersStructured(framework, cfg) {
   const minExpected = cfg.playerCount || LIMITS.minPlayers;

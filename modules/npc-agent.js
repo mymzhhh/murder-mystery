@@ -7,29 +7,11 @@ const { generate } = require("./generator");
  * @param {object} npc - NPC角色对象 {name, occupation, script: {story, secret}, isMurderer}
  * @param {object} scriptSummary - 剧本概要 {title, setting, victim}
  */
-function buildRoomContext(layout, npcName) {
-  const rooms = [];
-  (layout.floors || []).forEach(f => (f.rooms || []).forEach(r => rooms.push(r)));
-  // 兼容旧格式
-  if (layout.rooms) layout.rooms.forEach(r => rooms.push(r));
-  if (rooms.length === 0) return "";
-
-  let ctx = "\n## 场景布局（你可以据此回答位置相关问题）\n";
-  rooms.forEach(r => {
-    const owner = r.owner === npcName ? "（这是我的房间）" : "";
-    ctx += `- ${r.name}${owner}：${r.desc || ""}。出口通往：${(r.exitsTo || []).join('、') || "无"}\n`;
-  });
-  return ctx;
-}
-
 function buildNpcSystemPrompt(npc, scriptSummary) {
   const name = npc.name || "NPC";
   const occupation = npc.occupation || "";
   const story = npc.script?.story || npc.script?.playerScript || "";
   const secret = npc.script?.secret || "";
-
-  const layout = scriptSummary?.layout;
-  const roomInfo = layout ? buildRoomContext(layout, name) : "";
 
   const baseInfo = `你是剧本杀游戏中的NPC角色：**${name}**${occupation ? '（' + occupation + '）' : ''}。
 
@@ -43,8 +25,7 @@ ${secret ? secret.substring(0, 1000) : '（无特殊秘密）'}
 标题：《${scriptSummary?.title || '未知'}》
 时代：${scriptSummary?.setting?.era || '未知'}
 地点：${scriptSummary?.setting?.location || '未知'}
-死者：${scriptSummary?.victim?.name || '未知'}
-${roomInfo}`;
+死者：${scriptSummary?.victim?.name || '未知'}`;
 
   if (npc.isMurderer) {
     return `${baseInfo}

@@ -69,24 +69,6 @@ function extractLayoutDescription(markdown) {
   return "";
 }
 
-function extractLayoutFromMarkdown(markdown) {
-  try {
-    // 新格式 {floors: [...]}
-    const fMatch = markdown.match(/\{\s*"floors"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (fMatch) {
-      const data = JSON.parse(fMatch[0]);
-      if (data.floors) return data;
-    }
-    // 旧格式兼容 {rooms: [...]}
-    const rMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (rMatch) {
-      const data = JSON.parse(rMatch[0]);
-      if (data.rooms) return { floors: [{ level: 1, label: "一层", rooms: data.rooms }] };
-    }
-  } catch (e) { /* fall through */ }
-  return null;
-}
-
 async function purifyPlayerScript(characterName, rawScript, isMurderer) {
   const prompt = `请纯化玩家角色"${characterName}"的剧本。移除所有提示性、引导性内容（如"谎言建议"、"辩护策略"、"推理提示"、"如何圆谎"等），只保留角色自身的故事背景、个人时间线、任务目标、掌握的信息和随身物品。使用第一人称视角。
 
@@ -167,8 +149,7 @@ async function splitScript(sessionId, onProgress) {
   onProgress("parse", "正在解析剧本结构...");
   const parsed = parseScript(markdown);
 
-  // 从 markdown 中提取场景布局
-  const layout = extractLayoutFromMarkdown(markdown);
+  // 从 markdown 中提取场景布局描述
   const layoutDescription = extractLayoutDescription(markdown);
 
   const result = {
@@ -180,7 +161,6 @@ async function splitScript(sessionId, onProgress) {
       victim: parsed.victim,
       characterNames: parsed.characters?.map(c => c.name) || [],
       clueCount: (parsed.clues?.round1?.length || 0) + (parsed.clues?.round2?.length || 0) + (parsed.clues?.round3?.length || 0),
-      layout,
       layoutDescription,
     },
     characters: {},
@@ -317,7 +297,6 @@ async function saveToRedis(sessionId, result) {
     npcCount: String(npcCount),
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
-    layout: result.meta.layout ? JSON.stringify(result.meta.layout) : "",
     layoutDescription: layoutDescription || "",
     originalMarkdown: (result.meta.originalMarkdown || "").substring(0, 50000),
   });
