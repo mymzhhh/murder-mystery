@@ -425,10 +425,9 @@
     };
 
     async function splitScriptBtn(id) {
-      if (!confirm("切分将解析剧本并用AI纯化角色剧本和线索，可能需要数分钟。继续？")) return;
       var prog = document.getElementById("genProgress");
       prog.style.display = "block";
-      prog.innerHTML = '<div class="progress-steps"></div>';
+      prog.innerHTML = '<div class="progress-steps"><div style="color:var(--gold);">⏳ 正在切分剧本...</div></div>';
       try {
         var res = await fetch("/api/admin/scripts/" + id + "/split", {
           method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }
@@ -447,6 +446,8 @@
                 else if (et === "complete") {
                   prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;font-weight:600;">✅ 切分完成！已入库</div>';
                   loadScripts();
+                } else if (et === "error") {
+                  prog.querySelector(".progress-steps").innerHTML += '<div style="color:var(--danger);margin-top:8px;">❌ ' + esc(d.message || '切分失败') + '</div>';
                 }
               } catch (e) { /* skip */ }
             }
