@@ -199,17 +199,23 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         const splitResult = await splitScript(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
         if (!splitResult.ok) { send("error", { message: splitResult.error }); return res.end(); }
 
-        // 把切分结果从临时id迁移到原sid
-        const tempKeys = await r.keys(`split:${s.sessionId}:*`);
+        // 把切分结果从临时id迁移到原sid（先清旧数据再迁移）
+        const { scanKeys } = require("../modules/redis-client");
+        const oldKeys = await scanKeys(`split:${sid}:*`);
+        if (oldKeys.length > 0) await r.del(...oldKeys);
+
+        const tempKeys = await scanKeys(`split:${s.sessionId}:*`);
+        const pipe2 = r.pipeline();
         for (const k of tempKeys) {
           const newKey = k.replace(s.sessionId, sid);
           const data = await r.hgetall(k);
           if (data && Object.keys(data).length > 0) {
-            await r.del(newKey);
-            await r.hset(newKey, data);
+            // 用hmset确保所有字段都写入
+            pipe2.hset(newKey, data);
           }
-          await r.del(k);
+          pipe2.del(k);
         }
+        await pipe2.exec();
         await r.srem("scripts:split", s.sessionId);
         await r.sadd("scripts:split", sid);
 
