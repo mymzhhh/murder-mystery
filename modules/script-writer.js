@@ -97,15 +97,16 @@ function detectPVE(input) {
  */
 function buildConstraints(userInput, playerCount, npcCount, isPVE, existingSummaries) {
   const pc = Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, playerCount || MAX_PLAYERS));
-  const nc = Math.max(0, Math.min(MAX_NPC, npcCount ?? (isPVE ? 2 : 0)));
+  const nc = Math.max(0, Math.min(MAX_NPC, npcCount ?? 0));
+  const npcLabel = isPVE ? "NPC嫌疑人" : (nc > 0 ? "NPC目击者/关系人（非嫌疑人，提供信息）" : "");
 
   let constraints = `## 【角色数量硬约束 — 必须严格遵守，违者不合格】
 
 1. **玩家角色**：恰好 ${pc} 人（编号 玩家1-玩家${pc}）
-2. **NPC嫌疑人**：${nc > 0 ? `恰好 ${nc} 人（编号 NPC1-NPC${nc}）` : '0人（PVP模式，无需NPC）'}
+2. **NPC角色**：${nc > 0 ? `恰好 ${nc} 人（编号 NPC1-NPC${nc}，角色定位：${npcLabel}）` : '0人'}
 3. **总人数**：${pc + nc} 人（不超过 ${MAX_TOTAL} 人）
-4. 在"玩家角色设定"${nc > 0 ? '和"NPC嫌疑人设定"两个独立章节' : '章节'}中输出，用【玩家】标记
-5. 凶手有且仅有一个（可以是玩家${nc > 0 ? '或NPC' : ''}）
+4. 在"玩家角色设定"${nc > 0 ? '和"NPC角色设定"两个独立章节' : '章节'}中输出
+5. 凶手有且仅有一个（可以是玩家${nc > 0 ? '或NPC' : ''}）${!isPVE ? '（PVP模式下通常凶手在玩家中）' : ''}
 `;
 
   if (existingSummaries && existingSummaries.length > 0) {
