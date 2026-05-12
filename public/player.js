@@ -332,103 +332,104 @@
     window._sidebarTab = "chat";
 
     // 右侧面板：玩家列表 + 标签页（剧本/线索/聊天）
-    // 从布局JSON生成ASCII平面图
     function renderAsciiMap(layout) {
       var rooms = layout.rooms || [];
-      var nameMap = {}; rooms.forEach(function(r) { nameMap[r.id] = r.name; });
+      if (rooms.length === 0) return '';
+      var nameMap = {}, idMap = {};
+      rooms.forEach(function(r) { nameMap[r.id] = r.name; idMap[r.id] = r; });
 
-      // 构建连接矩阵，按楼层分组
+      var connected = {};
+      rooms.forEach(function(r) { (r.exitsTo || []).forEach(function(e) { connected[[r.id,e].sort().join('-')] = true; }); });
+      function linked(a, b) { if (!a || !b) return false; return connected[[a.id,b.id].sort().join('-')]; }
+
       var floors = {};
       rooms.forEach(function(r) { var f = r.floor || 1; if (!floors[f]) floors[f] = []; floors[f].push(r); });
 
       var h = '';
-      var floorNames = Object.keys(floors).sort();
-      floorNames.forEach(function(f, fi) {
-        if (floorNames.length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;">' + (f > 1 ? 'F' + f : '一层') + '</div>';
+      Object.keys(floors).sort().forEach(function(f) {
+        if (Object.keys(floors).length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;">' + (f > 1 ? 'F' + f : '一层') + '</div>';
 
-        var roomList = floors[f];
-        var maxName = 6;
-        roomList.forEach(function(r) {
-          var n = (r.name || r.id).length;
-          if (n > maxName) maxName = n;
-        });
+        var list = floors[f];
+        // 计算最大房间名宽度
+        var w = 6;
+        list.forEach(function(r) { var n = (r.name).length; if (n > w) w = n; });
+        w += 2; // padding
 
-        // 构建连接图：每个房间一行，显示名称和出口
-        h += '<div style="font-family:monospace;font-size:11px;line-height:1.6;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;white-space:pre;overflow-x:auto;">';
+        var leftCol = [], rightCol = [];
+        for (var i = 0; i < list.length; i++) {
+          if (i % 2 === 0) leftCol.push(list[i]); else rightCol.push(list[i]);
+        }
 
-        // 生成ASCII表示
-        var cols = Math.min(4, roomList.length);
-        var rows = Math.ceil(roomList.length / cols);
-        var colW = maxName + 2;
+        h += '<div style="font-family:monospace;font-size:10px;line-height:1.2;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 4px;white-space:pre;overflow-x:auto;color:var(--text);">';
 
-        for (var r = 0; r < rows; r++) {
-          // 上边框
-          var topLine = '';
-          var midLine = '';
-          var botLine = '';
-          for (var c = 0; c < cols; c++) {
-            var idx = r * cols + c;
-            if (idx >= roomList.length) break;
-            var room = roomList[idx];
-            var name = room.name || room.id;
-            var pad = colW - name.length;
-            var leftPad = Math.floor(pad / 2);
-            var rightPad = pad - leftPad;
+        // 生成每行的ASCII
+        var lines = [];
+        var maxRow = Math.max(leftCol.length, rightCol.length);
 
-            var connector = c < cols - 1 && idx + 1 < roomList.length ? '┬' : '┐';
-            if (c === 0) topLine += '┌'; else topLine += '┬';
-            topLine += '─'.repeat(colW) + connector;
+        // 边框字符
+        var BW = '╔'; var BE = '╗'; var BL = '╚'; var BR = '╝';
+        var BV = '║'; var BH = '═'; var BC = '╩';
 
-            midLine += '│' + ' '.repeat(leftPad) + name + ' '.repeat(rightPad) + '│';
-            if (c < cols - 1 && idx + 1 < roomList.length) midLine += ' ';
-          }
-          // 补全行
-          if (r === 0) {
-            h += '<span style="color:var(--gold);">' + esc(topLine) + '</span>\n';
-            h += '<span style="color:var(--text);">' + esc(midLine) + '</span>\n';
-          } else {
-            // 中间行用不同颜色
-            h += '<span style="color:var(--text);">' + esc(midLine) + '</span>\n';
-          }
+        // 函数：生成一行
+        function drawRow(leftR, rightR) {
+          var lName = leftR ? leftR.name : '';
+          var rName = rightR ? rightR.name : '';
+          // 左侧墙与门判断：上下房间连接则开门
+          var lWall = BV;
+          var rWall = BV;
+          var midWall = BC;
 
-          // 底部分隔线（除了最后一行）
-          if (r < rows - 1) {
-            var sepLine = '';
-            for (var c2 = 0; c2 < cols; c2++) {
-              if (r * cols + c2 >= roomList.length) break;
-              if (c2 === 0) sepLine += '├'; else sepLine += '┼';
-              sepLine += '─'.repeat(colW);
-            }
-            sepLine += '┤';
-            h += '<span style="color:var(--gold);">' + esc(sepLine) + '</span>\n';
+          var line = '';
+          line += BV + ' ';
+          line += (lName + ' '.repeat(w)).substring(0, w - 1);
+          // 判断左房间与中间走廊是否有出口
+          var lToCorridor = leftR ? '▓' : ' ';
+          var rToCorridor = rightR ? '▓' : ' ';
+          // 判断左与右是否直连
+          var lrLinked = linked(leftR, rightR);
+          var midSymbol = lrLinked ? '══╡ ╞══' : '══╪══';
+          line += ' ' + BV + lToCorridor + ' 走廊 ' + rToCorridor + BV + ' ';
+          line += (rName + ' '.repeat(w)).substring(0, w - 1);
+          line += ' ' + BV;
+          return line;
+        }
+
+        function drawSep(above, below) {
+          var lLinked = linked(above, below) || linked(below, above);
+          var lSep = lLinked ? '  ▓▓  ' : BH.repeat(w - 1);
+          var rLinked = linked(above, below) || linked(below, above);
+          var rSep = rLinked ? '  ▓▓  ' : BH.repeat(w - 1);
+          return BV + lSep + BC + BH.repeat(8) + BC + rSep + BV;
+        }
+
+        // 顶框
+        lines.push(BW + BH.repeat(w - 1) + BW + BH.repeat(10) + BW + BH.repeat(w - 1) + BE);
+
+        for (var r = 0; r < maxRow; r++) {
+          lines.push(drawRow(leftCol[r], rightCol[r]));
+          if (r < maxRow - 1) {
+            lines.push(drawSep((leftCol[r] || rightCol[r]), (leftCol[r+1] || rightCol[r+1])));
           }
         }
 
-        // 最后一行底线
-        var lastRow = roomList.slice((rows - 1) * cols);
-        var bottomLine = '';
-        for (var bc = 0; bc < lastRow.length; bc++) {
-          if (bc === 0) bottomLine += '└'; else bottomLine += '┴';
-          bottomLine += '─'.repeat(colW);
-        }
-        bottomLine += '┘';
-        h += '<span style="color:var(--gold);">' + esc(bottomLine) + '</span>\n';
+        // 底框
+        lines.push(BL + BH.repeat(w - 1) + BL + BH.repeat(10) + BL + BH.repeat(w - 1) + BR);
 
+        lines.forEach(function(l) { h += esc(l) + '\n'; });
         h += '</div>';
 
-        // 房间标注（含特征和出口）
-        h += '<div style="margin-top:6px;font-size:10px;">';
-        roomList.forEach(function(room) {
+        // 图例 + 房间详情
+        h += '<div style="margin-top:4px;font-size:10px;color:var(--text-dim);">▓=连通/门 | ═║=实墙 | 走廊=公共通道</div>';
+        list.forEach(function(room) {
           var isCrime = room.isCrimeScene;
-          var owner = room.owner ? ' <span style="color:var(--text-dim);">(' + esc(room.owner) + ')</span>' : '';
-          h += '<div style="margin:2px 0;padding:4px 6px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.15)' : 'transparent') + ';">';
-          h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>' + owner;
-          if (room.features) h += '<span style="color:#fcd34d;"> 🔎 ' + esc(room.features.join('、').substring(0, 60)) + '</span>';
-          if (room.exitsTo) h += '<span style="color:var(--mystic-light);"> → ' + esc(room.exitsTo.map(function(e) { return nameMap[e] || e; }).join('、')) + '</span>';
-          if (isCrime) h += ' <span style="color:var(--blood-light);">★案发</span>';
+          h += '<div style="margin:1px 0;padding:2px 4px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.12)' : 'transparent') + ';">';
+          h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>';
+          if (room.owner) h += ' <span style="color:var(--text-dim);">(' + esc(room.owner) + ')</span>';
+          if (room.features) h += '<span style="color:#fcd34d;"> 🔎' + esc(room.features.join('、').substring(0, 50)) + '</span>';
+          if (room.exitsTo) h += '<span style="color:var(--mystic-light);"> →' + esc(room.exitsTo.map(function(e) { return nameMap[e] || e; }).join('、')) + '</span>';
+          if (isCrime) h += ' <span style="color:var(--blood-light);">★</span>';
           h += '</div>';
         });
-        h += '</div>';
       });
       return h;
     }
