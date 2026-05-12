@@ -161,7 +161,7 @@ function buildFrameworkPrompt(userInput, cfg) {
     ? `\n### NPC角色列表（${npcCount}人，${npcLabel}）\n用表格列出：编号、姓名、性别、年龄、职业/身份、与死者的关系、角色定位（${npcLabel}）、掌握的信息类型（目击什么/知道什么）。不需要展开详写，后续阶段会为每个NPC单独生成完整剧本。`
     : "\n### NPC角色\n（本次无NPC。）\n";
 
-  const murdererSection = npcCount > 0 ? "四、NPC角色列表\n\n## " : "四、NPC角色（无）\n\n## ";
+  const murdererSection = "\n\n## ";
   const timelineSection = npcCount > 0 ? "六" : "五";
 
   return `【角色数量约束 — 必须严格遵守】
