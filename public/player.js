@@ -335,98 +335,72 @@
     function renderAsciiMap(layout) {
       var rooms = layout.rooms || [];
       if (rooms.length === 0) return '';
-      var nameMap = {}, idMap = {};
-      rooms.forEach(function(r) { nameMap[r.id] = r.name; idMap[r.id] = r; });
+      var nameMap = {}; rooms.forEach(function(r) { nameMap[r.id] = r.name; });
+      var exits = {}; rooms.forEach(function(r) { exits[r.id] = r.exitsTo || []; });
+      function linked(a, b) { if (!a || !b) return false; return (exits[a.id]||[]).includes(b.id); }
 
-      var connected = {};
-      rooms.forEach(function(r) { (r.exitsTo || []).forEach(function(e) { connected[[r.id,e].sort().join('-')] = true; }); });
-      function linked(a, b) { if (!a || !b) return false; return connected[[a.id,b.id].sort().join('-')]; }
-
+      var h = '';
+      // 按楼层分组
       var floors = {};
       rooms.forEach(function(r) { var f = r.floor || 1; if (!floors[f]) floors[f] = []; floors[f].push(r); });
 
-      var h = '';
       Object.keys(floors).sort().forEach(function(f) {
         if (Object.keys(floors).length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;">' + (f > 1 ? 'F' + f : '一层') + '</div>';
 
         var list = floors[f];
-        // 计算最大房间名宽度
-        var w = 6;
-        list.forEach(function(r) { var n = (r.name).length; if (n > w) w = n; });
-        w += 2; // padding
+        var nameW = 5;
+        list.forEach(function(r) { if (r.name.length > nameW) nameW = r.name.length; });
 
-        var leftCol = [], rightCol = [];
-        for (var i = 0; i < list.length; i++) {
-          if (i % 2 === 0) leftCol.push(list[i]); else rightCol.push(list[i]);
-        }
+        // 分成两列
+        var cols = [[], []]; // 左列、右列
+        for (var i = 0; i < list.length; i++) cols[i % 2].push(list[i]);
+        var rows = Math.max(cols[0].length, cols[1].length);
 
-        h += '<div style="font-family:monospace;font-size:10px;line-height:1.2;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 4px;white-space:pre;overflow-x:auto;color:var(--text);">';
+        h += '<div style="font-family:monospace;font-size:10px;line-height:1;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px;white-space:pre;overflow-x:auto;color:var(--text);">';
 
-        // 生成每行的ASCII
-        var lines = [];
-        var maxRow = Math.max(leftCol.length, rightCol.length);
+        // 构建画布：每行=左房|墙|走廊|墙|右房
+        var drawRow = function(lRoom, rRoom) {
+          var ls = lRoom ? lRoom.name : '', rs = rRoom ? rRoom.name : '';
+          var lp = Math.floor((nameW + 2 - ls.length) / 2), rp = Math.floor((nameW + 2 - rs.length) / 2);
+          var ll = ' '.repeat(lp), lr = ' '.repeat(nameW + 2 - ls.length - lp);
+          var rl = ' '.repeat(rp), rr = ' '.repeat(nameW + 2 - rs.length - rp);
+          // 走廊两边是否开门
+          var lOpen = linked(lRoom, rRoom) || linked(rRoom, lRoom);
+          var wallL = lOpen ? ' ' : '│', wallR = lOpen ? ' ' : '│';
+          return '│' + ll + ls + lr + '│' + wallL + ' 走廊 ' + wallR + '│' + rl + rs + rr + '│';
+        };
 
-        // 边框字符
-        var BW = '╔'; var BE = '╗'; var BL = '╚'; var BR = '╝';
-        var BV = '║'; var BH = '═'; var BC = '╩';
-
-        // 函数：生成一行
-        function drawRow(leftR, rightR) {
-          var lName = leftR ? leftR.name : '';
-          var rName = rightR ? rightR.name : '';
-          // 左侧墙与门判断：上下房间连接则开门
-          var lWall = BV;
-          var rWall = BV;
-          var midWall = BC;
-
-          var line = '';
-          line += BV + ' ';
-          line += (lName + ' '.repeat(w)).substring(0, w - 1);
-          // 判断左房间与中间走廊是否有出口
-          var lToCorridor = leftR ? '▓' : ' ';
-          var rToCorridor = rightR ? '▓' : ' ';
-          // 判断左与右是否直连
-          var lrLinked = linked(leftR, rightR);
-          var midSymbol = lrLinked ? '══╡ ╞══' : '══╪══';
-          line += ' ' + BV + lToCorridor + ' 走廊 ' + rToCorridor + BV + ' ';
-          line += (rName + ' '.repeat(w)).substring(0, w - 1);
-          line += ' ' + BV;
-          return line;
-        }
-
-        function drawSep(above, below) {
-          var lLinked = linked(above, below) || linked(below, above);
-          var lSep = lLinked ? '  ▓▓  ' : BH.repeat(w - 1);
-          var rLinked = linked(above, below) || linked(below, above);
-          var rSep = rLinked ? '  ▓▓  ' : BH.repeat(w - 1);
-          return BV + lSep + BC + BH.repeat(8) + BC + rSep + BV;
-        }
+        var divider = function(lAbove, rAbove, lBelow, rBelow) {
+          var lOpen = linked(lAbove, lBelow) || linked(lBelow, lAbove);
+          var rOpen = linked(rAbove, rBelow) || linked(rBelow, rAbove);
+          var ls = lOpen ? ' '.repeat(nameW + 2) : '─'.repeat(nameW + 2);
+          var rs = rOpen ? ' '.repeat(nameW + 2) : '─'.repeat(nameW + 2);
+          return '├' + ls + '┼─────┼' + rs + '┤';
+        };
 
         // 顶框
-        lines.push(BW + BH.repeat(w - 1) + BW + BH.repeat(10) + BW + BH.repeat(w - 1) + BE);
+        h += esc('┌' + '─'.repeat(nameW + 2) + '┬─────┬' + '─'.repeat(nameW + 2) + '┐\n');
 
-        for (var r = 0; r < maxRow; r++) {
-          lines.push(drawRow(leftCol[r], rightCol[r]));
-          if (r < maxRow - 1) {
-            lines.push(drawSep((leftCol[r] || rightCol[r]), (leftCol[r+1] || rightCol[r+1])));
+        for (var r = 0; r < rows; r++) {
+          h += esc(drawRow(cols[0][r], cols[1][r]) + '\n');
+          if (r < rows - 1) {
+            h += esc(divider(cols[0][r], cols[1][r], cols[0][r + 1], cols[1][r + 1]) + '\n');
           }
         }
 
         // 底框
-        lines.push(BL + BH.repeat(w - 1) + BL + BH.repeat(10) + BL + BH.repeat(w - 1) + BR);
-
-        lines.forEach(function(l) { h += esc(l) + '\n'; });
+        h += esc('└' + '─'.repeat(nameW + 2) + '┴─────┴' + '─'.repeat(nameW + 2) + '┘\n');
         h += '</div>';
 
-        // 图例 + 房间详情
-        h += '<div style="margin-top:4px;font-size:10px;color:var(--text-dim);">▓=连通/门 | ═║=实墙 | 走廊=公共通道</div>';
+        // 图例+房间详情
+        h += '<div style="margin-top:4px;font-size:10px;color:var(--text-dim);">─ 墙 │ 走廊缺口=连通门</div>';
         list.forEach(function(room) {
           var isCrime = room.isCrimeScene;
           h += '<div style="margin:1px 0;padding:2px 4px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.12)' : 'transparent') + ';">';
           h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>';
           if (room.owner) h += ' <span style="color:var(--text-dim);">(' + esc(room.owner) + ')</span>';
           if (room.features) h += '<span style="color:#fcd34d;"> 🔎' + esc(room.features.join('、').substring(0, 50)) + '</span>';
-          if (room.exitsTo) h += '<span style="color:var(--mystic-light);"> →' + esc(room.exitsTo.map(function(e) { return nameMap[e] || e; }).join('、')) + '</span>';
+          if (room.exitsTo && room.exitsTo.length) h += '<span style="color:var(--mystic-light);"> →' + esc(room.exitsTo.map(function(e) { return nameMap[e] || e; }).join('、')) + '</span>';
           if (isCrime) h += ' <span style="color:var(--blood-light);">★</span>';
           h += '</div>';
         });
