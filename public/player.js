@@ -335,72 +335,28 @@
     function renderAsciiMap(layout) {
       // 支持新格式{floors}和旧格式{rooms}
       var allFloors = layout.floors || (layout.rooms ? [{level:1, label:'一层', rooms:layout.rooms}] : []);
-      if (allFloors.length === 0) return '';
-      var nameMap = {}, exits = {};
-      allFloors.forEach(function(fl) { (fl.rooms || []).forEach(function(r) { nameMap[r.id] = r.name; exits[r.id] = r.exitsTo || []; }); });
-      function linked(a, b) { if (!a || !b) return false; return (exits[a.id]||[]).includes(b.id); }
+      if (allFloors.length === 0) return '<p style="color:var(--text-dim);">无布局数据</p>';
 
       var h = '';
       allFloors.forEach(function(fl) {
         var list = fl.rooms || [];
         var flLabel = fl.label || (fl.level > 1 ? 'F' + fl.level : '一层');
-        if (allFloors.length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;font-weight:600;">' + esc(flLabel) + '</div>';
-        var nameW = 5;
-        list.forEach(function(r) { if (r.name.length > nameW) nameW = r.name.length; });
-
-        // 分成两列
-        var cols = [[], []]; // 左列、右列
-        for (var i = 0; i < list.length; i++) cols[i % 2].push(list[i]);
-        var rows = Math.max(cols[0].length, cols[1].length);
-
-        h += '<div style="font-family:monospace;font-size:10px;line-height:1;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:6px;white-space:pre;overflow-x:auto;color:var(--text);">';
-
-        // 构建画布：每行=左房|墙|走廊|墙|右房
-        var drawRow = function(lRoom, rRoom) {
-          var ls = lRoom ? lRoom.name : '', rs = rRoom ? rRoom.name : '';
-          var lp = Math.floor((nameW + 2 - ls.length) / 2), rp = Math.floor((nameW + 2 - rs.length) / 2);
-          var ll = ' '.repeat(lp), lr = ' '.repeat(nameW + 2 - ls.length - lp);
-          var rl = ' '.repeat(rp), rr = ' '.repeat(nameW + 2 - rs.length - rp);
-          // 走廊两边是否开门
-          var lOpen = linked(lRoom, rRoom) || linked(rRoom, lRoom);
-          var wallL = lOpen ? ' ' : '│', wallR = lOpen ? ' ' : '│';
-          return '│' + ll + ls + lr + '│' + wallL + ' 走廊 ' + wallR + '│' + rl + rs + rr + '│';
-        };
-
-        var divider = function(lAbove, rAbove, lBelow, rBelow) {
-          var lOpen = linked(lAbove, lBelow) || linked(lBelow, lAbove);
-          var rOpen = linked(rAbove, rBelow) || linked(rBelow, rAbove);
-          var ls = lOpen ? ' '.repeat(nameW + 2) : '─'.repeat(nameW + 2);
-          var rs = rOpen ? ' '.repeat(nameW + 2) : '─'.repeat(nameW + 2);
-          return '├' + ls + '┼─────┼' + rs + '┤';
-        };
-
-        // 顶框
-        h += esc('┌' + '─'.repeat(nameW + 2) + '┬─────┬' + '─'.repeat(nameW + 2) + '┐\n');
-
-        for (var r = 0; r < rows; r++) {
-          h += esc(drawRow(cols[0][r], cols[1][r]) + '\n');
-          if (r < rows - 1) {
-            h += esc(divider(cols[0][r], cols[1][r], cols[0][r + 1], cols[1][r + 1]) + '\n');
-          }
-        }
-
-        // 底框
-        h += esc('└' + '─'.repeat(nameW + 2) + '┴─────┴' + '─'.repeat(nameW + 2) + '┘\n');
-        h += '</div>';
-
-        // 图例+房间详情
-        h += '<div style="margin-top:4px;font-size:10px;color:var(--text-dim);">─ 墙 │ 走廊缺口=连通门</div>';
+        h += '<div style="font-size:12px;color:var(--gold);margin:8px 0 4px;font-weight:600;">' + esc(flLabel) + '</div>';
         list.forEach(function(room) {
           var isCrime = room.isCrimeScene;
-          h += '<div style="margin:1px 0;padding:2px 4px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.12)' : 'transparent') + ';">';
-          h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>';
-          if (room.owner) h += ' <span style="color:var(--text-dim);">(' + esc(room.owner) + ')</span>';
-          if (room.features) h += '<span style="color:#fcd34d;"> 🔎' + esc(room.features.join('、').substring(0, 50)) + '</span>';
-          if (room.exitsTo && room.exitsTo.length) h += '<span style="color:var(--mystic-light);"> →' + esc(room.exitsTo.map(function(e) { return nameMap[e] || e; }).join('、')) + '</span>';
-          if (isCrime) h += ' <span style="color:var(--blood-light);">★</span>';
+          var owner = room.owner ? ' <span style="color:var(--text-dim);">(' + esc(room.owner) + '的房间)</span>' : '';
+          h += '<div style="margin:2px 0;padding:4px 6px;border-left:3px solid ' + (isCrime ? 'var(--blood)' : 'var(--gold)') + ';background:' + (isCrime ? 'rgba(139,26,26,0.12)' : 'transparent') + ';font-size:11px;">';
+          h += '<strong style="color:' + (isCrime ? 'var(--blood-light)' : 'var(--gold)') + ';">' + esc(room.name || room.id) + '</strong>' + owner;
+          if (room.desc) h += ' <span style="color:var(--text-dim);">— ' + esc(room.desc.substring(0, 80)) + '</span>';
+          if (room.features && room.features.length) h += ' <span style="color:#fcd34d;font-size:10px;">🔎' + esc(room.features.join('、').substring(0, 60)) + '</span>';
+          if (room.exitsTo && room.exitsTo.length) h += ' <span style="color:var(--mystic-light);font-size:10px;"> ↔' + esc(room.exitsTo.join('、')) + '</span>';
+          if (room.stairTo && room.stairTo.length) h += ' <span style="color:var(--warning);font-size:10px;"> 🪜' + esc(room.stairTo.join('、')) + '</span>';
+          if (isCrime) h += ' <span style="color:var(--blood-light);font-size:10px;">★案发现场</span>';
           h += '</div>';
         });
+      });
+      return h;
+    }
       });
       return h;
     }
