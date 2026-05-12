@@ -246,6 +246,7 @@ function setupGameSocket(io) {
           title: parsed.title,
           setting: parsed.setting,
           victim: parsed.victim,
+          layout: parsed.layout,
         };
 
         // 先广播玩家的问题
