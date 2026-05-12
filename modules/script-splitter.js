@@ -63,9 +63,9 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
  * 纯化一段玩家剧本
  */
 function extractLayoutDescription(markdown) {
-  // 提取场景布局的文字描述段落（房间位置描述 → 房间列表之间）
-  const match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=###\s*房间列表)/i);
-  if (match) return match[0].replace(/^###\s*房间位置描述\s*/i, "").trim();
+  // 提取场景布局的文字描述段落（房间位置描述 → 重要约束/下一个##标题/文件末尾）
+  const match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=\n##\s+重要约束|\n##\s+[一二三四五六七八九]|\n#{1,3}\s*阶段|$)/i);
+  if (match) return match[0].replace(/^###\s*房间位置描述[^\n]*\n?/i, "").trim();
   return "";
 }
 
