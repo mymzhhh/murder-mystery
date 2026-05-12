@@ -414,6 +414,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
       victim: {},
       layout: layoutData,
+      layoutDescription: meta.layoutDescription || "",
     };
   } else {
     // 回退：从旧 session 解析

@@ -72,7 +72,7 @@ function setupGameSocket(io) {
           players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isOwner: p.playerId === updatedRoom.ownerId })),
           myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), phaseNarrative: room.aiNarrative || "",
-          scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim, layout: parsed.layout },
+          scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim, layout: parsed.layout, layoutDescription: parsed.layoutDescription || "" },
           allCharacters: parsed.characters || [],
           canStart: allReady, totalSlots: totalPlayerSlots,
         });

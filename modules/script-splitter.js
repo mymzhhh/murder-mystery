@@ -62,6 +62,13 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
 /**
  * 纯化一段玩家剧本
  */
+function extractLayoutDescription(markdown) {
+  // 提取场景布局的文字描述段落（房间位置描述 → 房间列表之间）
+  const match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=###\s*房间列表)/i);
+  if (match) return match[0].replace(/^###\s*房间位置描述\s*/i, "").trim();
+  return "";
+}
+
 function extractLayoutFromMarkdown(markdown) {
   try {
     // 新格式 {floors: [...]}
@@ -162,6 +169,7 @@ async function splitScript(sessionId, onProgress) {
 
   // 从 markdown 中提取场景布局
   const layout = extractLayoutFromMarkdown(markdown);
+  const layoutDescription = extractLayoutDescription(markdown);
 
   const result = {
     sessionId,
@@ -173,6 +181,7 @@ async function splitScript(sessionId, onProgress) {
       characterNames: parsed.characters?.map(c => c.name) || [],
       clueCount: (parsed.clues?.round1?.length || 0) + (parsed.clues?.round2?.length || 0) + (parsed.clues?.round3?.length || 0),
       layout,
+      layoutDescription,
     },
     characters: {},
     clues: [],
@@ -309,6 +318,7 @@ async function saveToRedis(sessionId, result) {
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
     layout: result.meta.layout ? JSON.stringify(result.meta.layout) : "",
+    layoutDescription: layoutDescription || "",
     originalMarkdown: (result.meta.originalMarkdown || "").substring(0, 50000),
   });
 

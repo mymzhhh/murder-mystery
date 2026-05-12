@@ -447,14 +447,17 @@
         }
         h += '</div>';
       } else if (activeTab === 'layout') {
-        // 布局标签：ASCII场景平面图
-        var layout = (gs.scriptSummary && gs.scriptSummary.layout) || null;
+        // 布局标签：显示剧本中的场景布局描述原文
+        var layoutDesc = (gs.scriptSummary && gs.scriptSummary.layoutDescription) || '';
         h += '<div class="sidebar-script" style="max-height:520px;overflow:auto;">';
-        if (layout && layout.rooms) {
+        if (layoutDesc) {
           h += '<h4 style="color:var(--gold);margin-bottom:8px;">📍 场景布局</h4>';
-          h += renderAsciiMap(layout);
-          // 图例
-          h += '<div style="margin-top:8px;font-size:10px;color:var(--text-dim);">★ 案发现场 | 🔗 箭头=出口方向 | 房间按楼层分组</div>';
+          // 简单的Markdown转HTML
+          var descHtml = esc(layoutDesc);
+          descHtml = descHtml.replace(/^###\s+(.+)$/gm, '<div style="font-weight:700;color:var(--gold);margin:10px 0 4px;font-size:13px;">$1</div>');
+          descHtml = descHtml.replace(/\*\*(.+?)\*\*/g, '<strong style="color:var(--gold-light);">$1</strong>');
+          descHtml = descHtml.replace(/^- (.+)$/gm, '<div style="padding:2px 0 2px 8px;border-left:2px solid var(--border);margin:2px 0;font-size:11px;line-height:1.6;">$1</div>');
+          h += '<div style="font-size:11px;line-height:1.7;white-space:pre-wrap;">' + descHtml + '</div>';
         } else {
           h += '<p style="color:var(--text-dim);font-size:12px;">布局数据未生成或剧本中无布局描述。</p>';
           h += '<p style="color:var(--text-dim);font-size:11px;">提示：新生成的剧本包含场景布局图。</p>';
