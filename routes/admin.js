@@ -171,6 +171,18 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   });
 
   // 切分剧本（SSE）
+  function extractTitleFromMarkdown(md) {
+    const m1 = md.match(/\*\*剧本名称\*\*[：:]\s*《?(.+?)》?/);
+    if (m1 && m1[1].length >= 2) return m1[1].trim();
+    const m2 = md.match(/剧本名称[：:]\s*《?(.+?)》?/);
+    if (m2 && m2[1].length >= 2) return m2[1].trim();
+    const m3 = md.match(/^#\s*《(.+?)》/m);
+    if (m3) return m3[1].trim();
+    const m4 = md.match(/^#\s*(?!剧本杀完整剧本)(\S.{2,30})(?:\n|$)/m);
+    if (m4) return m4[1].trim();
+    return "";
+  }
+
   app.post("/api/admin/scripts/:id/split", authMiddleware, adminMiddleware, async (req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
     const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
@@ -219,10 +231,10 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         await r.srem("scripts:split", s.sessionId);
         await r.sadd("scripts:split", sid);
 
-        // 更新meta中的标题
-        const updatedMeta = await r.hgetall(`split:${sid}:meta`);
-        if (updatedMeta && updatedMeta.title === "剧本杀完整剧本" && meta.title) {
-          await r.hset(`split:${sid}:meta`, "title", meta.title);
+        // 修复标题：从原始markdown直接提取，覆盖parser可能产生的错误标题
+        const titleFromMD = extractTitleFromMarkdown(meta.originalMarkdown || "");
+        if (titleFromMD && titleFromMD.length >= 2) {
+          await r.hset(`split:${sid}:meta`, "title", titleFromMD);
         }
 
         // 清理临时session
