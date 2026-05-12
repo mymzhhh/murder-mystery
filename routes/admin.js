@@ -182,7 +182,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       if (session) {
         result = await splitScript(sid, (stage, msg) => send("progress", { stage, message: msg }));
       } else {
-        // Session不存在，从split meta的originalMarkdown恢复
+        // Session不存在，从split meta的originalMarkdown重新切分
         const { getRedis } = require("../modules/game-manager");
         const r = await getRedis();
         const meta = await r.hgetall(`split:${sid}:meta`);
@@ -190,13 +190,74 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           send("error", { message: "剧本不存在" });
           return res.end();
         }
-        // 创建临时session
-        const s = await createSession({ textType: "murder-mystery", topic: meta.title, templateName: "剧本杀" });
-        await addMessage(s.sessionId, "user", meta.title);
-        await addMessage(s.sessionId, "assistant", meta.originalMarkdown);
-        result = await splitScript(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
-        // 清理临时session
-        await deleteSession(s.sessionId);
+        // 创建临时session（用原始sid，避免生成新剧本条目）
+        const { parseScript } = require("../modules/script-parser");
+        const { saveToRedis: splitSave } = require("../modules/script-splitter");
+        const markdown = meta.originalMarkdown;
+        const parsed = parseScript(markdown);
+
+        send("progress", { stage: "parse", message: "正在解析剧本结构..." });
+        // 直接用原sid保存切分结果（不经过splitScript避免创建新session）
+        const layoutDescription = markdown.match(/###\s*房间位置描述[\s\S]*?(?=\n---|\n#+\s|\n##\s+重要约束|$)/i)?.[0]?.replace(/^###\s*房间位置描述[^\n]*\n?/i, "").trim() || "";
+
+        // 删除旧split数据
+        const oldKeys = await r.keys(`split:${sid}:*`);
+        if (oldKeys.length > 0) await r.del(...oldKeys);
+
+        // 保存角色
+        const playerChars = parsed.characters.filter(c => c.roleType !== "npc");
+        const npcChars = parsed.characters.filter(c => c.roleType === "npc");
+        const charNames = parsed.characters.map(c => c.name);
+
+        const pipe = r.pipeline();
+        for (const c of parsed.characters) {
+          const raw = c.script?.fullScript || c.script?.story || "";
+          pipe.hset(`split:${sid}:char:${c.name}`, {
+            name: c.name,
+            playerScript: raw,
+            secret: c.script?.secret || "",
+            isMurderer: c.isMurderer ? "1" : "0",
+            roleType: c.roleType || "player",
+            occupation: c.occupation || "",
+          });
+        }
+        // 保存线索
+        const allClues = [...(parsed.clues?.round1||[]), ...(parsed.clues?.round2||[]), ...(parsed.clues?.round3||[])];
+        let idx = 0;
+        for (const c of allClues) {
+          pipe.hset(`split:${sid}:clue:${c.id || ('X' + (++idx))}`, {
+            id: c.id || ('X' + idx),
+            content: c.content || "",
+            location: c.location || "",
+            round: String(c.round || 1),
+            clueType: c.clueType || "",
+          });
+        }
+        // 保存DM
+        pipe.hset(`split:${sid}:dm`, {
+          openingMonologue: parsed.dmGuide?.openingMonologue?.substring(0,5000)||"",
+          truthReveal: parsed.dmGuide?.truthReveal?.substring(0,5000)||"",
+          murdererName: parsed.murderer?.name||"",
+          murdererMotive: parsed.murderer?.motive?.substring(0,2000)||"",
+          murdererMethod: parsed.murderer?.method?.substring(0,2000)||"",
+        });
+        // 保存meta
+        pipe.hset(`split:${sid}:meta`, {
+          title: parsed.title || meta.title,
+          era: parsed.setting?.era || meta.era || "",
+          location: parsed.setting?.location || meta.location || "",
+          characterNames: JSON.stringify(charNames),
+          playerCount: String(playerChars.length),
+          npcCount: String(npcChars.length),
+          clueCount: String(allClues.length),
+          splitAt: new Date().toISOString(),
+          layoutDescription: layoutDescription,
+          originalMarkdown: markdown.substring(0, 50000),
+        });
+        pipe.sadd("scripts:split", sid);
+        await pipe.exec();
+        send("complete", { ok: true, result: { meta: { title: parsed.title || meta.title, characterNames: charNames, clueCount: allClues.length } } });
+        return res.end();
       }
       if (!result.ok) { send("error", { message: result.error }); return res.end(); }
       send("complete", { ok: true, result });
