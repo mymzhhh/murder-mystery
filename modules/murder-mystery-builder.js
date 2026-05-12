@@ -149,24 +149,23 @@ async function buildMurderMystery(userInput, onProgress, config) {
 function buildFrameworkPrompt(userInput, cfg) {
   const { playerCount, npcCount, isPVE } = cfg;
 
-  // 构建NPC相关行
-  const npcline = npcCount > 0 ? `+ ${npcCount}名NPC嫌疑人` : "（纯PVP，无NPC嫌疑人）";
+  const npcLabel = isPVE ? "NPC嫌疑人" : (npcCount > 0 ? "NPC目击者/关系人" : "");
+  const npcline = npcCount > 0 ? `+ ${npcCount}名${npcLabel}` : "";
   const npcConstraint = npcCount > 0
-    ? `NPC嫌疑人恰好${npcCount}人，编号NPC1-NPC${npcCount}`
-    : "无NPC嫌疑人（PVP模式）";
+    ? `NPC角色恰好${npcCount}人（${npcLabel}），编号NPC1-NPC${npcCount}`
+    : "无NPC（纯PVP玩家互疑）";
 
-  // NPC章节
+  // NPC章节（简洁列表，详细剧本在后续阶段单独生成）
   const npcSection = npcCount > 0
-    ? `\n## 四、NPC嫌疑人设定（恰好${npcCount}人，编号为NPC1-NPC${npcCount}）\n对每个NPC嫌疑人输出：\n- 编号：（NPC1 / NPC2${npcCount >= 3 ? ' / NPC3' : ''}）\n- **姓名**、**年龄**、**性别**、**职业/身份**\n- **角色类型**：【NPC嫌疑人】\n- 外貌特征与性格特点\n- 与死者的关系\n- 表面上的不在场证明\n- **隐藏的秘密**\n- **与案件的关联**（为何被列入嫌疑人范围）\n- 标记是否为凶手（如果凶手是NPC，必须在此标注）\n`
-    : "\n## 四、NPC嫌疑人设定\n（本次为PVP模式，无NPC嫌疑人，所有角色均为玩家。）\n";
+    ? `\n### NPC角色列表（${npcCount}人，${npcLabel}）\n用表格列出：编号、姓名、性别、年龄、职业/身份、与死者的关系、角色定位（${npcLabel}）、掌握的信息类型（目击什么/知道什么）。不需要展开详写，后续阶段会为每个NPC单独生成完整剧本。`
+    : "\n### NPC角色\n（本次无NPC。）\n";
 
-  // 凶手设定章节编号（有NPC时为五，无NPC时为四）
-  const murdererSection = npcCount > 0 ? "四、NPC嫌疑人设定\n\n## " : "四、NPC嫌疑人设定（无）\n\n## ";
+  const murdererSection = npcCount > 0 ? "四、NPC角色列表\n\n## " : "四、NPC角色（无）\n\n## ";
   const timelineSection = npcCount > 0 ? "六" : "五";
 
   return `【角色数量约束 — 必须严格遵守】
 玩家角色：恰好${playerCount}人
-NPC嫌疑人：${npcCount > 0 ? '恰好' + npcCount + '人' : '0人（PVP模式，无需NPC）'}
+${npcConstraint}
 游戏模式：${isPVE ? 'PVE侦探对抗' : 'PVP玩家互疑'}
 总人数：${playerCount + npcCount}人（不超过${LIMITS.maxTotal}人）
 
@@ -223,7 +222,7 @@ async function extractCharactersStructured(framework, cfg) {
 规则：
 1. 必须提取框架中出现的**每一个**角色（包括玩家和NPC），一个都不能漏
 2. 【玩家】角色 type = "player"，位于"玩家角色设定"章节
-3. 【NPC嫌疑人】角色 type = "npc"，位于"NPC嫌疑人设定"章节（无此章节则全部为player）
+3. 【NPC嫌疑人】角色 type = "npc"，位于"NPC角色列表"章节（无此章节则全部为player）
 4. 凶手有且仅有一个，isMurderer = true
 5. 按玩家先、NPC后的顺序排列
 
