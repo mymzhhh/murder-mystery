@@ -99,7 +99,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   for (let i = 0; i < npcChars.length; i++) {
     const ch = npcChars[i];
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
-    const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
+    const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length, cfg.isPVE, cfg.npcCount);
     const isWitness = !cfg.isPVE;
     const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location, victim: cfg?.victim }, isWitness);
     // 单人本NPC需要更丰富内容，token加量
@@ -395,12 +395,12 @@ function extractNpcRelevantSection(framework, npcName) {
   return parts.join('\n\n').substring(0, 8000);
 }
 
-function buildNpcPrompt(ch, framework, index, total) {
+function buildNpcPrompt(ch, framework, index, total, isPVE, npcCount) {
   // 提取与NPC相关的框架段落
   const npcSection = extractNpcRelevantSection(framework, ch.name);
   // PVP模式下NPC用目击者模板，PVE用嫌疑人模板
-  const npcTemplate = (!cfg.isPVE && cfg.npcCount > 0) ? stages.npcWitnessInstruction : stages.npcInstruction;
-  const isWitness = !cfg.isPVE;
+  const npcTemplate = (!isPVE && npcCount > 0) ? stages.npcWitnessInstruction : stages.npcInstruction;
+  const isWitness = !isPVE;
   const instructions = npcTemplate
     .replace("{characterName}", ch.name)
     .replace("{isMurdererExtra}", ch.isMurderer
