@@ -175,9 +175,31 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
     const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
     try {
-      const result = await splitScript(req.params.id, (stage, msg) => send("progress", { stage, message: msg }));
+      const sid = req.params.id;
+      // 先尝试从split meta恢复原始剧本（session可能已被删除）
+      let result;
+      const session = await getSession(sid);
+      if (session) {
+        result = await splitScript(sid, (stage, msg) => send("progress", { stage, message: msg }));
+      } else {
+        // Session不存在，从split meta的originalMarkdown恢复
+        const { getRedis } = require("../modules/game-manager");
+        const r = await getRedis();
+        const meta = await r.hgetall(`split:${sid}:meta`);
+        if (!meta || !meta.originalMarkdown) {
+          send("error", { message: "剧本不存在" });
+          return res.end();
+        }
+        // 创建临时session
+        const s = await createSession({ textType: "murder-mystery", topic: meta.title, templateName: "剧本杀" });
+        await addMessage(s.sessionId, "user", meta.title);
+        await addMessage(s.sessionId, "assistant", meta.originalMarkdown);
+        result = await splitScript(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
+        // 清理临时session
+        await deleteSession(s.sessionId);
+      }
       if (!result.ok) { send("error", { message: result.error }); return res.end(); }
-      send("complete", { sessionId: req.params.id, meta: result.result.meta });
+      send("complete", { ok: true, result });
     } catch (e) { send("error", { message: e.message }); }
     res.end();
   });
