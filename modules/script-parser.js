@@ -15,8 +15,13 @@ function parseScript(markdown) {
   try {
     // === 标题 ===
     let titleMatch = markdown.match(/^#\s*《(.+?)》/m);
-    if (!titleMatch) titleMatch = markdown.match(/剧本名称[：:]\s*《?(.+?)》?/);
-    if (!titleMatch) titleMatch = markdown.match(/\*\*剧本名称\*\*[：:]\s*《?(.+?)》?/);
+    if (!titleMatch) titleMatch = markdown.match(/^#\s*(.+)/m); // 无书名号的标题
+    // 有书名号的格式
+    if (!titleMatch) titleMatch = markdown.match(/剧本名称[：:]\s*《(.+?)》/);
+    if (!titleMatch) titleMatch = markdown.match(/\*\*剧本名称\*\*[：:]\s*《(.+?)》/);
+    // 无书名号的格式（贪婪匹配，防止单字）
+    if (!titleMatch) titleMatch = markdown.match(/\*\*剧本名称\*\*[：:]\s*(.+)/);
+    if (!titleMatch) titleMatch = markdown.match(/剧本名称[：:]\s*(.+)/);
     result.title = titleMatch ? titleMatch[1].trim() : "未命名剧本";
 
     // === 基本设定 ===
