@@ -100,7 +100,8 @@ async function buildMurderMystery(userInput, onProgress, config) {
     const ch = npcChars[i];
     onProgress("npc_script", `撰写NPC信息 (${i + 1}/${npcChars.length}): ${ch.name}`);
     const prompt = buildNpcPrompt(ch, report.framework, i + 1, npcChars.length);
-    const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location, victim: cfg?.victim });
+    const isWitness = !cfg.isPVE;
+    const systemPrompt = buildNpcSystemPrompt(ch, { era: cfg?.era, location: cfg?.location, victim: cfg?.victim }, isWitness);
     // 单人本NPC需要更丰富内容，token加量
     const npcTokens = isSolo ? TOKENS_PER_STAGE * 1.5 : TOKENS_PER_STAGE;
     const result = await generate(systemPrompt, prompt, { maxTokens: Math.floor(npcTokens), temperature: 0.7 });
@@ -387,10 +388,13 @@ function extractNpcRelevantSection(framework, npcName) {
 function buildNpcPrompt(ch, framework, index, total) {
   // 提取与NPC相关的框架段落
   const npcSection = extractNpcRelevantSection(framework, ch.name);
-  const instructions = stages.npcInstruction
+  // PVP模式下NPC用目击者模板，PVE用嫌疑人模板
+  const npcTemplate = (!cfg.isPVE && cfg.npcCount > 0) ? stages.npcWitnessInstruction : stages.npcInstruction;
+  const isWitness = !cfg.isPVE;
+  const instructions = npcTemplate
     .replace("{characterName}", ch.name)
     .replace("{isMurdererExtra}", ch.isMurderer
-      ? `### 六、完整的作案过程（800-1200字，仅供DM掌握）
+      ? `### ${isWitness ? '六' : '六'}、完整的作案过程（800-1200字，仅供DM掌握）
 该NPC是凶手。详细描述完整的谋杀经过：
 - 作案的时间、地点、使用的工具和方法
 - 从策划到实施的每一个步骤
@@ -425,15 +429,19 @@ function buildCharacterSystemPrompt(ch) {
     : `你是剧本杀角色剧本作家。为【玩家角色】"${ch.name}"撰写4000-6000字的深度个人剧本。使用第一人称纯叙事——只讲述角色的完整人生故事，刻画性格、经历和人际关系。不包含任何策略建议或玩法指导，由玩家自行判断和决策。`;
 }
 
-function buildNpcSystemPrompt(ch, setting) {
+function buildNpcSystemPrompt(ch, setting, isWitness) {
   const era = setting?.era || "";
   const location = setting?.location || "";
   const victimName = setting?.victim || "死者";
   const settingContext = `故事发生在${era}的${location}。死者是${victimName}。`;
 
+  if (isWitness) {
+    return `你是剧本杀角色剧本作家。${settingContext}为【NPC目击者/关系人】"${ch.name}"撰写一份1500-2500字的角色档案。该NPC不是凶手，但他的目击信息和个人秘密让他显得可疑。重点写他看到了什么、听到了什么，以及有什么个人秘密使他表现紧张。**所有内容必须围绕死者${victimName}展开。** 时代背景${era}。`;
+  }
+
   return ch.isMurderer
-    ? `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人 — 凶手】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至六），逐一详细填写。作案过程必须写明具体手法、时间、地点和留下的破绽。**所有内容必须围绕死者${victimName}展开，不要自创其他死者。** 内容必须与${era}的时代背景一致。`
-    : `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至五），逐一详细填写。包含充分的作案动机、完整时间线和秘密，使其成为有说服力的嫌疑人。**所有内容必须围绕死者${victimName}展开，不要自创其他死者。** 内容必须与${era}的时代背景一致。`;
+    ? `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人 — 凶手】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至六），逐一详细填写。作案过程必须写明具体手法、时间、地点和留下的破绽。**所有内容必须围绕死者${victimName}展开。** 内容必须与${era}的时代背景一致。`
+    : `你是剧本杀角色剧本作家。${settingContext}为【NPC嫌疑人】"${ch.name}"撰写一份3000-4000字的详尽角色档案（第三人称纯叙事）。必须严格遵循下方模板中的结构（一至五），逐一详细填写。包含充分的作案动机、完整时间线和秘密，使其成为有说服力的嫌疑人。**所有内容必须围绕死者${victimName}展开。** 内容必须与${era}的时代背景一致。`;
 }
 
 function getCluesSystemPrompt() {
