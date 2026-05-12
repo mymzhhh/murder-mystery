@@ -357,9 +357,6 @@
       });
       return h;
     }
-      });
-      return h;
-    }
 
     function sidePanel(activeTab) {
       activeTab = activeTab || window._sidebarTab || "chat";
