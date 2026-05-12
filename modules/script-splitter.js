@@ -297,7 +297,7 @@ async function saveToRedis(sessionId, result) {
     npcCount: String(npcCount),
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
-    layoutDescription: layoutDescription || "",
+    layoutDescription: result.meta.layoutDescription || "",
     originalMarkdown: (result.meta.originalMarkdown || "").substring(0, 50000),
   });
 
