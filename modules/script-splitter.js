@@ -63,12 +63,17 @@ const SPLIT_SYSTEM_PROMPT = `你是一个剧本杀内容处理专家。你需要
  * 纯化一段玩家剧本
  */
 function extractLayoutDescription(markdown) {
-  // 提取场景布局的文字描述段落
-  // 新格式：停在 重要约束/下一个章节标题/文件末尾
-  let match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=\n##\s+重要约束|\n##\s+[一二三四五六七八九]、|\n#{1,3}\s*阶段|$)/i);
-  // 旧格式兼容：停在 房间列表
+  // 提取场景布局的文字描述段落，停在第一个非布局的章节标题前
+  let match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=\n---|\n#+\s|\n##\s+重要约束|\n##\s+[一二三四五六七八九]、|\n#{1,3}\s*阶段|$)/i);
+  // 旧格式兼容
   if (!match) match = markdown.match(/###\s*房间位置描述[\s\S]*?(?=###\s*房间列表|$)/i);
-  if (match) return match[0].replace(/^###\s*房间位置描述[^\n]*\n?/i, "").trim();
+  if (match) {
+    let text = match[0].replace(/^###\s*房间位置描述[^\n]*\n?/i, "").trim();
+    // 二次清理：如果尾部意外包含了角色内容标记，截断
+    const roleIdx = text.search(/\n(#+\s|玩家角色剧本|NPC嫌疑人信息|第[一二三四五六七八九]部分)/);
+    if (roleIdx > 0) text = text.substring(0, roleIdx).trim();
+    return text;
+  }
   return "";
 }
 
