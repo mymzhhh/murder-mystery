@@ -38,7 +38,7 @@ async function generatePhaseNarrative(script, phase, gameState) {
   const phaseDescriptions = {
     reading: `玩家们正在阅读各自的角色剧本。请生成一段简短的开场白，欢迎玩家进入游戏。${npcInfo}`,
 
-    round1_investigation: `第一轮搜证开始。请生成一段叙事，描述${crimeScene}的基本情况。
+    round1_investigation: `第一轮搜证开始。请生成一段叙事，描述案发现场的基本情况。
 ${npcInfo}${npcs.length > 0 ? '同时提醒玩家：可以向DM询问NPC嫌疑人的相关信息。' : ''}
 列出3-4个可以调查的具体地点。
 剧本设定：${script.setting?.location || '未知地点'}，时代：${script.setting?.era || '未知'}，死者：${script.victim?.name || '未知'}。`,
