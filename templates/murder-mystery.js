@@ -62,23 +62,46 @@ module.exports = {
 案发场所的详细平面布局。后续所有角色的时间线和线索发现地点都必须与此布局一致。
 
 ### 整体描述
-（场所的总体概况：建筑名称/类型、楼层结构、周边环境，300字以上）
+（场所的建筑风格、楼层结构、周边环境，200-300字）
 
 ### 房间列表（JSON格式）
-房间总数限制：每个角色(玩家+NPC+死者)有1个专属房间 + 2-3个公共区域，总数不超过14个。
+每层楼的房间列表。每个角色(玩家+NPC+死者)有1个专属房间 + 2-3个公共区域，总数不超过14个。
+有二楼时一楼需含楼梯间。案发现场标注isCrimeScene:true。
+
 {
-  "rooms": [
-    { "id": "R1", "name": "角色名 的房间", "floor": 1, "owner": "角色名", "desc": "房间特征", "features": ["特征1"], "exitsTo": ["R3"], "isCrimeScene": false },
-    { "id": "R2", "name": "走廊", "floor": 1, "desc": "公共通道", "features": ["地毯","壁画"], "exitsTo": ["R1","R3","R4"], "isCrimeScene": false },
-    { "id": "R3", "name": "死者房间", "floor": 1, "owner": "死者名", "desc": "案发现场", "features": ["尸体","血迹"], "exitsTo": ["R2"], "isCrimeScene": true }
+  "floors": [
+    {
+      "level": 1,
+      "label": "一层",
+      "rooms": [
+        { "id": "R1", "name": "前院", "desc": "入口院落", "features": ["马车","石灯"], "exitsTo": ["R2","R4"] },
+        { "id": "R2", "name": "大厅", "desc": "待客正厅", "features": ["八仙桌","匾额"], "exitsTo": ["R1","R3"] },
+        { "id": "R3", "name": "厨房", "desc": "备餐之处", "features": ["灶台","水缸"], "exitsTo": ["R2","R5"] },
+        { "id": "R4", "name": "内院", "desc": "中央天井", "features": ["水井","花坛"], "exitsTo": ["R1","R5","R6"], "stairTo": ["R8"] },
+        { "id": "R5", "name": "角色名 的房间", "desc": "账房兼卧室", "owner": "角色名", "features": ["账本","床铺"], "exitsTo": ["R3","R4","R6"] },
+        { "id": "R6", "name": "书房", "desc": "读书议事", "features": ["书桌","书架"], "exitsTo": ["R4","R7"], "isCrimeScene": true }
+      ]
+    },
+    {
+      "level": 2,
+      "label": "二层",
+      "rooms": [
+        { "id": "R7", "name": "角色名的房间", "desc": "闺房", "owner": "角色名", "features": ["梳妆台","衣柜"], "exitsTo": ["R4","R9"] },
+        { "id": "R8", "name": "死者卧室", "desc": "主人卧房", "owner": "死者", "features": ["大床","屏风"], "exitsTo": ["R4","R9"] },
+        { "id": "R9", "name": "楼梯间", "desc": "连通一二层", "exitsTo": ["R7","R8"], "stairTo": ["R4"] }
+      ]
+    }
   ]
 }
+
 要求：
 - 每个角色(玩家+NPC+死者)各1个专属房间，标注owner
-- 2-3个公共区域（走廊、大厅、厨房、花园等）
-- 总数6-8个房间，严禁超过10个
-- 每个房间标注出口连接（exitsTo），形成连通图
-- 案发现场是死者的房间，isCrimeScene: true
+- 2-3个公共区域（前院/走廊/大厅/厨房/内院/楼梯间等）
+- 总房间数6-14个
+- 每个房间标注出口连接（exitsTo），形成完整连通图
+- 楼层间通过stairTo连接（如一楼内院的stairTo指向二楼楼梯间）
+- 公共通道（走廊、内院、楼梯间）应连通多个房间
+- 案发现场标注isCrimeScene:true
 
 ## 重要约束（必须严格遵守）：
 1. 玩家角色恰好{playerCount}人，编号玩家1-玩家{playerCount}

@@ -178,31 +178,32 @@ ${userInput}`;
 
 function extractLayout(framework) {
   try {
-    // 在框架中查找 JSON 格式的房间列表
-    const jsonMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      if (data.rooms && data.rooms.length <= 14) return data;
-      if (data.rooms && data.rooms.length > 14) {
-        return { rooms: data.rooms.slice(0, 14), outdoor: data.outdoor };
-      }
+    // 新格式：{floors: [{level, label, rooms: [...]}]}
+    const floorsMatch = framework.match(/\{\s*"floors"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (floorsMatch) {
+      const data = JSON.parse(floorsMatch[0]);
+      if (data.floors) return normalizeLayout(data);
     }
-  } catch (e) { /* JSON parse failed, fall through */ }
-
-  // 尝试修复截断的 JSON
-  try {
-    const partial = framework.match(/\{\s*"rooms"\s*:\s*\[([\s\S]*?)(?:\}\s*\])/);
-    if (partial) {
-      const inner = partial[1];
-      const items = inner.match(/\{[^}]+\}/g);
-      if (items && items.length >= 3 && items.length <= 14) {
-        const rooms = items.map(item => { try { return JSON.parse(item); } catch(e) { return null; } }).filter(Boolean);
-        if (rooms.length >= 3) return { rooms };
-      }
+    // 旧格式兼容：{rooms: [...]}
+    const roomsMatch = framework.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (roomsMatch) {
+      const data = JSON.parse(roomsMatch[0]);
+      if (data.rooms) return { floors: [{ level: 1, label: "一层", rooms: data.rooms.slice(0, 14) }] };
     }
-  } catch (e) {}
-
+  } catch (e) { /* fall through */ }
   return null;
+}
+
+// 规范化：确保所有房间有id
+function normalizeLayout(data) {
+  var idx = 1;
+  (data.floors || []).forEach(function(f) {
+    (f.rooms || []).forEach(function(r) {
+      if (!r.id) r.id = 'R' + (idx++);
+      else idx = Math.max(idx, parseInt(r.id.substring(1)) || 0);
+    });
+  });
+  return data;
 }
 
 async function extractCharactersStructured(framework, cfg) {

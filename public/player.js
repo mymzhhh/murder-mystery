@@ -333,21 +333,18 @@
 
     // 右侧面板：玩家列表 + 标签页（剧本/线索/聊天）
     function renderAsciiMap(layout) {
-      var rooms = layout.rooms || [];
-      if (rooms.length === 0) return '';
-      var nameMap = {}; rooms.forEach(function(r) { nameMap[r.id] = r.name; });
-      var exits = {}; rooms.forEach(function(r) { exits[r.id] = r.exitsTo || []; });
+      // 支持新格式{floors}和旧格式{rooms}
+      var allFloors = layout.floors || (layout.rooms ? [{level:1, label:'一层', rooms:layout.rooms}] : []);
+      if (allFloors.length === 0) return '';
+      var nameMap = {}, exits = {};
+      allFloors.forEach(function(fl) { (fl.rooms || []).forEach(function(r) { nameMap[r.id] = r.name; exits[r.id] = r.exitsTo || []; }); });
       function linked(a, b) { if (!a || !b) return false; return (exits[a.id]||[]).includes(b.id); }
 
       var h = '';
-      // 按楼层分组
-      var floors = {};
-      rooms.forEach(function(r) { var f = r.floor || 1; if (!floors[f]) floors[f] = []; floors[f].push(r); });
-
-      Object.keys(floors).sort().forEach(function(f) {
-        if (Object.keys(floors).length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;">' + (f > 1 ? 'F' + f : '一层') + '</div>';
-
-        var list = floors[f];
+      allFloors.forEach(function(fl) {
+        var list = fl.rooms || [];
+        var flLabel = fl.label || (fl.level > 1 ? 'F' + fl.level : '一层');
+        if (allFloors.length > 1) h += '<div style="font-size:11px;color:var(--text-dim);margin:4px 0;font-weight:600;">' + esc(flLabel) + '</div>';
         var nameW = 5;
         list.forEach(function(r) { if (r.name.length > nameW) nameW = r.name.length; });
 

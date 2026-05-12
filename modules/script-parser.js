@@ -215,10 +215,17 @@ function extractCharacters(text, murdererName) {
 
 function extractLayout(markdown) {
   try {
-    const jsonMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      if (data.rooms && data.rooms.length > 0) return data;
+    // 新格式：{floors: [...]}
+    const fMatch = markdown.match(/\{\s*"floors"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (fMatch) {
+      const data = JSON.parse(fMatch[0]);
+      if (data.floors) return data;
+    }
+    // 旧格式兼容
+    const rMatch = markdown.match(/\{\s*"rooms"\s*:\s*\[[\s\S]*?\}\s*\]\s*\}/);
+    if (rMatch) {
+      const data = JSON.parse(rMatch[0]);
+      if (data.rooms) return { floors: [{ level: 1, label: "一层", rooms: data.rooms }] };
     }
   } catch (e) { /* fall through */ }
   return null;
