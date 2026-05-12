@@ -158,8 +158,8 @@ function buildFrameworkPrompt(userInput, cfg) {
 
   // NPC章节（简洁列表，详细剧本在后续阶段单独生成）
   const npcSection = npcCount > 0
-    ? `\n### NPC角色列表（${npcCount}人，${npcLabel}）\n用表格列出：编号、姓名、性别、年龄、职业/身份、与死者的关系、角色定位（${npcLabel}）、掌握的信息类型（目击什么/知道什么）。不需要展开详写，后续阶段会为每个NPC单独生成完整剧本。`
-    : "\n### NPC角色\n（本次无NPC。）\n";
+    ? `（${npcCount}人，${npcLabel}）\n用表格列出每个NPC的：编号、姓名、性别、年龄、职业/身份、与死者的关系、角色定位（${npcLabel}）、掌握的信息类型（目击什么/知道什么）。不需要展开详写，后续阶段会为每个NPC单独生成完整剧本。`
+    : "（本次无NPC）";
 
   const murdererSection = "\n\n## ";
   const timelineSection = npcCount > 0 ? "六" : "五";
