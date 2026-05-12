@@ -164,11 +164,20 @@ function buildFrameworkPrompt(userInput, cfg) {
   const murdererSection = "\n\n## ";
   const timelineSection = npcCount > 0 ? "六" : "五";
 
+  const totalChars = playerCount + npcCount + 1; // 玩家+NPC+死者（1人）
+  const minRooms = totalChars + 2; // 至少2个公共区域
+  const maxRooms = Math.min(totalChars + 5, 14);
+
   return `【角色数量约束 — 必须严格遵守】
 玩家角色：恰好${playerCount}人
 ${npcConstraint}
 游戏模式：${isPVE ? 'PVE侦探对抗' : 'PVP玩家互疑'}
 总人数：${playerCount + npcCount}人（不超过${LIMITS.maxTotal}人）
+
+【房间数量约束】
+专属房间：${totalChars}个（${playerCount}玩家 + ${npcCount}NPC + 1死者）
+公共区域：2-3个（如大厅、厨房、前院等，不包括走廊/过道/楼梯间）
+总房间数：${minRooms}-${maxRooms}个
 
 【用户需求】
 ${userInput}`;
