@@ -96,7 +96,7 @@ function setupGameSocket(io) {
           await updateRoom(roomCode, { ownerId: newOwner.playerId });
         }
 
-        if (remaining.length === 0) {
+        if (humanRemaining.length === 0) {
           const { getRedis } = require("../modules/game-manager");
           const r2 = await getRedis();
           await r2.srem("rooms:open", roomCode);
