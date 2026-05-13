@@ -147,7 +147,9 @@ async function deleteScript(id) {
 
 /** 注册用户 */
 async function createUser(username, passwordHash, role = "player") {
-  await query("INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING", [username, passwordHash, role]);
+  const existing = await getUser(username);
+  if (existing) throw { code: "23505" }; // 模拟PG唯一约束冲突
+  await query("INSERT INTO users (username, password_hash, role) VALUES ($1,$2,$3)", [username, passwordHash, role]);
 }
 
 /** 登录验证 */
