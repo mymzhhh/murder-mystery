@@ -216,7 +216,6 @@
     function showGame() {
       document.getElementById("lobbyView").style.display = "none";
       document.getElementById("gameView").style.display = "block";
-      console.log("[showGame] phase:", gs.phase, "ownerId:", gs.room?.ownerId, "playerId:", gs.playerId, "chars:", gs.allCharacters?.length);
       if (gs.phase && gs.phase !== "lobby") { renderGame(); return; }
       renderLobbyInGame();
     }
