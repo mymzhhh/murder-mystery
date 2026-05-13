@@ -4,7 +4,7 @@ const { getRoom, updateRoom, getVotes, clearVotes, getPlayers } = require("../mo
 const { getPhaseConfig, getNextPhase, tallyVotes, determineOutcome } = require("../modules/game-engine");
 const { generatePhaseNarrative, generateTruthReveal } = require("../modules/dm-agent");
 
-async function autoAdvancePhase(io, roomCode, parsed) {
+async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
   const room = await getRoom(roomCode);
   if (!room || room.phase === "finished") return;
 
@@ -33,19 +33,24 @@ async function autoAdvancePhase(io, roomCode, parsed) {
     return;
   }
 
-  // 先切换阶段（即时响应），AI叙事异步推送
-  await updateRoom(roomCode, { phase: nextPhase, phaseStartedAt: Date.now() });
+  // 先切换阶段（即时响应）
+  const narrative = preGenNarrative || "";
+  if (narrative) await updateRoom(roomCode, { phase: nextPhase, phaseStartedAt: Date.now(), aiNarrative: narrative });
+  else await updateRoom(roomCode, { phase: nextPhase, phaseStartedAt: Date.now() });
+
   const { getRedis } = require("../modules/game-manager");
   (await (await getRedis())).del(`game:${roomCode}:ready`);
-  io.to(roomCode).emit("phase_changed", { phase: nextPhase, label: getPhaseConfig(nextPhase).label, config: getPhaseConfig(nextPhase), narrative: "" });
+  io.to(roomCode).emit("phase_changed", { phase: nextPhase, label: getPhaseConfig(nextPhase).label, config: getPhaseConfig(nextPhase), narrative });
 
-  // 异步生成叙事并通过narrative事件推送
-  generatePhaseNarrative(parsed, nextPhase, { roomCode }).then(async (n) => {
-    if (n) {
-      await updateRoom(roomCode, { aiNarrative: n });
-      io.to(roomCode).emit("narrative", { text: n });
-    }
-  }).catch(() => {});
+  // 如果没有预生成，则异步生成
+  if (!preGenNarrative) {
+    generatePhaseNarrative(parsed, nextPhase, { roomCode }).then(async (n) => {
+      if (n) {
+        await updateRoom(roomCode, { aiNarrative: n });
+        io.to(roomCode).emit("narrative", { text: n });
+      }
+    }).catch(() => {});
+  }
 
   // 超时提醒
   const autoTimers = {

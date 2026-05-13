@@ -323,8 +323,8 @@ function setupGameSocket(io) {
             io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: cd });
           }
           // 等待叙事生成完成后推进（通常已就绪）
-          await narrativePromise;
-          await autoAdvancePhase(io, roomCode, parsed);
+          const preGenNarrative = await narrativePromise;
+          await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
