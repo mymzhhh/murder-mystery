@@ -68,8 +68,21 @@
 
     try {
       socket = io({ transports: ["websocket", "polling"] });
-      socket.on("connect", function() { loadRooms(); });
-      socket.on("room_state", function(data) { gs = Object.assign(gs, data); showGame(); });
+      socket.on("connect", function() {
+        loadRooms();
+        // 刷新后自动重连房间
+        var savedRoom = sessionStorage.getItem("_roomCode");
+        if (savedRoom && token) {
+          sessionStorage.removeItem("_roomCode");
+          socket.emit("join_room", { roomCode: savedRoom, token: token });
+        }
+      });
+      socket.on("room_state", function(data) {
+        gs = Object.assign(gs, data);
+        // 保存房间码用于刷新后重连
+        if (gs.room && gs.room.roomCode) sessionStorage.setItem("_roomCode", gs.room.roomCode);
+        showGame();
+      });
       socket.on("room_updated", function(data) {
         gs.players = data.players;
         if (data.ownerId) { gs.room = gs.room || {}; gs.room.ownerId = data.ownerId; }
@@ -185,6 +198,7 @@
     }
 
     function leaveRoom() {
+      sessionStorage.removeItem("_roomCode");
       var code = gs.room && gs.room.roomCode;
       if (socket && code) socket.emit("leave_room", { roomCode: code });
     }
