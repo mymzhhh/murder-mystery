@@ -312,7 +312,32 @@
 
     function startGame() {
       if (!confirm("确定开始游戏？AI DM将自动主持整个游戏流程。")) return;
+      // 显示倒计时遮罩
+      var overlay = document.createElement("div");
+      overlay.id = "startCountdown";
+      overlay.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:9999;display:flex;align-items:center;justify-content:center;";
+      var msg = document.createElement("div");
+      msg.style.cssText = "color:var(--gold);font-size:24px;text-align:center;";
+      msg.innerHTML = "AI DM 正在准备游戏...";
+      overlay.appendChild(msg);
+      document.body.appendChild(overlay);
+      // 模拟倒计时
+      var dots = 0;
+      var timer = setInterval(function() {
+        dots = (dots + 1) % 4;
+        var dotStr = ".".repeat(dots) + " ".repeat(3 - dots);
+        msg.innerHTML = "AI DM 正在准备游戏" + dotStr;
+        if (!document.getElementById("startCountdown")) clearInterval(timer);
+      }, 500);
       socket.emit("start_game", { roomCode: gs.room?.roomCode });
+      // 收到 game_started 后移除遮罩
+      var onStarted = function() {
+        var el = document.getElementById("startCountdown");
+        if (el) el.remove();
+        clearInterval(timer);
+        socket.off("game_started", onStarted);
+      };
+      socket.on("game_started", onStarted);
     }
 
     // === 游戏渲染 ===

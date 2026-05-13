@@ -186,18 +186,12 @@ function setupGameSocket(io) {
           const char = parsed.characters?.find(c => c.name === p.characterName);
           if (char) io.to(p.playerId).emit("character_assigned", { characterName: p.characterName, character: char, isMurderer: char.isMurderer || false });
         }
-        // 立即进入游戏（不等待AI叙事）
-        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now() });
-        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative: "" });
-        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative: "" });
+        // 生成开场叙事（约3-5秒延迟，前端有倒计时提示）
+        const narrative = await generatePhaseNarrative(parsed, "reading", {});
+        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: narrative });
+        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative });
+        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative });
         (await getRedis()).srem("rooms:open", roomCode);
-        // 异步生成开场叙事，通过聊天推送
-        generatePhaseNarrative(parsed, "reading", {}).then(async (n) => {
-          if (n) {
-            await updateRoom(roomCode, { aiNarrative: n });
-            io.to(roomCode).emit("narrative", { text: n });
-          }
-        }).catch(() => {});
         // 阶段推进改为全员确认机制，不再用自动计时器
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
     });
