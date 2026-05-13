@@ -107,7 +107,10 @@
       socket.on("ready_update", function(data) {
         gs.readyCount = data.readyCount;
         gs.totalReadyCount = data.totalCount;
-        if (data.advancing) { gs.readyCount = 0; return; }
+        if (data.countdown !== undefined) {
+          gs._countdown = data.countdown;
+          if (data.countdown === 0) { gs.readyCount = 0; gs._countdown = undefined; }
+        }
         updateTopBarReady();
       });
       socket.on("vote_recorded", function(data) { gs.voteTarget = data.target; renderVoting(); });
@@ -739,16 +742,26 @@
     function updateTopBarReady() {
       var btn = document.getElementById("readyBtn");
       if (!btn) return;
+      var cd = gs._countdown;
+      if (cd !== undefined && cd > 0) {
+        btn.textContent = '即将切换... ' + cd;
+        btn.disabled = true;
+        btn.style.opacity = '0.7';
+        btn.style.color = 'var(--gold)';
+        return;
+      }
       var readyCount = gs.readyCount || 0;
       var totalReady = gs.totalReadyCount || 0;
       if (readyCount > 0) {
         btn.textContent = '就绪 ' + readyCount + '/' + totalReady;
         btn.disabled = false;
         btn.style.opacity = '';
+        btn.style.color = '';
       } else {
         btn.textContent = gs._amIReady ? '等待其他人...' : '进入下一阶段';
         btn.disabled = false;
         btn.style.opacity = '';
+        btn.style.color = '';
       }
     }
 

@@ -308,10 +308,16 @@ function setupGameSocket(io) {
         // 广播就绪状态
         io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
 
-        // 所有人就绪则推进
+        // 所有人就绪：倒计时3秒后推进
         if (readyCount >= humanCount) {
           await r.del(readyKey);
-          io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: humanCount, advancing: true });
+          io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 3 });
+
+          // 3秒倒计时
+          for (let cd = 2; cd >= 0; cd--) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: cd });
+          }
           await autoAdvancePhase(io, roomCode, JSON.parse(room.parsedScript || "{}"));
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
