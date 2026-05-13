@@ -218,8 +218,8 @@ function setupGameSocket(io) {
         const clue = pickRandomClue(available);
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
-        // 线索公开：广播给房间内所有玩家
-        io.to(roomCode).emit("clue_received", { clue, foundBy: player?.characterName || player?.playerName || "未知" });
+        const finder = players.find(p => p.playerId === socket.id);
+        io.to(roomCode).emit("clue_received", { clue, foundBy: finder?.characterName || finder?.playerName || "未知" });
       } catch (e) { socket.emit("error", { code: "INVESTIGATE_FAILED", message: e.message }); }
     });
 
