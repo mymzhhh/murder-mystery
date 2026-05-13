@@ -1,13 +1,16 @@
 // PostgreSQL 连接池 — 持久数据存储（剧本/角色/线索/用户）
 const { Pool } = require("pg");
 
-const DATABASE_URL = process.env.DATABASE_URL || "postgresql://murder:murder123@localhost:5432/murder_mystery";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.database_url || "postgresql://murder:murder123@localhost:5432/murder_mystery";
 
 let pool = null;
 
 function getPool() {
   if (!pool) {
-    pool = new Pool({ connectionString: DATABASE_URL, max: 10, idleTimeoutMillis: 30000 });
+    const useSSL = DATABASE_URL.includes('railway.internal'); // 内网用SSL，公网不用
+    const opts = { connectionString: DATABASE_URL, max: 10, idleTimeoutMillis: 30000 };
+    if (useSSL) opts.ssl = { rejectUnauthorized: false };
+    pool = new Pool(opts);
     pool.on("error", (err) => console.error("PG pool error:", err.message));
   }
   return pool;
