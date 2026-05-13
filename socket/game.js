@@ -8,6 +8,8 @@ const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
 
 function setupGameSocket(io) {
+  const disconnectTimers = {}; // 断线重连计时器
+
   io.on("connection", (socket) => {
     console.log(`[socket] ${socket.id}`);
 
@@ -17,6 +19,10 @@ function setupGameSocket(io) {
         if (!user) return socket.emit("error", { code: "AUTH", message: "请先登录" });
         const room = await getRoom(roomCode);
         if (!room) return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });
+
+        // 清除断线计时器（玩家重连成功）
+        const timerKey = roomCode + ":" + socket.id;
+        if (disconnectTimers[timerKey]) { clearTimeout(disconnectTimers[timerKey]); delete disconnectTimers[timerKey]; }
 
         const existing = await getPlayers(roomCode);
         // 过滤掉NPC虚拟玩家
@@ -331,8 +337,31 @@ function setupGameSocket(io) {
       const codes = await (await getRedis()).smembers("rooms:open");
       for (const code of codes) {
         try { await updatePlayer(code, socket.id, { connected: false }); } catch (e) { /* skip */ }
+        // 5分钟后未重连则自动离开房间
+        const timerKey = code + ":" + socket.id;
+        if (disconnectTimers[timerKey]) clearTimeout(disconnectTimers[timerKey]);
+        disconnectTimers[timerKey] = setTimeout(async () => {
+          try {
+            const players = await getPlayers(code);
+            const me = players.find(p => p.playerId === socket.id);
+            if (me && !me.connected) {
+              await removePlayer(code, socket.id);
+              const remaining = await getPlayers(code);
+              const humanRemaining = remaining.filter(p => !p.isNPC);
+              if (humanRemaining.length === 0) {
+                const r = await getRedis();
+                await r.srem("rooms:open", code);
+                await deleteGameRoom(code);
+              } else {
+                io.to(code).emit("room_updated", { players: remaining, ownerId: (await getRoom(code)).ownerId });
+              }
+            }
+          } catch (e) { /* skip */ }
+          delete disconnectTimers[timerKey];
+        }, 5 * 60 * 1000); // 5分钟
       }
     });
+
   });
 }
 
