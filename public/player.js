@@ -215,8 +215,9 @@
     function showGame() {
       document.getElementById("lobbyView").style.display = "none";
       document.getElementById("gameView").style.display = "block";
-      if (gs.phase === "lobby" || gs.phase === "reading" && !gs.myCharacter) renderLobbyInGame();
-      else renderGame();
+      // 重连时如果已在游戏中则直接恢复游戏视图
+      if (gs.phase !== "lobby") { renderGame(); return; }
+      renderLobbyInGame();
     }
 
     function renderLobbyInGame() {
