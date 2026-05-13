@@ -216,7 +216,7 @@
     function showGame() {
       document.getElementById("lobbyView").style.display = "none";
       document.getElementById("gameView").style.display = "block";
-      // 已经在游戏中或重连时直接恢复游戏视图
+      console.log("[showGame] phase:", gs.phase, "ownerId:", gs.room?.ownerId, "playerId:", gs.playerId, "chars:", gs.allCharacters?.length);
       if (gs.phase && gs.phase !== "lobby") { renderGame(); return; }
       renderLobbyInGame();
     }
