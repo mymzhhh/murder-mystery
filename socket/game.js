@@ -9,6 +9,7 @@ const { autoAdvancePhase } = require("./ai-dm");
 
 function setupGameSocket(io) {
   const disconnectTimers = {}; // 断线重连计时器
+  const phaseTimers = {}; // 阶段推进计时器：{roomCode: timerId}
 
   io.on("connection", (socket) => {
     console.log(`[socket] ${socket.id}`);
@@ -103,6 +104,7 @@ function setupGameSocket(io) {
         }
 
         if (humanRemaining.length === 0) {
+          if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
           const { getRedis } = require("../modules/game-manager");
           const r2 = await getRedis();
           await r2.srem("rooms:open", roomCode);
@@ -308,21 +310,52 @@ function setupGameSocket(io) {
         // 广播就绪状态
         io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
 
-        // 所有人就绪：5秒倒计时，期间预生成AI叙事
+        // 启动10分钟推进计时器（仅第一次有人点击时启动）
+        if (readyCount === 1 && !phaseTimers[roomCode]) {
+          phaseTimers[roomCode] = setTimeout(async () => {
+            try {
+              const curRoom = await getRoom(roomCode);
+              if (!curRoom || curRoom.phase === "truth_reveal" || curRoom.phase === "finished") {
+                delete phaseTimers[roomCode];
+                return;
+              }
+              // 10分钟到了，强制推进
+              const r2 = await getRedis();
+              const curPlayers = await getPlayers(roomCode);
+              const curHuman = curPlayers.filter(p => !p.isNPC && p.connected).length;
+              await r2.del(`game:${roomCode}:ready`);
+              io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: curHuman, forceAdvance: true, countdown: 5 });
+              io.to(roomCode).emit("narrative", { text: "⏰ 等待超时，AI DM 将自动进入下一阶段。" });
+
+              const parsed = JSON.parse(curRoom.parsedScript || "{}");
+              const nextPhase = getNextPhase(curRoom.phase);
+              const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
+
+              for (let cd = 4; cd >= 0; cd--) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: curHuman, forceAdvance: true, countdown: cd });
+              }
+              const preGenNarrative = await narrativePromise;
+              await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
+              delete phaseTimers[roomCode];
+            } catch (e) { delete phaseTimers[roomCode]; }
+          }, 10 * 60 * 1000); // 10分钟
+        }
+
+        // 所有人就绪：取消计时器，立即5秒倒计时推进
         if (readyCount >= humanCount) {
+          if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
           await r.del(readyKey);
           io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 5 });
 
           const parsed = JSON.parse(room.parsedScript || "{}");
           const nextPhase = getNextPhase(room.phase);
-          // 预生成叙事（倒计时期间异步执行）
           const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
 
           for (let cd = 4; cd >= 0; cd--) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: cd });
           }
-          // 等待叙事生成完成后推进（通常已就绪）
           const preGenNarrative = await narrativePromise;
           await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
         }
