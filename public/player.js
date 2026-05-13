@@ -70,12 +70,9 @@
       socket = io({ transports: ["websocket", "polling"] });
       socket.on("connect", function() {
         loadRooms();
-        // 刷新后自动重连房间（延迟确保连接稳定）
         var savedRoom = sessionStorage.getItem("_roomCode");
         if (savedRoom && token) {
-          setTimeout(function() {
-            socket.emit("join_room", { roomCode: savedRoom, token: token });
-          }, 500);
+          socket.emit("join_room", { roomCode: savedRoom, token: token });
         }
       });
       socket.on("room_state", function(data) {
