@@ -33,14 +33,21 @@ async function autoAdvancePhase(io, roomCode, parsed) {
     return;
   }
 
-  const narrative = await generatePhaseNarrative(parsed, nextPhase, { roomCode });
-  await updateRoom(roomCode, { phase: nextPhase, phaseStartedAt: Date.now(), aiNarrative: narrative });
-  // 清除就绪状态
+  // 先切换阶段（即时响应），AI叙事异步推送
+  await updateRoom(roomCode, { phase: nextPhase, phaseStartedAt: Date.now() });
   const { getRedis } = require("../modules/game-manager");
   (await (await getRedis())).del(`game:${roomCode}:ready`);
-  io.to(roomCode).emit("phase_changed", { phase: nextPhase, label: getPhaseConfig(nextPhase).label, config: getPhaseConfig(nextPhase), narrative });
+  io.to(roomCode).emit("phase_changed", { phase: nextPhase, label: getPhaseConfig(nextPhase).label, config: getPhaseConfig(nextPhase), narrative: "" });
 
-  // 超时提醒（不再强制推进，改为共识机制）
+  // 异步生成叙事并通过narrative事件推送
+  generatePhaseNarrative(parsed, nextPhase, { roomCode }).then(async (n) => {
+    if (n) {
+      await updateRoom(roomCode, { aiNarrative: n });
+      io.to(roomCode).emit("narrative", { text: n });
+    }
+  }).catch(() => {});
+
+  // 超时提醒
   const autoTimers = {
     reading: 180000, round1_investigation: 300000, round1_discussion: 180000,
     round2_investigation: 300000, round2_discussion: 180000,
