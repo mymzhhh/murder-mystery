@@ -450,48 +450,69 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 async function createGameRoom(scriptSessionId, maxPlayers) {
   const { getRedis } = require("../modules/game-manager");
   const r2 = await getRedis();
-
-  // 尝试从 split 数据加载
-  const meta = await r2.hgetall(`split:${scriptSessionId}:meta`);
   let parsed;
   let allClues = [];
   let characterNames = [];
 
-  if (meta && meta.title) {
-    // 使用切分数据
-    const charKeys = await r2.keys(`split:${scriptSessionId}:char:*`);
-    const clueKeys = await r2.keys(`split:${scriptSessionId}:clue:*`);
-    const dmData = await r2.hgetall(`split:${scriptSessionId}:dm`);
-
-    const pipeline = r2.pipeline();
-    charKeys.forEach(k => pipeline.hgetall(k));
-    clueKeys.forEach(k => pipeline.hgetall(k));
-    const results = await pipeline.exec();
-
-    const characters = [];
-    for (let i = 0; i < results.length; i++) {
-      const d = results[i][1];
-      if (!d) continue;
-      if (d.playerScript !== undefined) {
-        characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret: d.secret } });
-        characterNames.push(d.name);
-      } else {
-        allClues.push(d);
-      }
+  // 优先从 PostgreSQL 加载
+  try {
+    const { getScript } = require("../modules/db");
+    const pgData = await getScript(scriptSessionId);
+    if (pgData && pgData.title) {
+      const characters = (pgData.characters || []).map(c => ({
+        name: c.name, isMurderer: c.is_murderer, occupation: c.occupation || "",
+        roleType: c.role_type || "player", script: { story: c.player_script || "", secret: c.secret || "" }
+      }));
+      characterNames = characters.map(c => c.name);
+      allClues = (pgData.clues || []).map(c => ({
+        id: c.clue_id, content: c.content, location: c.location, round: c.round, clueType: c.clue_type
+      }));
+      parsed = {
+        title: pgData.title,
+        setting: { era: pgData.era, location: pgData.location },
+        characters,
+        clues: { round1: allClues.filter(c => c.round === 1), round2: allClues.filter(c => c.round === 2), round3: allClues.filter(c => c.round === 3), redHerrings: [] },
+        murderer: { name: pgData.dm?.murderer_name || "", motive: pgData.dm?.murderer_motive || "", method: pgData.dm?.murderer_method || "" },
+        dmGuide: { truthReveal: pgData.dm?.truth_reveal || "", openingMonologue: pgData.dm?.opening_monologue || "" },
+        victim: {},
+        layoutDescription: pgData.layout_description || "",
+      };
+      // 加载 OK，直接跳到创建房间
     }
+  } catch (e) { console.warn("[createRoom] PG 读取失败:", e.message); }
 
-    parsed = {
-      title: meta.title,
-      setting: { era: meta.era, location: meta.location },
-      characters,
-      clues: { round1: allClues.filter(c => c.round === "1"), round2: allClues.filter(c => c.round === "2"), round3: allClues.filter(c => c.round === "3"), redHerrings: [] },
-      murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
-      dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
-      victim: {},
-      layoutDescription: meta.layoutDescription || "",
-    };
-  } else {
-    // 回退：从旧 session 解析
+  // 回退：Redis split 数据
+  if (!parsed) {
+    const meta = await r2.hgetall(`split:${scriptSessionId}:meta`);
+    if (meta && meta.title) {
+      const charKeys = await r2.keys(`split:${scriptSessionId}:char:*`);
+      const clueKeys = await r2.keys(`split:${scriptSessionId}:clue:*`);
+      const dmData = await r2.hgetall(`split:${scriptSessionId}:dm`);
+      const pipeline = r2.pipeline();
+      charKeys.forEach(k => pipeline.hgetall(k));
+      clueKeys.forEach(k => pipeline.hgetall(k));
+      const results = await pipeline.exec();
+      const characters = [];
+      for (let i = 0; i < results.length; i++) {
+        const d = results[i][1];
+        if (!d) continue;
+        if (d.playerScript !== undefined) {
+          characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret: d.secret } });
+          characterNames.push(d.name);
+        } else { allClues.push(d); }
+      }
+      parsed = {
+        title: meta.title, setting: { era: meta.era, location: meta.location }, characters,
+        clues: { round1: allClues.filter(c => c.round === "1"), round2: allClues.filter(c => c.round === "2"), round3: allClues.filter(c => c.round === "3"), redHerrings: [] },
+        murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
+        dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
+        victim: {}, layoutDescription: meta.layoutDescription || "",
+      };
+    }
+  }
+
+  // 回退：从 session 解析
+  if (!parsed) {
     const session = await getSession(scriptSessionId);
     if (!session) throw new Error("剧本不存在");
     const markdown = session.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
