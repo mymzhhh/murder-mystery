@@ -288,7 +288,8 @@ function setupGameSocket(io) {
         const { getRedis } = require("../modules/game-manager");
         const r = await getRedis();
         const player = await getPlayer(roomCode, socket.id);
-        if (!player || player.isNPC) return;
+        if (!player) return socket.emit("error", { code: "NOT_IN_ROOM", message: "玩家不在房间内，请刷新页面重新加入" });
+        if (player.isNPC) return;
 
         // 将当前玩家加入就绪集合
         const readyKey = `game:${roomCode}:ready`;
