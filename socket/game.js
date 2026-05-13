@@ -2,8 +2,8 @@
 
 const { verifyToken } = require("../modules/auth");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, clearVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
-const { getPhaseConfig, getPhaseRound, validateAction, getAvailableCluesForPlayer } = require("../modules/game-engine");
-const { generatePhaseNarrative, decideClueForPlayer } = require("../modules/dm-agent");
+const { getPhaseConfig, getPhaseRound, validateAction, getAvailableCluesForPlayer, pickRandomClue } = require("../modules/game-engine");
+const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
 
@@ -186,11 +186,18 @@ function setupGameSocket(io) {
           const char = parsed.characters?.find(c => c.name === p.characterName);
           if (char) io.to(p.playerId).emit("character_assigned", { characterName: p.characterName, character: char, isMurderer: char.isMurderer || false });
         }
-        const narrative = await generatePhaseNarrative(parsed, "reading", {});
-        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: narrative });
-        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative });
-        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative });
+        // 立即进入游戏（不等待AI叙事）
+        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now() });
+        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative: "" });
+        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative: "" });
         (await getRedis()).srem("rooms:open", roomCode);
+        // 异步生成开场叙事，通过聊天推送
+        generatePhaseNarrative(parsed, "reading", {}).then(async (n) => {
+          if (n) {
+            await updateRoom(roomCode, { aiNarrative: n });
+            io.to(roomCode).emit("narrative", { text: n });
+          }
+        }).catch(() => {});
         // 阶段推进改为全员确认机制，不再用自动计时器
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
     });
@@ -208,9 +215,7 @@ function setupGameSocket(io) {
         const available = getAvailableCluesForPlayer(allClues, socket.id, round);
         if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
         const parsed = JSON.parse(room.parsedScript || "{}");
-        const player = players.find(p => p.playerId === socket.id);
-        const myChar = parsed.characters?.find(c => c.name === player?.characterName);
-        const clue = await decideClueForPlayer(parsed, myChar || {}, available, playerClues, round, room.phase);
+        const clue = pickRandomClue(available);
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
         // 线索公开：广播给房间内所有玩家
