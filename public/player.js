@@ -72,6 +72,10 @@
         loadRooms();
         var savedRoom = sessionStorage.getItem("_roomCode");
         if (savedRoom && token) {
+          // 显示重连加载界面
+          document.getElementById("lobbyView").style.display = "none";
+          document.getElementById("gameView").style.display = "block";
+          document.getElementById("gameContent").innerHTML = '<div style=\"text-align:center;padding:60px;color:var(--gold);\"><h3>重新连接中...</h3><p style=\"color:var(--text-dim);\">正在恢复游戏进度</p></div>';
           socket.emit("join_room", { roomCode: savedRoom, token: token });
         }
       });
@@ -212,8 +216,8 @@
     function showGame() {
       document.getElementById("lobbyView").style.display = "none";
       document.getElementById("gameView").style.display = "block";
-      // 重连时如果已在游戏中则直接恢复游戏视图
-      if (gs.phase !== "lobby") { renderGame(); return; }
+      // 已经在游戏中或重连时直接恢复游戏视图
+      if (gs.phase && gs.phase !== "lobby") { renderGame(); return; }
       renderLobbyInGame();
     }
 
