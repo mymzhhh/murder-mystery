@@ -13,6 +13,24 @@ services:
       timeout: 3s
       retries: 5
 
+  postgres:
+    image: postgres:16-alpine
+    container_name: text-gen-pg
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: murder
+      POSTGRES_PASSWORD: murder123
+      POSTGRES_DB: murder_mystery
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U murder -d murder_mystery"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   text-gen-agent:
     build: .
     container_name: text-gen-agent
@@ -22,10 +40,14 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://murder:murder123@postgres:5432/murder_mystery
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
 
 volumes:
   redis-data:
+  pg-data:

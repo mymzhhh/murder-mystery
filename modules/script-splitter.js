@@ -311,8 +311,21 @@ async function saveToRedis(sessionId, result) {
 
   // 索引：将 sessionId 加入已切分剧本集合
   pipeline.sadd("scripts:split", sessionId);
-
   await pipeline.exec();
+
+  // 双写 PostgreSQL（持久存储）
+  try {
+    const { saveSplitScript } = require("./db");
+    await saveSplitScript(sessionId,
+      { title: result.meta.title, era: result.meta.era, location: result.meta.location,
+        playerCount, npcCount, clueCount: result.meta.clueCount,
+        layoutDescription: result.meta.layoutDescription || "",
+        originalMarkdown: result.meta.originalMarkdown || "" },
+      result.characters, result.clues, result.dm);
+    console.log("[split] PostgreSQL 同步完成:", result.meta.title);
+  } catch (e) {
+    console.warn("[split] PostgreSQL 写入失败（Redis 已保存）:", e.message);
+  }
 }
 
 /**

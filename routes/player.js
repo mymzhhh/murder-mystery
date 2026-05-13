@@ -4,30 +4,19 @@ const { v4: uuidv4 } = require("uuid");
 const { getRoom, getPlayers } = require("../modules/game-manager");
 
 function setupPlayerRoutes(app, authMiddleware) {
-  // 可用剧本列表（优先从 split 数据读取）
+  // 可用剧本列表（从 PG 读取）
   app.get("/api/player/scripts", authMiddleware, async (req, res) => {
     try {
-      const { getRedis } = require("../modules/game-manager");
-      const r2 = await getRedis();
-      const splitIds = await r2.smembers("scripts:split");
       const scripts = [];
-
-      for (const id of splitIds) {
-        const meta = await r2.hgetall(`split:${id}:meta`);
-        if (meta && meta.title) {
-          scripts.push({
-            sessionId: id,
-            title: meta.title,
-            topic: meta.title,
-            characterCount: parseInt(meta.playerCount) || 0,
-            textType: "murder-mystery",
-            createdAt: meta.splitAt || "",
-            messageCount: parseInt(meta.clueCount) || 0,
-          });
-        }
-      }
-
-      // 只显示已完成切分的剧本
+      try {
+        const { listScripts } = require("../modules/db");
+        const pgList = await listScripts();
+        pgList.forEach(s => scripts.push({
+          sessionId: s.id, title: s.title, topic: s.title,
+          characterCount: s.player_count || 0, textType: "murder-mystery",
+          createdAt: s.split_at || s.created_at, messageCount: s.clue_count || 0,
+        }));
+      } catch (e) { /* PG不可用 */ }
       res.json({ scripts });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

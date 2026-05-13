@@ -13,33 +13,42 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 剧本列表（含未切分 session + 已切分 split 数据）
   app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const sessions = await listSessions();
-      const scripts = sessions.filter(s => s.textType === "murder-mystery").map(s => ({
-        ...s,
-        characterCount: s.messageCount || undefined, // session暂用messageCount占位
-      }));
+      const scripts = [];
+      // PG 为主源
+      try {
+        const { listScripts } = require("../modules/db");
+        const pgList = await listScripts();
+        pgList.forEach(s => scripts.push({
+          sessionId: s.id, topic: s.title, textType: "murder-mystery",
+          createdAt: s.split_at || s.created_at,
+          characterCount: s.player_count || 0, messageCount: s.clue_count || 0, isSplit: true,
+        }));
+      } catch (e) { /* PG不可用，跳过 */ }
 
-      // 同时读取已切分的剧本（原始session已被删除但split数据保留）
-      const { getRedis } = require("../modules/game-manager");
-      const r2 = await getRedis();
-      const splitIds = await r2.smembers("scripts:split");
-      for (const id of splitIds) {
-        // 避免重复（如果session还在列表中）
-        if (!scripts.find(s => s.sessionId === id)) {
-          const meta = await r2.hgetall(`split:${id}:meta`);
-          if (meta && meta.title) {
-            scripts.push({
-              sessionId: id,
-              topic: meta.title,
-              textType: "murder-mystery",
-              createdAt: meta.splitAt || "",
-              characterCount: parseInt(meta.playerCount) || 0,
-              messageCount: parseInt(meta.clueCount) || 0,
-              isSplit: true,
+      // session（未切分）
+      const sessions = await listSessions();
+      sessions.filter(s => s.textType === "murder-mystery").forEach(s => {
+        if (!scripts.find(x => x.sessionId === s.sessionId)) {
+          scripts.push({ ...s, characterCount: s.messageCount || undefined });
+        }
+      });
+
+      // Redis 补充（未在PG中的切分数据）
+      try {
+        const { getRedis } = require("../modules/game-manager");
+        const r2 = await getRedis();
+        const splitIds = await r2.smembers("scripts:split");
+        for (const id of splitIds) {
+          if (!scripts.find(x => x.sessionId === id)) {
+            const meta = await r2.hgetall(`split:${id}:meta`);
+            if (meta?.title) scripts.push({
+              sessionId: id, topic: meta.title, textType: "murder-mystery",
+              createdAt: meta.splitAt || "", characterCount: parseInt(meta.playerCount) || 0,
+              messageCount: parseInt(meta.clueCount) || 0, isSplit: true,
             });
           }
         }
-      }
+      } catch (e) {}
 
       res.json({ scripts });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -86,6 +95,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       // 从索引中移除
       await r2.srem("scripts:split", sid);
       if (!deleted) return res.status(404).json({ error: "剧本不存在" });
+      // 同步删除 PG 数据
+      try { const { deleteScript: pgDelete } = require("../modules/db"); await pgDelete(sid); } catch (e) {}
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

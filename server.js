@@ -7,6 +7,7 @@ const { Server } = require("socket.io");
 require("dotenv").config();
 
 const { initAdmin } = require("./modules/auth");
+const { initDB } = require("./modules/db");
 const { setupAuthRoutes, authMiddleware, adminMiddleware } = require("./routes/auth");
 const { setupAdminRoutes } = require("./routes/admin");
 const { setupPlayerRoutes } = require("./routes/player");
@@ -48,6 +49,7 @@ process.on("unhandledRejection", (err) => {
 
 // 启动
 (async () => {
+  try { await initDB(); } catch (e) { console.log("[warn] PostgreSQL 初始化失败:", e.message); }
   try { await initAdmin(); } catch (e) { console.log("[warn] Redis不可用，使用内存模式"); }
   server.listen(PORT, () => {
     console.log(`\n  剧本杀平台已启动: http://localhost:${PORT}`);
