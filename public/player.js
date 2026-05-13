@@ -95,7 +95,7 @@
       socket.on("game_started", function(data) { gs.phase = data.phase; gs.narrative = data.narrative || ""; renderGame(); });
       socket.on("phase_changed", function(data) {
         gs.phase = data.phase; gs.phaseConfig = data.config || {};
-        gs.narrative = data.narrative || "AI DM 正在准备阶段叙事...";
+        gs.narrative = data.narrative || "";
         gs._amIReady = false; gs.readyCount = 0; renderGame();
       });
       socket.on("clue_received", function(data) { data.clue.foundByName = data.foundBy; gs.myClues.push(data.clue); renderInvestigation(); });

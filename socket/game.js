@@ -2,7 +2,7 @@
 
 const { verifyToken } = require("../modules/auth");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, clearVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
-const { getPhaseConfig, getPhaseRound, validateAction, getAvailableCluesForPlayer, pickRandomClue } = require("../modules/game-engine");
+const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
@@ -308,17 +308,23 @@ function setupGameSocket(io) {
         // 广播就绪状态
         io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
 
-        // 所有人就绪：倒计时3秒后推进
+        // 所有人就绪：5秒倒计时，期间预生成AI叙事
         if (readyCount >= humanCount) {
           await r.del(readyKey);
-          io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 3 });
+          io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 5 });
 
-          // 3秒倒计时
-          for (let cd = 2; cd >= 0; cd--) {
+          const parsed = JSON.parse(room.parsedScript || "{}");
+          const nextPhase = getNextPhase(room.phase);
+          // 预生成叙事（倒计时期间异步执行）
+          const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
+
+          for (let cd = 4; cd >= 0; cd--) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: cd });
           }
-          await autoAdvancePhase(io, roomCode, JSON.parse(room.parsedScript || "{}"));
+          // 等待叙事生成完成后推进（通常已就绪）
+          await narrativePromise;
+          await autoAdvancePhase(io, roomCode, parsed);
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
