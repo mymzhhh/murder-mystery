@@ -40,7 +40,7 @@ services:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgresql://murder:murder123@postgres:5432/murder_mystery
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-murder}:${POSTGRES_PASSWORD:-murder123}@postgres:5432/${POSTGRES_DB:-murder_mystery}
     restart: unless-stopped
     depends_on:
       redis:
