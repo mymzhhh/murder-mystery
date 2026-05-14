@@ -1,8 +1,8 @@
 // 游戏房间管理 — Redis 持久化
-const { getRedis, scanKeys } = require("./redis-client");
+const { getRedis, scanKeys, ensureRedis } = require("./redis-client");
 const { v4: uuidv4 } = require("uuid");
 
-async function ensureConn() { return getRedis(); }
+async function ensureConn() { return ensureRedis(); }
 
 function genRoomCode() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
