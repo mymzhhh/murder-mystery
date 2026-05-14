@@ -1,27 +1,8 @@
-// 用户认证系统 — Redis 存储
-
+// 用户认证系统 — 复用统一 Redis 客户端 + Token 存 Redis（含 TTL）
 const crypto = require("crypto");
-const Redis = require("ioredis");
+const { getRedis, scanKeys } = require("./redis-client");
 
-const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
-let redis = null;
-
-function getRedis() {
-  if (!redis) {
-    var opts = { lazyConnect: true, maxRetriesPerRequest: null, retryStrategy: function(t) { return Math.min(t * 1000, 10000); }, enableOfflineQueue: true };
-    if (REDIS_URL.startsWith("rediss://")) opts.tls = { rejectUnauthorized: false };
-    redis = new Redis(REDIS_URL, opts);
-    redis.on("error", function() {});
-  }
-  return redis;
-}
-async function ensureConn() {
-  try {
-    const r = getRedis();
-    if (r.status !== "ready" && r.status !== "connecting") await r.connect();
-    return r;
-  } catch(e) { throw new Error("Redis不可用"); }
-}
+const TOKEN_TTL = 24 * 3600; // token 24 小时过期
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString("hex");
@@ -30,27 +11,31 @@ function hashPassword(password) {
 }
 
 function verifyPassword(password, stored) {
+  if (!stored || !stored.includes(":")) return false;
   const [salt, hash] = stored.split(":");
   const verify = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
   return hash === verify;
 }
 
-const TOKENS = new Map(); // token → { username, role, expiry }
+// Token 管理 — 存入 Redis 并设置 TTL，多进程共享 + 自动过期
+async function saveToken(token, data) {
+  const r = getRedis();
+  await r.setex(`token:${token}`, TOKEN_TTL, JSON.stringify(data));
+}
 
 async function register(username, password) {
-  // PostgreSQL 为主存储，Redis 为备份
   try {
     const { createUser } = require("./db");
     await createUser(username, hashPassword(password), "player");
   } catch (e) {
     if (e.code === "23505") return { ok: false, message: "用户名已存在" };
     // PG 不可用时回退到 Redis
-    const r = await ensureConn();
+    const r = getRedis();
     if (await r.exists(`user:${username}`)) return { ok: false, message: "用户名已存在" };
     await r.hset(`user:${username}`, { username, password: hashPassword(password), role: "player", createdAt: new Date().toISOString() });
   }
   const token = crypto.randomBytes(32).toString("hex");
-  TOKENS.set(token, { username, role: "player", expiry: Date.now() + 24 * 3600 * 1000 });
+  await saveToken(token, { username, role: "player" });
   return { ok: true, token, role: "player", username };
 }
 
@@ -62,35 +47,32 @@ async function login(username, password) {
     if (pgUser) user = { username: pgUser.username, password: pgUser.password_hash, role: pgUser.role };
   } catch (e) { /* PG 不可用，回退 */ }
   if (!user) {
-    const r = await ensureConn();
+    const r = getRedis();
     user = await r.hgetall(`user:${username}`);
   }
   if (!user || !user.username) return { ok: false, message: "用户名不存在" };
   if (!verifyPassword(password, user.password)) return { ok: false, message: "密码错误" };
   const token = crypto.randomBytes(32).toString("hex");
-  TOKENS.set(token, { username, role: user.role, expiry: Date.now() + 24 * 3600 * 1000 });
+  await saveToken(token, { username, role: user.role });
   return { ok: true, token, role: user.role, username };
 }
 
-function verifyToken(token) {
-  const data = TOKENS.get(token);
-  if (!data || data.expiry < Date.now()) return null;
-  return data;
+async function verifyToken(token) {
+  const r = getRedis();
+  const raw = await r.get(`token:${token}`);
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch (e) { return null; }
 }
 
-function logout(token) {
-  TOKENS.delete(token);
-}
-
-async function getUser(username) {
-  const r = await ensureConn();
-  return await r.hgetall(`user:${username}`);
+async function logout(token) {
+  const r = getRedis();
+  await r.del(`token:${token}`);
 }
 
 async function listUsers() {
-  const r = await ensureConn();
-  const keys = await r.keys("user:*");
+  const keys = await scanKeys("user:*");
   if (!keys.length) return [];
+  const r = getRedis();
   const pipe = r.pipeline();
   keys.forEach(k => pipe.hgetall(k));
   const results = await pipe.exec();
@@ -98,31 +80,32 @@ async function listUsers() {
 }
 
 async function setRole(username, role) {
-  const r = await ensureConn();
+  const r = getRedis();
   if (!(await r.exists(`user:${username}`))) return false;
   await r.hset(`user:${username}`, "role", role);
   return true;
 }
 
 async function deleteUser(username) {
-  const r = await ensureConn();
+  const r = getRedis();
   await r.del(`user:${username}`);
 }
 
 // 初始化默认管理员账号
 async function initAdmin() {
+  const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
   try {
     const { createUser, getUser } = require("./db");
     const existing = await getUser("admin");
-    if (!existing) await createUser("admin", hashPassword("admin123"), "admin");
+    if (!existing) await createUser("admin", hashPassword(adminPassword), "admin");
   } catch (e) {
     // PG 不可用，Redis 回退
-    const r = await ensureConn();
+    const r = getRedis();
     if (!(await r.exists("user:admin"))) {
-      await r.hset("user:admin", { username: "admin", password: hashPassword("admin123"), role: "admin", createdAt: new Date().toISOString() });
+      await r.hset("user:admin", { username: "admin", password: hashPassword(adminPassword), role: "admin", createdAt: new Date().toISOString() });
     }
     console.log("[auth] 默认管理员已就绪");
   }
 }
 
-module.exports = { register, login, verifyToken, logout, getUser, listUsers, setRole, deleteUser, initAdmin };
+module.exports = { register, login, verifyToken, logout, listUsers, setRole, deleteUser, initAdmin };

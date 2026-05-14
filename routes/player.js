@@ -2,6 +2,7 @@
 
 const { v4: uuidv4 } = require("uuid");
 const { getRoom, getPlayers } = require("../modules/game-manager");
+const { getRedis } = require("../modules/redis-client");
 
 function setupPlayerRoutes(app, authMiddleware) {
   // 可用剧本列表（从 PG 读取）
@@ -23,8 +24,7 @@ function setupPlayerRoutes(app, authMiddleware) {
 
   // 可加入的房间
   app.get("/api/player/rooms", authMiddleware, async (req, res) => {
-    const { getRedis } = require("../modules/game-manager");
-    const r2 = await getRedis();
+    const r2 = getRedis();
     const codes = await r2.smembers("rooms:open");
     const rooms = [];
     for (const code of codes) {
@@ -45,7 +45,7 @@ function setupPlayerRoutes(app, authMiddleware) {
   });
 
   // 创建房间
-  const { createGameRoom } = require("./admin");
+const { createGameRoom } = require("../modules/game-room-creator");
   app.post("/api/player/rooms", authMiddleware, async (req, res) => {
     try {
       const { scriptSessionId, maxPlayers } = req.body;

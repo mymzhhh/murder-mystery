@@ -2,13 +2,15 @@
 
 const { register, login, verifyToken, logout } = require("../modules/auth");
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token) return res.status(401).json({ error: "未登录" });
-  const user = verifyToken(token);
-  if (!user) return res.status(401).json({ error: "登录已过期" });
-  req.user = user;
-  next();
+  try {
+    const user = await verifyToken(token);
+    if (!user) return res.status(401).json({ error: "登录已过期" });
+    req.user = user;
+    next();
+  } catch (e) { next(e); }
 }
 
 function adminMiddleware(req, res, next) {
@@ -42,9 +44,9 @@ function setupAuthRoutes(app) {
     res.json({ username: req.user.username, role: req.user.role });
   });
 
-  app.post("/api/auth/logout", authMiddleware, (req, res) => {
+  app.post("/api/auth/logout", authMiddleware, async (req, res) => {
     const token = req.headers.authorization?.replace("Bearer ", "");
-    logout(token);
+    await logout(token);
     res.json({ success: true });
   });
 }

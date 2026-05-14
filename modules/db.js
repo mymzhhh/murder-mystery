@@ -1,13 +1,17 @@
 // PostgreSQL 连接池 — 持久数据存储（剧本/角色/线索/用户）
 const { Pool } = require("pg");
 
-const DATABASE_URL = process.env.DATABASE_URL || process.env.database_url || "postgresql://murder:murder123@localhost:5432/murder_mystery";
+const DATABASE_URL = process.env.DATABASE_URL || process.env.database_url || "";
 
 let pool = null;
 
 function getPool() {
   if (!pool) {
-    const useSSL = DATABASE_URL.includes('railway.internal'); // 内网用SSL，公网不用
+    if (!DATABASE_URL) throw new Error("DATABASE_URL 未设置，PostgreSQL 不可用");
+    // 自动判断是否需要 SSL：URL 包含 ssl 参数或非本地地址
+    const useSSL = /[?&]ssl(mode)?=(require|true|1)/i.test(DATABASE_URL)
+      || /[?&]sslmode=require/i.test(DATABASE_URL)
+      || /\.(railway\.internal|render\.com|fly\.dev|supabase\.co|neon\.tech|aws\.com)/i.test(DATABASE_URL);
     const opts = { connectionString: DATABASE_URL, max: 10, idleTimeoutMillis: 30000 };
     if (useSSL) opts.ssl = { rejectUnauthorized: false };
     pool = new Pool(opts);

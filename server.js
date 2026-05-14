@@ -53,6 +53,6 @@ process.on("unhandledRejection", (err) => {
   try { await initAdmin(); } catch (e) { console.log("[warn] Redis不可用，使用内存模式"); }
   server.listen(PORT, () => {
     console.log(`\n  剧本杀平台已启动: http://localhost:${PORT}`);
-    console.log(`  默认管理员: admin / admin123\n`);
+    console.log(`  管理员账号: admin（密码由 ADMIN_PASSWORD 环境变量或默认值配置）\n`);
   });
 })();

@@ -49,7 +49,7 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
         await updateRoom(roomCode, { aiNarrative: n });
         io.to(roomCode).emit("narrative", { text: n });
       }
-    }).catch(() => {});
+    }).catch(e => console.warn("[dm] narrative push failed:", e.message));
   }
 
   // 超时提醒

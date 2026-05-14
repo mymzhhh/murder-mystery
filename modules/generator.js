@@ -25,13 +25,9 @@ function getClient() {
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-/**
- * 所有错误均可重试（前几次），后期过滤非网络错误
- */
+/** 前3次无条件重试，后面只重试网络/超时/服务端错误 */
 function canRetry(err, attempt) {
-  // 前3次无条件重试
   if (attempt < 3) return true;
-  // 后面只重试网络/超时/服务端错误
   const msg = String(err.message || "").toLowerCase();
   const code = err.status || err.code || 0;
   return /network|timeout|econn|etimedout|429|502|503|504|socket|connect|reset|abort|closed|refused/i.test(msg)
@@ -39,7 +35,8 @@ function canRetry(err, attempt) {
     || (err.name && /api|connection|timeout/i.test(err.name));
 }
 
-async function generate(systemPrompt, userPrompt, options = {}) {
+/** 内部通用：调用 API 并自动重试 */
+async function _callWithRetry(messages, options = {}) {
   const openai = getClient();
   const model = options.model || defaultModel;
   let lastErr = null;
@@ -50,10 +47,7 @@ async function generate(systemPrompt, userPrompt, options = {}) {
         model,
         max_tokens: options.maxTokens || 4096,
         temperature: options.temperature ?? 0.7,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
+        messages,
       });
       return {
         content: response.choices[0]?.message?.content || "",
@@ -67,7 +61,7 @@ async function generate(systemPrompt, userPrompt, options = {}) {
       lastErr = err;
       if (attempt < MAX_RETRIES && canRetry(err, attempt)) {
         const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
-        console.warn(`[generate] 第${attempt+1}次失败(${err.message})，${delay/1000}s后重试...`);
+        console.warn(`[generate] 第${attempt + 1}次失败(${err.message})，${delay / 1000}s后重试...`);
         await sleep(delay);
         continue;
       }
@@ -77,41 +71,27 @@ async function generate(systemPrompt, userPrompt, options = {}) {
   throw lastErr || new Error("API调用失败");
 }
 
-async function refine(systemPrompt, history, feedback) {
-  const openai = getClient();
-  let lastErr = null;
+async function generate(systemPrompt, userPrompt, options = {}) {
+  return _callWithRetry([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ], options);
+}
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await openai.chat.completions.create({
-        model: defaultModel,
-        max_tokens: 4096,
-        temperature: 0.7,
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...history.map(m => ({ role: m.role, content: m.content })),
-          { role: "user", content: `请根据以下反馈修改上面的文案：\n${feedback}` },
-        ],
-      });
-      return {
-        content: response.choices[0]?.message?.content || "",
-        usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
-        },
-      };
-    } catch (err) {
-      lastErr = err;
-      if (attempt < MAX_RETRIES && canRetry(err, attempt)) {
-        const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
-        console.warn(`[refine] 第${attempt+1}次失败，${delay/1000}s后重试...`);
-        await sleep(delay);
-        continue;
-      }
-      throw err;
-    }
-  }
-  throw lastErr || new Error("API调用失败");
+/**
+ * 基于已有对话历史进行修改（refine）
+ * @param {string} systemPrompt - 系统提示词
+ * @param {Array<{role:string, content:string}>} history - 已有对话历史
+ * @param {string} feedback - 修改反馈
+ * @param {object} options - 可选参数（model, maxTokens, temperature）
+ */
+async function refine(systemPrompt, history, feedback, options = {}) {
+  const messages = [
+    { role: "system", content: systemPrompt },
+    ...history.map(m => ({ role: m.role, content: m.content })),
+    { role: "user", content: `请根据以下反馈修改上面的文案：\n${feedback}` },
+  ];
+  return _callWithRetry(messages, options);
 }
 
 module.exports = { generate, refine };

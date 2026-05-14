@@ -1,5 +1,6 @@
 // Admin API routes
 
+const { getRedis, scanKeys } = require("../modules/redis-client");
 const { createSession, getSession, addMessage, listSessions, deleteSession } = require("../modules/history-manager");
 const { parseScript } = require("../modules/script-parser");
 const { listUsers, setRole, deleteUser } = require("../modules/auth");
@@ -7,7 +8,8 @@ const { writeScript } = require("../modules/script-writer");
 const { reviewScript, reviewAndRevise } = require("../modules/script-reviewer");
 const { splitScript, getSplitData } = require("../modules/script-splitter");
 const { optimizePrompt } = require("../modules/prompt-agent");
-const { createRoom, getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, removePlayer, loadClues } = require("../modules/game-manager");
+const { createGameRoom } = require("../modules/game-room-creator");
+const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/game-manager");
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 剧本列表（含未切分 session + 已切分 split 数据）
@@ -35,8 +37,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
       // Redis 补充（未在PG中的切分数据）
       try {
-        const { getRedis } = require("../modules/game-manager");
-        const r2 = await getRedis();
+        const r2 = getRedis();
         const splitIds = await r2.smembers("scripts:split");
         for (const id of splitIds) {
           if (!scripts.find(x => x.sessionId === id)) {
@@ -48,7 +49,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
             });
           }
         }
-      } catch (e) {}
+      } catch (e) { console.warn("[admin] PG scripts list failed:", e.message); }
 
       res.json({ scripts });
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -59,13 +60,16 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     const { input, config } = req.body;
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    let closed = false;
+    req.on("close", () => { closed = true; });
+    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
     try {
       const result = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
+      if (closed) return;
       if (!result.ok) { send("error", { message: result.error }); return res.end(); }
       send("complete", { sessionId: result.sessionId, summary: result.summary });
-    } catch (err) { send("error", { message: err.message }); }
-    res.end();
+    } catch (err) { if (!closed) send("error", { message: err.message }); }
+    if (!closed) res.end();
   });
 
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
@@ -75,8 +79,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       // 删除 session 数据
       if (await deleteSession(sid)) deleted = true;
       // 删除 split 数据（同时尝试多种 key pattern）
-      const { getRedis } = require("../modules/game-manager");
-      const r2 = await getRedis();
+      const r2 = getRedis();
       if (r2.status !== "ready" && r2.status !== "connecting") await r2.connect();
       const patterns = [
         `split:${sid}:*`,
@@ -84,7 +87,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       ];
       for (const pattern of patterns) {
         try {
-          const keys = await r2.keys(pattern);
+          const keys = await scanKeys(pattern);
           if (keys.length > 0) {
             await r2.del(...keys);
             deleted = true;
@@ -96,7 +99,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       await r2.srem("scripts:split", sid);
       if (!deleted) return res.status(404).json({ error: "剧本不存在" });
       // 同步删除 PG 数据
-      try { const { deleteScript: pgDelete } = require("../modules/db"); await pgDelete(sid); } catch (e) {}
+      try { const { deleteScript: pgDelete } = require("../modules/db"); await pgDelete(sid); } catch (e) { console.warn("[admin] PG deleteScript failed:", e.message); }
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -119,31 +122,28 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
 
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    let closed = false;
+    req.on("close", () => { closed = true; });
+    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
 
     let currentSessionId = null;
 
     try {
-      // 提前创建 session 以便出错时能重试
       currentSessionId = require("uuid").v4();
       send("phase", { phase: "write", message: "正在生成剧本...", sessionId: currentSessionId });
 
-      // Step 2: 生成
       const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
+      if (closed) return;
 
       if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write", sessionId: currentSessionId }); return res.end(); }
       currentSessionId = writeResult.sessionId;
       send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
 
-      // Step 3: 评测 + 修复
       send("phase", { phase: "review", message: "正在评测剧本..." });
       const reviewResult = await reviewAndRevise(currentSessionId, (stage, msg) => {
         send("progress", { stage: "review_" + stage, message: msg });
-        // 追踪最新的 sessionId（重生成会更新）
-        if (stage === "passed" || stage === "failed") {
-          // reviewAndRevise 在内部更新 currentSessionId
-        }
       });
+      if (closed) return;
 
       if (!reviewResult.ok) { send("error", { message: reviewResult.error, phase: "review" }); return res.end(); }
       send("phase", { phase: "review_done", passed: reviewResult.passed, score: reviewResult.finalScore, rounds: reviewResult.totalRounds });
@@ -153,12 +153,11 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         return res.end();
       }
 
-      // Step 4: 切分（reviewAndRevise 已自动切分）
       send("phase", { phase: "split", message: "剧本已评测通过并完成切分！" });
       send("complete", { status: "done", sessionId: reviewResult.sessionId });
 
-    } catch (e) { send("error", { message: e.message }); }
-    res.end();
+    } catch (e) { if (!closed) { try { send("error", { message: e.message }); } catch (_) {} } }
+    if (!closed) res.end();
   });
 
   // 评测剧本（单次）
@@ -173,12 +172,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 评测+重新生成循环（SSE，最多3轮）
   app.post("/api/admin/scripts/:id/review-revise", authMiddleware, adminMiddleware, async (req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    let closed = false;
+    req.on("close", () => { closed = true; });
+    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
     try {
       const result = await reviewAndRevise(req.params.id, (stage, msg) => send("progress", { stage, message: msg }));
-      send("complete", result);
-    } catch (e) { send("error", { message: e.message }); }
-    res.end();
+      if (!closed) send("complete", result);
+    } catch (e) { if (!closed) send("error", { message: e.message }); }
+    if (!closed) res.end();
   });
 
   // 切分剧本（SSE）
@@ -196,7 +197,9 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   app.post("/api/admin/scripts/:id/split", authMiddleware, adminMiddleware, async (req, res) => {
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    const send = (e, d) => res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`);
+    let closed = false;
+    req.on("close", () => { closed = true; });
+    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
     try {
       const sid = req.params.id;
       // 先尝试从split meta恢复原始剧本（session可能已被删除）
@@ -206,8 +209,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         result = await splitScript(sid, (stage, msg) => send("progress", { stage, message: msg }));
       } else {
         // Session不存在，从split meta的originalMarkdown创建临时session再切分
-        const { getRedis } = require("../modules/game-manager");
-        const r = await getRedis();
+        const r = getRedis();
         const meta = await r.hgetall(`split:${sid}:meta`);
         if (!meta || !meta.originalMarkdown) {
           send("error", { message: "剧本不存在" });
@@ -256,8 +258,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       }
       if (!result.ok) { send("error", { message: result.error }); return res.end(); }
       send("complete", { ok: true, result });
-    } catch (e) { send("error", { message: e.message }); }
-    res.end();
+    } catch (e) { if (!closed) send("error", { message: e.message }); }
+    if (!closed) res.end();
   });
 
   // 获取已切分数据
@@ -279,8 +281,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     }
     // 如果session不存在，从split meta中读取保存的原始剧本
     if (!markdown) {
-      const { getRedis } = require("../modules/game-manager");
-      const r = await getRedis();
+      const r = getRedis();
       const meta = await r.hgetall(`split:${req.params.id}:meta`);
       if (meta?.title) {
         if (meta.originalMarkdown && meta.originalMarkdown.length > 100) {
@@ -288,7 +289,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           topic = meta.title;
         } else {
           // 回退：从切分数据重建
-          const charKeys = await r.keys(`split:${req.params.id}:char:*`);
+          const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
           const pipe = r.pipeline();
           charKeys.forEach(k => pipe.hgetall(k));
           const results = await pipe.exec();
@@ -314,13 +315,12 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 查看切分后的剧本文件
   app.get("/api/admin/scripts/:id/split-view", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const { getRedis } = require("../modules/game-manager");
-      const r2 = await getRedis();
+      const r2 = getRedis();
       const meta = await r2.hgetall(`split:${req.params.id}:meta`);
       if (!meta || !meta.title) return res.status(404).json({ error: "切分数据不存在" });
 
-      const charKeys = await r2.keys(`split:${req.params.id}:char:*`);
-      const clueKeys = await r2.keys(`split:${req.params.id}:clue:*`);
+      const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
+      const clueKeys = await scanKeys(`split:${req.params.id}:clue:*`);
       const dmData = await r2.hgetall(`split:${req.params.id}:dm`);
 
       const pipeline = r2.pipeline();
@@ -373,9 +373,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 数据导出
   app.get("/api/admin/export", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const { getRedis } = require("../modules/game-manager");
-      const r = await getRedis();
-      const keys = await r.keys("*");
+      const r = getRedis();
+      const keys = await scanKeys("*");
       const data = {};
       for (const key of keys) {
         const type = await r.type(key);
@@ -395,8 +394,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     try {
       const { data } = req.body;
       if (!data) return res.status(400).json({ error: "无数据" });
-      const { getRedis } = require("../modules/game-manager");
-      const r = await getRedis();
+      const r = getRedis();
       let count = 0;
       for (const [key, info] of Object.entries(data)) {
         if (info.type === "string") await r.set(key, info.val);
@@ -422,8 +420,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   });
 
   app.delete("/api/admin/rooms/:code", authMiddleware, adminMiddleware, async (req, res) => {
-    const { getRedis } = require("../modules/game-manager");
-    const r2 = await getRedis();
+    const r2 = getRedis();
     await r2.srem("rooms:open", req.params.code);
     await deleteGameRoom(req.params.code);
     io.to(req.params.code).emit("game_ended", { message: "房间已被管理员关闭" });
@@ -431,8 +428,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   });
 
   app.get("/api/admin/rooms", authMiddleware, adminMiddleware, async (req, res) => {
-    const { getRedis } = require("../modules/game-manager");
-    const r2 = await getRedis();
+    const r2 = getRedis();
     const codes = await r2.smembers("rooms:open");
     const rooms = [];
     for (const code of codes) {
@@ -445,89 +441,4 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     res.json({ rooms });
   });
 }
-
-// 共享的房间创建逻辑（优先使用切分数据）
-async function createGameRoom(scriptSessionId, maxPlayers) {
-  const { getRedis } = require("../modules/game-manager");
-  const r2 = await getRedis();
-  let parsed;
-  let allClues = [];
-  let characterNames = [];
-
-  // 优先从 PostgreSQL 加载
-  try {
-    const { getScript } = require("../modules/db");
-    const pgData = await getScript(scriptSessionId);
-    if (pgData && pgData.title) {
-      const characters = (pgData.characters || []).map(c => ({
-        name: c.name, isMurderer: c.is_murderer, occupation: c.occupation || "",
-        roleType: c.role_type || "player", script: { story: c.player_script || "", secret: c.secret || "" }
-      }));
-      characterNames = characters.map(c => c.name);
-      allClues = (pgData.clues || []).map(c => ({
-        id: c.clue_id, content: c.content, location: c.location, round: c.round, clueType: c.clue_type
-      }));
-      parsed = {
-        title: pgData.title,
-        setting: { era: pgData.era, location: pgData.location },
-        characters,
-        clues: { round1: allClues.filter(c => c.round === 1), round2: allClues.filter(c => c.round === 2), round3: allClues.filter(c => c.round === 3), redHerrings: [] },
-        murderer: { name: pgData.dm?.murderer_name || "", motive: pgData.dm?.murderer_motive || "", method: pgData.dm?.murderer_method || "" },
-        dmGuide: { truthReveal: pgData.dm?.truth_reveal || "", openingMonologue: pgData.dm?.opening_monologue || "" },
-        victim: {},
-        layoutDescription: pgData.layout_description || "",
-      };
-      // 加载 OK，直接跳到创建房间
-    }
-  } catch (e) { console.warn("[createRoom] PG 读取失败:", e.message); }
-
-  // 回退：Redis split 数据
-  if (!parsed) {
-    const meta = await r2.hgetall(`split:${scriptSessionId}:meta`);
-    if (meta && meta.title) {
-      const charKeys = await r2.keys(`split:${scriptSessionId}:char:*`);
-      const clueKeys = await r2.keys(`split:${scriptSessionId}:clue:*`);
-      const dmData = await r2.hgetall(`split:${scriptSessionId}:dm`);
-      const pipeline = r2.pipeline();
-      charKeys.forEach(k => pipeline.hgetall(k));
-      clueKeys.forEach(k => pipeline.hgetall(k));
-      const results = await pipeline.exec();
-      const characters = [];
-      for (let i = 0; i < results.length; i++) {
-        const d = results[i][1];
-        if (!d) continue;
-        if (d.playerScript !== undefined) {
-          characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret: d.secret } });
-          characterNames.push(d.name);
-        } else { allClues.push(d); }
-      }
-      parsed = {
-        title: meta.title, setting: { era: meta.era, location: meta.location }, characters,
-        clues: { round1: allClues.filter(c => c.round === "1"), round2: allClues.filter(c => c.round === "2"), round3: allClues.filter(c => c.round === "3"), redHerrings: [] },
-        murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
-        dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
-        victim: {}, layoutDescription: meta.layoutDescription || "",
-      };
-    }
-  }
-
-  // 回退：从 session 解析
-  if (!parsed) {
-    const session = await getSession(scriptSessionId);
-    if (!session) throw new Error("剧本不存在");
-    const markdown = session.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
-    parsed = parseScript(markdown);
-    allClues = [...(parsed.clues?.round1 || []), ...(parsed.clues?.round2 || []), ...(parsed.clues?.round3 || [])];
-    characterNames = parsed.characters?.map(c => c.name) || [];
-  }
-
-  const room = await createRoom("system_dm", "AI_DM");
-  await updateRoom(room.roomCode, { scriptSessionId, parsedScript: JSON.stringify(parsed), murdererName: parsed.murderer?.name || "", dmType: "ai", maxPlayers: maxPlayers || 6 });
-  if (allClues.length > 0) await loadClues(room.roomCode, allClues);
-  await r2.sadd("rooms:open", room.roomCode);
-  await removePlayer(room.roomCode, "system_dm");
-  const onlyPlayerNames = (parsed.characters || []).filter(c => c.roleType !== "npc").map(c => c.name);
-  return { roomCode: room.roomCode, title: parsed.title, characterCount: onlyPlayerNames.length, characters: onlyPlayerNames };
-}
-
-module.exports = { setupAdminRoutes, createGameRoom };
+module.exports = { setupAdminRoutes };
