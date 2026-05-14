@@ -16,7 +16,7 @@ function setupGameSocket(io) {
 
     socket.on("join_room", async ({ roomCode, token }) => {
       try {
-        const user = verifyToken(token);
+        const user = await verifyToken(token);
         if (!user) return socket.emit("error", { code: "AUTH", message: "请先登录" });
         const room = await getRoom(roomCode);
         if (!room) return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });

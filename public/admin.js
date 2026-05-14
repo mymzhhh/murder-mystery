@@ -307,7 +307,10 @@
             data.scripts.map(function(s) { return '<option value="' + esc(s.sessionId) + '">' + esc(s.topic.substring(0, 40)) + '</option>'; }).join("");
         }
       })
-      .catch(function() {});
+      .catch(function(e) {
+        console.error("[admin] loadScripts failed:", e.message);
+        document.querySelector("#scriptTable tbody").innerHTML = '<tr><td colspan="4"><div class="state-error">加载剧本失败，请刷新重试</div></td></tr>';
+      });
   }
 
   function deleteScript(id) {
@@ -423,7 +426,10 @@
             '</td></tr>';
         }).join("");
       })
-      .catch(function() {});
+      .catch(function(e) {
+        console.error("[admin] loadUsers failed:", e.message);
+        document.querySelector("#userTable tbody").innerHTML = '<tr><td colspan="4"><div class="state-error">加载用户列表失败，请刷新重试</div></td></tr>';
+      });
   }
 
   function toggleRole(name, newRole) {
@@ -458,7 +464,10 @@
             '</div></div>';
         }).join("");
       })
-      .catch(function() {});
+      .catch(function(e) {
+        console.error("[admin] loadRooms failed:", e.message);
+        document.getElementById("activeRooms").innerHTML = '<div class="state-error">加载房间失败，请刷新重试</div>';
+      });
   }
 
   function createRoom() {
