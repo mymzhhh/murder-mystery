@@ -8,7 +8,7 @@
 </head>
 <body>
   <div class="login-wrapper">
-    <div class="login-card">
+    <div class="login-card stagger">
       <h1>剧本杀</h1>
       <p class="subtitle">AI DM 全自动推理游戏平台</p>
 
@@ -17,98 +17,134 @@
         <button class="tab" onclick="switchTab('register')">注册</button>
       </div>
 
-      <div id="loginForm">
+      <!-- 登录表单 -->
+      <form id="loginForm" autocomplete="off" onsubmit="return doLogin()">
         <div class="form-group">
           <label>用户名</label>
-          <input type="text" id="loginUser" placeholder="请输入用户名" />
+          <input type="text" id="loginUser" class="form-input" placeholder="请输入用户名" autocomplete="username" />
         </div>
         <div class="form-group">
           <label>密码</label>
-          <input type="password" id="loginPass" placeholder="请输入密码" onkeydown="if(event.key==='Enter')doLogin()" />
+          <input type="password" id="loginPass" class="form-input" placeholder="请输入密码" autocomplete="current-password" />
         </div>
-        <button class="btn btn-primary" onclick="doLogin()">登 录</button>
-      </div>
+        <button type="submit" class="btn btn-primary" id="loginBtn">登 录</button>
+      </form>
 
-      <div id="registerForm" style="display:none;">
+      <!-- 注册表单 -->
+      <form id="registerForm" style="display:none;" autocomplete="off" onsubmit="return doRegister()">
         <div class="form-group">
           <label>用户名</label>
-          <input type="text" id="regUser" placeholder="至少2个字符" />
+          <input type="text" id="regUser" class="form-input" placeholder="至少2个字符" autocomplete="off" />
         </div>
         <div class="form-group">
           <label>密码</label>
-          <input type="password" id="regPass" placeholder="至少4个字符" />
+          <input type="password" id="regPass" class="form-input" placeholder="至少4个字符" autocomplete="new-password" />
         </div>
         <div class="form-group">
           <label>确认密码</label>
-          <input type="password" id="regPass2" placeholder="再次输入密码" onkeydown="if(event.key==='Enter')doRegister()" />
+          <input type="password" id="regPass2" class="form-input" placeholder="再次输入密码" autocomplete="new-password" />
         </div>
-        <button class="btn btn-primary" onclick="doRegister()">注 册</button>
-      </div>
+        <button type="submit" class="btn btn-primary" id="registerBtn">注 册</button>
+      </form>
 
       <div class="error-msg" id="errorMsg"></div>
     </div>
   </div>
 
   <script>
-    let mode = "login";
+    var mode = "login";
 
     function switchTab(t) {
       mode = t;
-      document.querySelectorAll(".tab").forEach((el, i) => el.classList.toggle("active", (i === 0 && t === "login") || (i === 1 && t === "register")));
-      document.getElementById("loginForm").style.display = t === "login" ? "block" : "none";
-      document.getElementById("registerForm").style.display = t === "register" ? "block" : "none";
-      document.getElementById("errorMsg").style.display = "none";
+      document.querySelectorAll(".tab").forEach(function(el, i) {
+        el.classList.toggle("active", (i === 0 && t === "login") || (i === 1 && t === "register"));
+      });
+      var loginForm = document.getElementById("loginForm");
+      var registerForm = document.getElementById("registerForm");
+      var errorEl = document.getElementById("errorMsg");
+
+      if (t === "login") {
+        loginForm.style.display = "block";
+        registerForm.style.display = "none";
+        loginForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
+      } else {
+        loginForm.style.display = "none";
+        registerForm.style.display = "block";
+        registerForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
+      }
+      errorEl.style.display = "none";
     }
 
     function showError(msg) {
-      const el = document.getElementById("errorMsg");
-      el.textContent = msg; el.style.display = "block";
+      var el = document.getElementById("errorMsg");
+      el.textContent = msg;
+      el.style.display = "block";
     }
 
-    async function doLogin() {
-      const u = document.getElementById("loginUser").value.trim();
-      const p = document.getElementById("loginPass").value;
-      if (!u || !p) return showError("请输入用户名和密码");
-
-      try {
-        const res = await fetch("/api/auth/login", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showError(data.error);
-
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("username", data.username);
-        localStorage.setItem("role", data.role);
-
-        if (data.role === "admin") location.href = "/admin.html";
-        else location.href = "/player.html";
-      } catch (e) { showError("网络错误"); }
+    function setLoading(btnId, loading) {
+      var btn = document.getElementById(btnId);
+      if (loading) {
+        btn.disabled = true;
+        btn.classList.add("btn-loading");
+        btn.dataset.originalText = btn.textContent;
+      } else {
+        btn.disabled = false;
+        btn.classList.remove("btn-loading");
+        btn.textContent = btn.dataset.originalText || btn.textContent;
+      }
     }
 
-    async function doRegister() {
-      const u = document.getElementById("regUser").value.trim();
-      const p = document.getElementById("regPass").value;
-      const p2 = document.getElementById("regPass2").value;
-      if (!u || !p) return showError("请输入用户名和密码");
-      if (u.length < 2) return showError("用户名至少2个字符");
-      if (p.length < 4) return showError("密码至少4个字符");
-      if (p !== p2) return showError("两次密码不一致");
+    function doLogin() {
+      var u = document.getElementById("loginUser").value.trim();
+      var p = document.getElementById("loginPass").value;
+      if (!u || !p) { showError("请输入用户名和密码"); return false; }
 
-      try {
-        const res = await fetch("/api/auth/register", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username: u, password: p }),
-        });
-        const data = await res.json();
-        if (!res.ok) return showError(data.error);
+      setLoading("loginBtn", true);
+      fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u, password: p }),
+      }).then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+        .then(function(r) {
+          if (!r.ok) { showError(r.data.error); setLoading("loginBtn", false); return; }
+          localStorage.setItem("token", r.data.token);
+          localStorage.setItem("username", r.data.username);
+          localStorage.setItem("role", r.data.role);
+          location.href = r.data.role === "admin" ? "/admin.html" : "/player.html";
+        })
+        .catch(function() { showError("网络错误，请重试"); setLoading("loginBtn", false); });
+      return false;
+    }
 
-        localStorage.setItem("token", data.token);
-        localStorage.setItem("username", data.username);
-        localStorage.setItem("role", data.role);
-        location.href = "/player.html";
-      } catch (e) { showError("网络错误"); }
+    function doRegister() {
+      var u = document.getElementById("regUser").value.trim();
+      var p = document.getElementById("regPass").value;
+      var p2 = document.getElementById("regPass2").value;
+      if (!u || !p) { showError("请输入用户名和密码"); return false; }
+      if (u.length < 2) { showError("用户名至少2个字符"); return false; }
+      if (p.length < 4) { showError("密码至少4个字符"); return false; }
+      if (p !== p2) { showError("两次密码不一致"); return false; }
+
+      setLoading("registerBtn", true);
+      fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: u, password: p }),
+      }).then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
+        .then(function(r) {
+          if (!r.ok) { showError(r.data.error); setLoading("registerBtn", false); return; }
+          localStorage.setItem("token", r.data.token);
+          localStorage.setItem("username", r.data.username);
+          localStorage.setItem("role", r.data.role);
+          location.href = "/player.html";
+        })
+        .catch(function() { showError("网络错误，请重试"); setLoading("registerBtn", false); });
+      return false;
+    }
+
+    // 页面加载时清除旧的认证态（确保不会携带过期token）
+    if (localStorage.getItem("token") && !location.search.includes("stay")) {
+      // 不做自动跳转，用户可能需要重新登录
     }
   </script>
 </body>

@@ -15,39 +15,46 @@
 
   <div class="main-content" id="mainContent">
     <!-- 大厅视图 -->
-    <div id="lobbyView">
+    <div id="lobbyView" class="stagger">
       <div class="grid-2">
+        <!-- 创建房间 -->
         <div class="panel">
           <h3>创建房间</h3>
           <div class="form-group">
             <label>选择剧本</label>
-            <select id="createScriptSelect" onchange="onScriptSelect()" style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:14px;font-family:inherit;">
+            <select id="createScriptSelect" class="form-select" onchange="onScriptSelect()">
               <option value="">-- 选择一个剧本 --</option>
             </select>
           </div>
           <div id="scriptPreview" style="display:none;"></div>
           <div class="form-group">
             <label>游玩人数（由剧本角色数决定）</label>
-            <input type="number" id="createMaxPlayers" value="6" disabled style="width:100%;padding:10px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text2);font-size:14px;opacity:0.6;" />
+            <input type="number" id="createMaxPlayers" value="6" disabled
+              class="form-input" style="opacity:0.6;" />
           </div>
-          <button class="btn btn-success" onclick="createMyRoom()" id="btnCreateRoom" disabled>请先选择剧本</button>
+          <button class="btn btn-success" onclick="createMyRoom()" id="btnCreateRoom" disabled>
+            请先选择剧本
+          </button>
           <div id="createResult" style="margin-top:12px;display:none;"></div>
         </div>
 
+        <!-- 加入房间 -->
         <div class="panel">
           <h3>加入房间</h3>
-          <p style="font-size:13px;color:var(--text2);margin-bottom:12px;">输入朋友分享的房间码即可加入</p>
-          <div style="display:flex;gap:10px;">
-            <input type="text" id="roomCodeInput" placeholder="输入房间码" maxlength="6" style="flex:1;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:20px;font-family:monospace;text-align:center;text-transform:uppercase;letter-spacing:4px;" onkeydown="if(event.key==='Enter')joinRoom()" />
-            <button class="btn btn-primary" onclick="joinRoom()" style="width:auto;">加入</button>
+          <p class="text-sm text-dim mb">输入朋友分享的房间码即可加入</p>
+          <div class="form-inline">
+            <input type="text" id="roomCodeInput" class="form-input form-input-code flex-1"
+              placeholder="输入房间码" maxlength="6" />
+            <button class="btn btn-primary btn-auto" onclick="joinRoom()">加入</button>
           </div>
         </div>
       </div>
 
+      <!-- 可加入的房间 -->
       <div class="panel">
         <h3>可加入的房间</h3>
         <div class="grid-3" id="roomList">
-          <span style="color:var(--text2);">加载中...</span>
+          <div class="state-loading">加载中...</div>
         </div>
       </div>
     </div>
