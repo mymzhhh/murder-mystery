@@ -70,13 +70,34 @@ async function logout(token) {
 }
 
 async function listUsers() {
-  const keys = await scanKeys("user:*");
-  if (!keys.length) return [];
-  const r = getRedis();
-  const pipe = r.pipeline();
-  keys.forEach(k => pipe.hgetall(k));
-  const results = await pipe.exec();
-  return results.map(r => r[1]).filter(u => u && u.username).map(u => ({ username: u.username, role: u.role, createdAt: u.createdAt }));
+  const seen = new Set();
+  const users = [];
+
+  // 优先从 PostgreSQL 读取
+  try {
+    const { listUsers: pgListUsers } = require("./db");
+    const pgUsers = await pgListUsers();
+    pgUsers.forEach(u => { users.push(u); seen.add(u.username); });
+  } catch (e) { console.warn("[auth] PG listUsers failed:", e.message); }
+
+  // Redis 补充（PG 不可用时的回退数据，去重）
+  try {
+    const keys = await scanKeys("user:*");
+    if (keys.length) {
+      const r = getRedis();
+      const pipe = r.pipeline();
+      keys.forEach(k => pipe.hgetall(k));
+      const results = await pipe.exec();
+      results.forEach(r => {
+        const u = r[1];
+        if (u && u.username && !seen.has(u.username)) {
+          users.push({ username: u.username, role: u.role, createdAt: u.createdAt });
+        }
+      });
+    }
+  } catch (e) { console.warn("[auth] Redis listUsers failed:", e.message); }
+
+  return users;
 }
 
 async function setRole(username, role) {

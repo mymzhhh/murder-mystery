@@ -162,4 +162,10 @@ async function getUser(username) {
   return r.rows[0] || null;
 }
 
-module.exports = { getPool, query, initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser };
+/** 列出所有用户 */
+async function listUsers() {
+  const r = await query("SELECT username, role, created_at FROM users ORDER BY created_at DESC");
+  return r.rows.map(u => ({ username: u.username, role: u.role, createdAt: u.created_at }));
+}
+
+module.exports = { getPool, query, initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers };
