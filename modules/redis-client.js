@@ -3,6 +3,7 @@ const Redis = require("ioredis");
 
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 let client = null;
+let connectPromise = null;
 
 function getRedis() {
   if (!client) {
@@ -22,9 +23,28 @@ function getRedis() {
   return client;
 }
 
+/** 确保 Redis 已连接（幂等，多次调用只连一次） */
+async function ensureRedis() {
+  const r = getRedis();
+  if (r.status === "ready") return r;
+  if (r.status === "connecting" || r.status === "connect") {
+    // 正在连接中，等待就绪
+    if (!connectPromise) {
+      connectPromise = new Promise((resolve, reject) => {
+        r.once("ready", () => { connectPromise = null; resolve(r); });
+        r.once("error", (err) => { connectPromise = null; reject(err); });
+      });
+    }
+    return connectPromise;
+  }
+  // 其他状态（wait/close/end），尝试连接
+  connectPromise = r.connect().then(() => r);
+  return connectPromise;
+}
+
 /** 使用 SCAN 替代 KEYS，避免生产环境阻塞 */
 async function scanKeys(pattern, count = 100) {
-  const r = getRedis();
+  const r = await ensureRedis();
   const results = [];
   let cursor = "0";
   do {
@@ -35,4 +55,4 @@ async function scanKeys(pattern, count = 100) {
   return results;
 }
 
-module.exports = { getRedis, scanKeys };
+module.exports = { getRedis, ensureRedis, scanKeys };
