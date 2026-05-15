@@ -168,4 +168,16 @@ async function listUsers() {
   return r.rows.map(u => ({ username: u.username, role: u.role, createdAt: u.created_at }));
 }
 
-module.exports = { initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers };
+/** 更新用户角色 */
+async function updateUserRole(username, role) {
+  const r = await query("UPDATE users SET role=$1 WHERE username=$2", [role, username]);
+  return r.rowCount > 0;
+}
+
+/** 删除用户 */
+async function deleteUser(username) {
+  const r = await query("DELETE FROM users WHERE username=$1", [username]);
+  return r.rowCount > 0;
+}
+
+module.exports = { initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers, updateUserRole, deleteUser };

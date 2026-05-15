@@ -1,7 +1,55 @@
 // 剧本局部修改器 — 根据评测 suggestedPatches 执行精准修改
-// 不重新生成整本，只改 Redis split 数据中的指定字段
+// PG 优先：Redis 无数据时从 PG 同步后再修改
 const { getRedis, scanKeys } = require("./redis-client");
 const { splitScript } = require("./script-splitter");
+
+/** 如果 Redis split 数据不存在，从 PG 同步到 Redis */
+async function ensureSplitInRedis(scriptId) {
+  const meta = await getRedis().hgetall(`split:${scriptId}:meta`);
+  if (meta && meta.title) return; // Redis 已有数据，跳过
+
+  try {
+    const { getScript } = require("./db");
+    const pg = await getScript(scriptId);
+    if (!pg || !pg.title) return;
+    // 写入 meta
+    const metaData = {
+      title: pg.title, era: pg.era || "", location: pg.location || "",
+      playerCount: String(pg.player_count || 0), npcCount: String(pg.npc_count || 0),
+      clueCount: String(pg.clue_count || 0), layoutDescription: pg.layout_description || "",
+      originalMarkdown: (pg.original_markdown || "").substring(0, 50000),
+      splitAt: pg.split_at || new Date().toISOString(),
+      characterNames: JSON.stringify((pg.characters || []).map(c => c.name)),
+    };
+    const r = getRedis();
+    const pipe = r.pipeline();
+    pipe.hset(`split:${scriptId}:meta`, metaData);
+    (pg.characters || []).forEach(c => {
+      pipe.hset(`split:${scriptId}:char:${c.name}`, {
+        name: c.name, playerScript: c.player_script || "", secret: c.secret || "",
+        isMurderer: c.is_murderer ? "1" : "0", roleType: c.role_type || "player",
+        occupation: c.occupation || "",
+      });
+    });
+    (pg.clues || []).forEach(c => {
+      pipe.hset(`split:${scriptId}:clue:${c.clue_id}`, {
+        id: c.clue_id, content: c.content || "", location: c.location || "",
+        round: String(c.round || 1), clueType: c.clue_type || "",
+      });
+    });
+    if (pg.dm) {
+      pipe.hset(`split:${scriptId}:dm`, {
+        openingMonologue: pg.dm.opening_monologue || "",
+        truthReveal: pg.dm.truth_reveal || "",
+        murdererName: pg.dm.murderer_name || "",
+        murdererMotive: pg.dm.murderer_motive || "",
+      });
+    }
+    pipe.sadd("scripts:split", scriptId);
+    await pipe.exec();
+    console.log("[patch] PG 数据已同步到 Redis:", pg.title);
+  } catch (e) { console.warn("[patch] PG→Redis 同步失败:", e.message); }
+}
 
 /** 应用单个 patch 到 split 数据 */
 async function applyPatch(scriptId, patch) {
@@ -82,6 +130,9 @@ async function applyPatch(scriptId, patch) {
 /** 批量应用 patches 后自动重新切分 */
 async function applyPatchesAndReSplit(scriptId, patches) {
   if (!patches || patches.length === 0) return { ok: false, error: "无修改项" };
+
+  // PG 优先：Redis 无数据时从 PG 同步
+  await ensureSplitInRedis(scriptId);
 
   const results = [];
   for (const patch of patches) {

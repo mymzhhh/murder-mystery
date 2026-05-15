@@ -473,19 +473,33 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 数据导出
   app.get("/api/admin/export", authMiddleware, adminMiddleware, async (req, res) => {
     try {
+      // Redis 全量导出
       const r = getRedis();
       const keys = await scanKeys("*");
-      const data = {};
+      const redisData = {};
       for (const key of keys) {
         const type = await r.type(key);
-        if (type === "string") data[key] = { type, val: await r.get(key) };
-        else if (type === "hash") data[key] = { type, val: await r.hgetall(key) };
-        else if (type === "set") data[key] = { type, val: await r.smembers(key) };
-        else if (type === "zset") { const items = await r.zrange(key, 0, -1, "WITHSCORES"); data[key] = { type, val: items }; }
-        else if (type === "list") data[key] = { type, val: await r.lrange(key, 0, -1) };
-        data[key].ttl = await r.ttl(key);
+        if (type === "string") redisData[key] = { type, val: await r.get(key) };
+        else if (type === "hash") redisData[key] = { type, val: await r.hgetall(key) };
+        else if (type === "set") redisData[key] = { type, val: await r.smembers(key) };
+        else if (type === "zset") { const items = await r.zrange(key, 0, -1, "WITHSCORES"); redisData[key] = { type, val: items }; }
+        else if (type === "list") redisData[key] = { type, val: await r.lrange(key, 0, -1) };
+        redisData[key].ttl = await r.ttl(key);
       }
-      res.json({ keys: Object.keys(data).length, data });
+
+      // PG 数据导出
+      let pgData = null;
+      try {
+        const { listScripts, listUsers } = require("../modules/db");
+        const pgScripts = await listScripts();
+        const pgUsers = await listUsers();
+        pgData = { scripts: pgScripts, users: pgUsers };
+      } catch (e) { pgData = { error: e.message }; }
+
+      res.json({
+        redis: { keys: Object.keys(redisData).length, data: redisData },
+        pg: pgData,
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

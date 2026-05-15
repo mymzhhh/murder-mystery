@@ -101,15 +101,33 @@ async function listUsers() {
 }
 
 async function setRole(username, role) {
+  let ok = false;
+  // PG 优先
+  try {
+    const { updateUserRole } = require("./db");
+    ok = await updateUserRole(username, role);
+  } catch (e) { console.warn("[auth] PG setRole failed:", e.message); }
+  // Redis 同步
   const r = getRedis();
-  if (!(await r.exists(`user:${username}`))) return false;
-  await r.hset(`user:${username}`, "role", role);
-  return true;
+  if (await r.exists(`user:${username}`)) {
+    await r.hset(`user:${username}`, "role", role);
+    ok = true;
+  }
+  return ok;
 }
 
 async function deleteUser(username) {
+  let ok = false;
+  // PG 优先
+  try {
+    const { deleteUser: pgDeleteUser } = require("./db");
+    ok = await pgDeleteUser(username);
+  } catch (e) { console.warn("[auth] PG deleteUser failed:", e.message); }
+  // Redis 同步清理
   const r = getRedis();
   await r.del(`user:${username}`);
+  if (!ok) ok = true; // Redis 删除也算成功
+  return ok;
 }
 
 // 初始化默认管理员账号
