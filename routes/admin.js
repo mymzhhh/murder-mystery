@@ -13,6 +13,32 @@ const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/
 const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
+
+  // 辅助：确保 session 存在（PG/Redis 回退重建临时 session）
+  async function ensureSession(id) {
+    let s = await getSession(id);
+    if (s) return s;
+    let markdown = "";
+    let topic = "";
+    // PG
+    try {
+      const { getScript } = require("../modules/db");
+      const pg = await getScript(id);
+      if (pg && pg.original_markdown) { markdown = pg.original_markdown; topic = pg.title; }
+    } catch (e) { /* ignore */ }
+    // Redis split meta
+    if (!markdown) {
+      const meta = await getRedis().hgetall(`split:${id}:meta`);
+      if (meta && meta.originalMarkdown) { markdown = meta.originalMarkdown; topic = meta.title; }
+    }
+    if (!markdown) return null;
+    const ns = await createSession({ textType: "murder-mystery", topic: topic || "剧本杀", templateName: "剧本杀" });
+    await addMessage(ns.sessionId, "user", topic || "");
+    await addMessage(ns.sessionId, "assistant", markdown);
+    return await getSession(ns.sessionId);
+  }
+
+
   // 剧本列表（含未切分 session + 已切分 split 数据）
   app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
     try {
@@ -77,30 +103,32 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     try {
       const sid = req.params.id;
       let deleted = false;
-      // 删除 session 数据
+
+      // 1. 优先删除 PG 数据
+      try {
+        const { deleteScript: pgDelete } = require("../modules/db");
+        await pgDelete(sid);
+        deleted = true;
+      } catch (e) { console.warn("[admin] PG deleteScript failed:", e.message); }
+
+      // 2. 清理 Redis session
       if (await deleteSession(sid)) deleted = true;
-      // 删除 split 数据（同时尝试多种 key pattern）
+
+      // 3. 清理 Redis split 数据
       const r2 = getRedis();
-      if (r2.status !== "ready" && r2.status !== "connecting") await r2.connect();
-      const patterns = [
-        `split:${sid}:*`,
-        `split:${sid}`,
-      ];
+      const patterns = [`split:${sid}:*`, `split:${sid}`];
       for (const pattern of patterns) {
         try {
           const keys = await scanKeys(pattern);
           if (keys.length > 0) {
             await r2.del(...keys);
             deleted = true;
-            console.log(`[delete] 已删除 ${keys.length} 个 key (pattern: ${pattern})`);
           }
-        } catch (e) { console.warn(`[delete] keys(${pattern}) 失败:`, e.message); }
+        } catch (e) { console.warn(`[delete] scanKeys(${pattern}) 失败:`, e.message); }
       }
-      // 从索引中移除
       await r2.srem("scripts:split", sid);
+
       if (!deleted) return res.status(404).json({ error: "剧本不存在" });
-      // 同步删除 PG 数据
-      try { const { deleteScript: pgDelete } = require("../modules/db"); await pgDelete(sid); } catch (e) { console.warn("[admin] PG deleteScript failed:", e.message); }
       res.json({ success: true });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -164,7 +192,9 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 评测剧本（单次）
   app.post("/api/admin/scripts/:id/review", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const result = await reviewScript(req.params.id);
+      const s = await ensureSession(req.params.id);
+      if (!s) return res.status(404).json({ error: "剧本不存在" });
+      const result = await reviewScript(s.sessionId);
       if (!result.ok) return res.status(400).json({ error: result.error });
       res.json(result.review);
     } catch (e) { res.status(500).json({ error: e.message }); }
@@ -188,7 +218,9 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     req.on("close", () => { closed = true; });
     const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
     try {
-      const result = await reviewAndRevise(req.params.id, (stage, msg) => send("progress", { stage, message: msg }));
+      const s = await ensureSession(req.params.id);
+      if (!s) { send("error", { message: "剧本不存在" }); return res.end(); }
+      const result = await reviewAndRevise(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
       if (!closed) send("complete", result);
     } catch (e) { if (!closed) send("error", { message: e.message }); }
     if (!closed) res.end();
@@ -220,17 +252,26 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       if (session) {
         result = await splitScript(sid, (stage, msg) => send("progress", { stage, message: msg }));
       } else {
-        // Session不存在，从split meta的originalMarkdown创建临时session再切分
-        const r = getRedis();
-        const meta = await r.hgetall(`split:${sid}:meta`);
-        if (!meta || !meta.originalMarkdown) {
+        // Session不存在，从 PG / Redis split meta 获取 originalMarkdown 重建临时 session
+        let fallbackMarkdown = "";
+        let fallbackTopic = "";
+        try {
+          const { getScript } = require("../modules/db");
+          const pg = await getScript(sid);
+          if (pg && pg.original_markdown) { fallbackMarkdown = pg.original_markdown; fallbackTopic = pg.title; }
+        } catch (e) { /* ignore */ }
+        if (!fallbackMarkdown) {
+          const meta = await getRedis().hgetall(`split:${sid}:meta`);
+          if (meta && meta.originalMarkdown) { fallbackMarkdown = meta.originalMarkdown; fallbackTopic = meta.title; }
+        }
+        if (!fallbackMarkdown) {
           send("error", { message: "剧本不存在" });
           return res.end();
         }
         // 创建临时session
-        const s = await createSession({ textType: "murder-mystery", topic: meta.title || "剧本杀", templateName: "剧本杀" });
-        await addMessage(s.sessionId, "user", meta.title || "");
-        await addMessage(s.sessionId, "assistant", meta.originalMarkdown);
+        const s = await createSession({ textType: "murder-mystery", topic: fallbackTopic || "剧本杀", templateName: "剧本杀" });
+        await addMessage(s.sessionId, "user", fallbackTopic || "");
+        await addMessage(s.sessionId, "assistant", fallbackMarkdown);
 
         // 先用splitScript正常切分（有进度显示）
         const splitResult = await splitScript(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
@@ -252,11 +293,11 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           pipe2.del(k);
         }
         await pipe2.exec();
-        await r.srem("scripts:split", s.sessionId);
-        await r.sadd("scripts:split", sid);
+        await getRedis().srem("scripts:split", s.sessionId);
+        await getRedis().sadd("scripts:split", sid);
 
         // 修复标题：从原始markdown直接提取，覆盖parser可能产生的错误标题
-        const titleFromMD = extractTitleFromMarkdown(meta.originalMarkdown || "");
+        const titleFromMD = extractTitleFromMarkdown(fallbackMarkdown || "");
         if (titleFromMD && titleFromMD.length >= 2) {
           await r.hset(`split:${sid}:meta`, "title", titleFromMD);
         }
