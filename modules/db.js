@@ -168,4 +168,4 @@ async function listUsers() {
   return r.rows.map(u => ({ username: u.username, role: u.role, createdAt: u.created_at }));
 }
 
-module.exports = { getPool, query, initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers };
+module.exports = { initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers };

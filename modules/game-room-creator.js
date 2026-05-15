@@ -2,7 +2,7 @@
 const { getRedis, scanKeys } = require("./redis-client");
 const { getSession } = require("./history-manager");
 const { parseScript } = require("./script-parser");
-const { createRoom, updateRoom, addPlayer, removePlayer, deleteRoom, loadClues } = require("./game-manager");
+const { createRoom, updateRoom, removePlayer, loadClues } = require("./game-manager");
 
 async function createGameRoom(scriptSessionId, maxPlayers) {
   const r = getRedis();

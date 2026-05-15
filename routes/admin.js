@@ -237,7 +237,6 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         if (!splitResult.ok) { send("error", { message: splitResult.error }); return res.end(); }
 
         // 把切分结果从临时id迁移到原sid（先清旧数据再迁移）
-        const { scanKeys } = require("../modules/redis-client");
         const oldKeys = await scanKeys(`split:${sid}:*`);
         if (oldKeys.length > 0) await r.del(...oldKeys);
 

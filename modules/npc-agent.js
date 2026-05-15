@@ -89,4 +89,4 @@ async function generateNpcResponse(npc, question, scriptSummary, chatHistory) {
   return result.content.trim();
 }
 
-module.exports = { generateNpcResponse, buildNpcSystemPrompt };
+module.exports = { generateNpcResponse };

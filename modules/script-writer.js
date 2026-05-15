@@ -246,4 +246,4 @@ async function writeScript(userInput, onProgress, scriptConfig) {
   };
 }
 
-module.exports = { writeScript, getExistingScriptsSummary, MIN_PLAYERS, MAX_PLAYERS, MAX_NPC, MAX_TOTAL };
+module.exports = { writeScript };

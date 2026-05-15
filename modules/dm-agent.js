@@ -148,9 +148,4 @@ function getCharacterNames(script) {
   return script.characters.map(c => c.name).filter(Boolean);
 }
 
-module.exports = {
-  generatePhaseNarrative,
-  decideClueForPlayer,
-  generateVoteReveal,
-  generateTruthReveal,
-};
+module.exports = { generatePhaseNarrative, generateTruthReveal };

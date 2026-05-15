@@ -1,7 +1,7 @@
 // WebSocket 游戏事件处理
 
 const { verifyToken } = require("../modules/auth");
-const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, clearVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
+const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue, searchClues } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");

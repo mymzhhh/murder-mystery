@@ -215,9 +215,8 @@ function determineOutcome(votes, murdererName) {
 }
 
 module.exports = {
-  PHASES, PHASE_CONFIG,
   getPhaseConfig, getNextPhase, getPhaseRound,
-  canAdvancePhase, validateAction,
+  validateAction,
   getAvailableCluesForPlayer, pickRandomClue, searchClues,
   tallyVotes, determineOutcome,
 };

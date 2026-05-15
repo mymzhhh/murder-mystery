@@ -103,4 +103,4 @@ async function applyPatchesAndReSplit(scriptId, patches) {
   return { ok: true, results };
 }
 
-module.exports = { applyPatch, applyPatchesAndReSplit };
+module.exports = { applyPatchesAndReSplit };

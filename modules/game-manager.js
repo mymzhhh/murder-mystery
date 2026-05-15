@@ -59,15 +59,6 @@ async function deleteRoom(code) {
   await r.zrem("games:index", code);
 }
 
-async function listRooms() {
-  const r = await ensureConn();
-  const codes = await r.zrevrange("games:index", 0, 19);
-  if (!codes.length) return [];
-  const pipe = r.pipeline();
-  codes.forEach(c => pipe.hgetall(`game:${c}`));
-  const results = await pipe.exec();
-  return results.map(r => r[1]).filter(Boolean);
-}
 
 // ==================== 玩家管理 ====================
 
@@ -188,7 +179,7 @@ async function getChatMessages(code, limit = 100) {
 }
 
 module.exports = {
-  createRoom, getRoom, updateRoom, deleteRoom, listRooms,
+  createRoom, getRoom, updateRoom, deleteRoom,
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
   loadClues, getClues, assignClue, getPlayerClues,
   recordVote, getVotes, clearVotes,

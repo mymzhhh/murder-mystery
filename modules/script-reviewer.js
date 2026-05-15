@@ -284,4 +284,4 @@ ${originalInput}`;
   };
 }
 
-module.exports = { reviewScript, reviewAndRevise, PASS_SCORE, MAX_RETRIES };
+module.exports = { reviewScript, reviewAndRevise };

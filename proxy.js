@@ -2,7 +2,6 @@
 // 解决 Docker Desktop Windows 端口映射不生效的问题
 
 const net = require("net");
-const http = require("http");
 
 const PROXY_PORT = 3000;
 const TARGET_HOST = "172.22.0.2"; // 容器内部 IP

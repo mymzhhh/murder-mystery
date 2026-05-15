@@ -78,20 +78,4 @@ async function generate(systemPrompt, userPrompt, options = {}) {
   ], options);
 }
 
-/**
- * 基于已有对话历史进行修改（refine）
- * @param {string} systemPrompt - 系统提示词
- * @param {Array<{role:string, content:string}>} history - 已有对话历史
- * @param {string} feedback - 修改反馈
- * @param {object} options - 可选参数（model, maxTokens, temperature）
- */
-async function refine(systemPrompt, history, feedback, options = {}) {
-  const messages = [
-    { role: "system", content: systemPrompt },
-    ...history.map(m => ({ role: m.role, content: m.content })),
-    { role: "user", content: `请根据以下反馈修改上面的文案：\n${feedback}` },
-  ];
-  return _callWithRetry(messages, options);
-}
-
-module.exports = { generate, refine };
+module.exports = { generate };
