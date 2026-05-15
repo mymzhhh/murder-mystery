@@ -7,6 +7,7 @@ const { splitScript } = require("./script-splitter");
 async function applyPatch(scriptId, patch) {
   const r = getRedis();
   const { type, target, operation, description } = patch;
+  let matched = false;
 
   if (type === "clue") {
     const clueKeys = await scanKeys(`split:${scriptId}:clue:*`);
@@ -18,6 +19,7 @@ async function applyPatch(scriptId, patch) {
         (clue.content && clue.content.includes(target)) ||
         (clue.id && clue.id.includes(target));
       if (!match) continue;
+      matched = true;
 
       if (operation === "split") {
         // 拆分线索：标记原线索 + 追加新线索
@@ -44,6 +46,7 @@ async function applyPatch(scriptId, patch) {
       const char = await r.hgetall(key);
       if (!char || !char.name) continue;
       if (char.name !== target && !char.name.includes(target)) continue;
+      matched = true;
 
       if (operation === "append") {
         const field = type === "player_script" ? "playerScript" : "secret";
@@ -72,6 +75,7 @@ async function applyPatch(scriptId, patch) {
     }
   }
 
+  if (!matched) return { ok: false, error: `未找到匹配的${type}: ${target}` };
   return { ok: true, applied: description };
 }
 

@@ -413,7 +413,8 @@
           patches.forEach(function(p, i) {
             h += '<div style="font-size:11px;color:var(--text);padding:3px 0;">' + (i + 1) + '. [' + esc(p.type) + '] <strong>' + esc(p.target) + '</strong>: ' + esc(p.operation) + ' — ' + esc(p.description) + '</div>';
           });
-          h += '<button class="btn btn-warning btn-sm btn-auto" style="margin-top:8px;" onclick="applyPatches(\'' + id + '\', ' + esc(JSON.stringify(patches)) + ')">⚡ 一键应用修改</button>';
+          var patchesStr = encodeURIComponent(JSON.stringify(patches));
+          h += '<button class="btn btn-warning btn-sm btn-auto" style="margin-top:8px;" onclick="applyPatches(\'' + id + '\', decodeURIComponent(\'' + patchesStr + '\'))">⚡ 一键应用修改</button>';
           h += '<span id="patchResult" style="font-size:11px;margin-left:8px;"></span>';
           h += '</div>';
         }
