@@ -319,21 +319,24 @@
   }
 
   function viewScript(id) {
+    var w = window.open("", "_blank", "width=800,height=700");
+    w.document.write('<html><head><meta charset="utf-8"><title>剧本原文</title><style>body{font-family:serif;background:#1a1a2e;color:#d4d4dc;padding:20px;line-height:1.8;white-space:pre-wrap;max-width:800px;margin:0 auto;}</style></head><body><p style="text-align:center;color:var(--text-dim);">加载中...</p></body></html>');
     api("/api/admin/scripts/" + id)
       .then(function(res) { return res.json(); })
       .then(function(data) {
-        if (!data.markdown) { showToast("剧本内容为空", "warning"); return; }
-        var w = window.open("", "_blank", "width=800,height=700");
+        if (!data.markdown) { showToast("剧本内容为空", "warning"); w.close(); return; }
         w.document.write('<html><head><meta charset="utf-8"><title>剧本原文</title><style>body{font-family:serif;background:#1a1a2e;color:#d4d4dc;padding:20px;line-height:1.8;white-space:pre-wrap;max-width:800px;margin:0 auto;}</style></head><body>' + esc(data.markdown) + '</body></html>');
       })
-      .catch(function(e) { showToast("查看失败: " + e.message, "error"); });
+      .catch(function(e) { showToast("查看失败: " + e.message, "error"); w.close(); });
   }
 
   function viewSplitData(id) {
+    var w = window.open("", "_blank", "width=900,height=750");
+    w.document.write('<html><head><meta charset="utf-8"><title>切分数据</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#d4d4dc;padding:20px;line-height:1.6;} h2,h3{color:#c9a96e;} hr{border-color:#2a2a45;} details{background:#181830;} summary{cursor:pointer;}</style></head><body><p style="text-align:center;color:var(--text-dim);">加载中...</p></body></html>');
     api("/api/admin/scripts/" + id + "/split-view")
       .then(function(res) { return res.json(); })
       .then(function(data) {
-        if (!data.meta) { showToast("切分数据不存在", "warning"); return; }
+        if (!data.meta) { showToast("切分数据不存在", "warning"); w.close(); return; }
         var h = '<h2 style="color:var(--gold);">' + esc(data.meta.title) + '</h2>' +
           '<p>' + esc(data.meta.era || '') + ' | ' + esc(data.meta.location || '') + ' | ' + data.characters.length + '角色 | ' + data.clues.length + '条线索</p><hr>' +
           '<h3>角色剧本</h3>';
@@ -347,11 +350,9 @@
         var dm = data.dm || {};
         h += '<h3>DM手册</h3><p><strong>凶手:</strong> ' + esc(dm.murdererName || '') + ' | ' + esc(dm.murdererMotive || '') + '</p>';
         if (dm.truthReveal) h += '<div style="white-space:pre-wrap;">' + esc(dm.truthReveal) + '</div>';
-
-        var w = window.open("", "_blank", "width=900,height=750");
         w.document.write('<html><head><meta charset="utf-8"><title>切分数据</title><style>body{font-family:sans-serif;background:#1a1a2e;color:#d4d4dc;padding:20px;line-height:1.6;} h2,h3{color:#c9a96e;} hr{border-color:#2a2a45;} details{background:#181830;} summary{cursor:pointer;}</style></head><body>' + h + '</body></html>');
       })
-      .catch(function(e) { showToast("查看失败: " + e.message, "error"); });
+      .catch(function(e) { showToast("查看失败: " + e.message, "error"); w.close(); });
   }
 
   function reviewScript(id) {

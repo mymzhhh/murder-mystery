@@ -283,44 +283,44 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   });
 
   app.get("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
-    const s = await getSession(req.params.id);
-    let markdown = "";
-    let topic = "";
-    if (s) {
-      markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
-      topic = s.metadata?.topic || "";
-    }
-    // 如果session不存在，从split meta中读取保存的原始剧本
-    if (!markdown) {
-      const r = getRedis();
-      const meta = await r.hgetall(`split:${req.params.id}:meta`);
-      if (meta?.title) {
-        if (meta.originalMarkdown && meta.originalMarkdown.length > 100) {
-          markdown = meta.originalMarkdown;
-          topic = meta.title;
-        } else {
-          // 回退：从切分数据重建
-          const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
-          const pipe = r.pipeline();
-          charKeys.forEach(k => pipe.hgetall(k));
-          const results = await pipe.exec();
-          let text = '# ' + (meta.title || '') + '\n\n';
-          text += '时代: ' + (meta.era || '') + ' | 地点: ' + (meta.location || '') + '\n\n';
-          for (const [err, d] of results) {
-            if (d && d.name) {
-              text += '## ' + (d.roleType === 'npc' ? 'NPC' : '玩家') + ': ' + d.name + '\n';
-              text += (d.playerScript || '') + '\n\n';
-              if (d.secret) text += '秘密: ' + d.secret + '\n\n';
+    try {
+      const s = await getSession(req.params.id);
+      let markdown = "";
+      let topic = "";
+      if (s) {
+        markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+        topic = s.metadata?.topic || "";
+      }
+      if (!markdown) {
+        const r = getRedis();
+        const meta = await r.hgetall(`split:${req.params.id}:meta`);
+        if (meta?.title) {
+          if (meta.originalMarkdown && meta.originalMarkdown.length > 100) {
+            markdown = meta.originalMarkdown;
+            topic = meta.title;
+          } else {
+            const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
+            const pipe = r.pipeline();
+            charKeys.forEach(k => pipe.hgetall(k));
+            const results = await pipe.exec();
+            let text = '# ' + (meta.title || '') + '\n\n';
+            text += '时代: ' + (meta.era || '') + ' | 地点: ' + (meta.location || '') + '\n\n';
+            for (const [err, d] of results) {
+              if (d && d.name) {
+                text += '## ' + (d.roleType === 'npc' ? 'NPC' : '玩家') + ': ' + d.name + '\n';
+                text += (d.playerScript || '') + '\n\n';
+                if (d.secret) text += '秘密: ' + d.secret + '\n\n';
+              }
             }
+            markdown = text;
+            topic = meta.title;
           }
-          markdown = text;
-          topic = meta.title;
         }
       }
-    }
-    if (!markdown) return res.status(404).json({ error: "剧本不存在" });
-    const parsed = parseScript(markdown);
-    res.json({ session: { sessionId: req.params.id, createdAt: "", topic }, parsed, markdown });
+      if (!markdown) return res.status(404).json({ error: "剧本不存在" });
+      const parsed = parseScript(markdown);
+      res.json({ session: { sessionId: req.params.id, createdAt: "", topic }, parsed, markdown });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   // 查看切分后的剧本文件
