@@ -1,6 +1,5 @@
 // Player API routes
 
-const { v4: uuidv4 } = require("uuid");
 const { getRoom, getPlayers } = require("../modules/game-manager");
 const { getRedis } = require("../modules/redis-client");
 
@@ -54,18 +53,6 @@ const { createGameRoom } = require("../modules/game-room-creator");
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // 提交剧本请求
-  app.post("/api/player/requests", authMiddleware, async (req, res) => {
-    try {
-      const { description } = req.body;
-      if (!description?.trim()) return res.status(400).json({ error: "请输入需求描述" });
-      const { getRedis } = require("../modules/game-manager");
-      const r2 = await getRedis();
-      const id = uuidv4();
-      await r2.hset(`script_requests:${id}`, { id, requester: req.user.username, description, status: "pending", createdAt: new Date().toISOString() });
-      res.json({ id, message: "请求已提交" });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
 }
 
 module.exports = { setupPlayerRoutes };
