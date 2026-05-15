@@ -335,6 +335,16 @@ h1, h2, h3, h4, h5 { font-family: var(--font); }
 }
 .btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--surface3); }
 
+.btn-warning {
+  background: linear-gradient(135deg, #4a3a10, #332800);
+  color: #fcd34d;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.btn-warning:hover:not(:disabled) {
+  background: linear-gradient(135deg, #5a4a18, #403200);
+  border-color: rgba(245, 158, 11, 0.5);
+}
+
 .btn-sm { padding: 6px 14px; font-size: 12px; width: auto; letter-spacing: 0.5px; border-radius: var(--radius-sm); }
 .btn-xs { padding: 4px 10px; font-size: 11px; width: auto; border-radius: var(--radius-sm); }
 .btn-auto { width: auto; }

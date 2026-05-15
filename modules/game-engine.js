@@ -110,6 +110,71 @@ function pickRandomClue(availableClues) {
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+/**
+ * 自然语言搜证：根据玩家输入的调查描述匹配最相关的线索
+ * @param {string} query - 玩家的调查描述（如"书房的书桌抽屉"）
+ * @param {Array} availableClues - 可用的线索列表
+ * @returns {{ clue: object|null, matchLevel: string, message: string }}
+ *   matchLevel: "exact"(精准) / "partial"(相关) / "none"(无匹配)
+ */
+function searchClues(query, availableClues) {
+  if (!query || !query.trim()) return { clue: null, matchLevel: "none", message: "" };
+  if (!availableClues || !availableClues.length) return { clue: null, matchLevel: "none", message: "本轮已无线索可获取" };
+
+  const q = query.trim().toLowerCase();
+
+  // 提取搜索关键词（过滤短词和停用词）
+  const stopWords = new Set(["的", "了", "在", "是", "我", "有", "不", "人", "这", "那", "想", "要", "去", "看", "找", "一下", "调查", "搜索", "检查", "翻找", "看看", "里面", "那里", "这里", "什么", "怎么", "哪儿", "哪里"]);
+  const keywords = q.split(/[\s,，、。！？]+/).filter(w => w.length >= 2 && !stopWords.has(w));
+
+  if (!keywords.length) {
+    // 没有有效的搜索词，随机给一条
+    const clue = pickRandomClue(availableClues);
+    return { clue, matchLevel: "random", message: "" };
+  }
+
+  // 对每条线索打分
+  let bestClue = null;
+  let bestScore = 0;
+  const clueScores = [];
+
+  for (const clue of availableClues) {
+    const content = (clue.content || "").toLowerCase();
+    const location = (clue.location || "").toLowerCase();
+    const id = (clue.id || "").toLowerCase();
+    const searchText = content + " " + location + " " + id;
+
+    let score = 0;
+    for (const kw of keywords) {
+      if (location === kw || location.includes(kw)) score += 10;        // 地点精确匹配
+      else if (location.includes(kw)) score += 6;                       // 地点部分匹配
+      if (content.includes(kw)) score += 4;                             // 内容匹配
+      if (id.includes(kw)) score += 2;                                  // ID 匹配
+    }
+
+    // 多关键词同时匹配加分
+    const matchedKws = keywords.filter(kw => searchText.includes(kw));
+    if (matchedKws.length >= 2) score += matchedKws.length * 2;
+
+    clueScores.push({ clue, score });
+    if (score > bestScore) { bestScore = score; bestClue = clue; }
+  }
+
+  if (bestScore >= 8) {
+    return { clue: bestClue, matchLevel: "exact", message: "" };
+  } else if (bestScore >= 3) {
+    return { clue: bestClue, matchLevel: "partial", message: "你仔细搜索了附近区域，发现了一条相关线索…" };
+  } else {
+    // 无明确匹配，给最相关的或随机一条
+    const topClues = clueScores.filter(cs => cs.score > 0).sort((a, b) => b.score - a.score);
+    if (topClues.length > 0) {
+      return { clue: topClues[0].clue, matchLevel: "partial", message: "虽然没有找到你描述的东西，但在附近发现了别的线索…" };
+    }
+    const clue = pickRandomClue(availableClues);
+    return { clue, matchLevel: "none", message: "你在那里翻找了一会儿，没有发现特别的东西。但 DM 给了你一条其他线索。" };
+  }
+}
+
 function tallyVotes(votes, players) {
   const tally = {};
   for (const [voterId, target] of Object.entries(votes)) {
@@ -153,6 +218,6 @@ module.exports = {
   PHASES, PHASE_CONFIG,
   getPhaseConfig, getNextPhase, getPhaseRound,
   canAdvancePhase, validateAction,
-  getAvailableCluesForPlayer, pickRandomClue,
+  getAvailableCluesForPlayer, pickRandomClue, searchClues,
   tallyVotes, determineOutcome,
 };

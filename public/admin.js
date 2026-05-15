@@ -365,24 +365,84 @@
         var data = result.data;
         if (!result.ok) { prog.innerHTML = '<div class="alert alert-danger">' + esc(data.error || '评测失败') + '</div>'; return; }
         var scores = data.scores || {};
+        var dims = data.dimensions || {};
         var passed = data.passed;
-        var contentEl = prog.querySelector(".state-loading") || prog;
-        contentEl.innerHTML =
-          '<div style="color:' + (passed ? 'var(--success)' : 'var(--warning)') + ';font-size:14px;font-weight:600;">' + (passed ? '✅ 评测通过' : '⚠️ 评测未通过') + ' — ' + data.totalScore + '分</div>' +
-          '<div style="margin-top:12px;padding:12px;background:var(--surface);border-radius:8px;">' +
-          '<div class="grid-4" style="text-align:center;">' +
-          '<div><div style="font-size:24px;color:var(--gold);">' + (scores.storyCompleteness || '-') + '</div><div class="text-xs text-dim">故事</div></div>' +
-          '<div><div style="font-size:24px;color:var(--blood-light);">' + (scores.murdererDesign || '-') + '</div><div class="text-xs text-dim">凶手</div></div>' +
-          '<div><div style="font-size:24px;color:#4ade80;">' + (scores.clueSystem || '-') + '</div><div class="text-xs text-dim">线索</div></div>' +
-          '<div><div style="font-size:24px;color:var(--mystic-light);">' + (scores.characterDesign || '-') + '</div><div class="text-xs text-dim">角色</div></div>' +
-          '<div><div style="font-size:24px;color:#fcd34d;">' + (scores.playability || '-') + '</div><div class="text-xs text-dim">可玩性</div></div>' +
-          '</div>' +
-          (data.strengths && data.strengths.length ? '<div style="margin-top:8px;font-size:12px;color:var(--success);">👍 ' + esc(data.strengths.join('；')) + '</div>' : '') +
-          (data.weaknesses && data.weaknesses.length ? '<div style="margin-top:4px;font-size:12px;color:var(--warning);">⚠️ ' + esc(data.weaknesses.join('；')) + '</div>' : '') +
-          (data.revisionAdvice ? '<div style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--text);">💡 ' + esc(data.revisionAdvice) + '</div>' : '') +
-          '</div>';
+        var dimNames = [
+          { key: "storyCompleteness", label: "故事完整性", color: "var(--gold)" },
+          { key: "murdererDesign", label: "凶手设计", color: "var(--blood-light)" },
+          { key: "clueSystem", label: "线索系统", color: "#4ade80" },
+          { key: "characterDesign", label: "角色设计", color: "var(--mystic-light)" },
+          { key: "playability", label: "可玩性", color: "#fcd34d" }
+        ];
+
+        var h = '<div style="color:' + (passed ? 'var(--success)' : 'var(--warning)') + ';font-size:14px;font-weight:600;margin-bottom:12px;">' +
+          (passed ? '✅ 评测通过' : '⚠️ 评测未通过') + ' — ' + data.totalScore + '分</div>';
+
+        // 5维度评分卡片
+        h += '<div class="grid-4" style="text-align:center;margin-bottom:12px;">';
+        dimNames.forEach(function(d) {
+          var score = scores[d.key] || '-';
+          h += '<div class="card card-static" style="padding:12px;"><div style="font-size:28px;color:' + d.color + ';font-weight:800;">' + score + '</div><div class="text-xs text-dim">' + d.label + '</div></div>';
+        });
+        h += '</div>';
+
+        // 每维度可展开详情（reason + suggestion）
+        h += '<div style="margin-bottom:12px;">';
+        dimNames.forEach(function(d, idx) {
+          var dim = dims[d.key];
+          if (!dim || !dim.reason) return;
+          var openAttr = idx === 0 ? ' open' : '';
+          h += '<details class="script-detail" style="margin-bottom:4px;border-left:3px solid ' + d.color + ';"' + openAttr + '>';
+          h += '<summary style="color:' + d.color + ';font-weight:600;font-size:13px;">' + d.label + ' — ' + (scores[d.key] || '?') + '分</summary>';
+          h += '<div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><strong>评估：</strong>' + esc(dim.reason) + '</div>';
+          if (dim.suggestion) h += '<div style="font-size:12px;color:var(--success-light);margin-top:4px;"><strong>建议：</strong>' + esc(dim.suggestion) + '</div>';
+          h += '</details>';
+        });
+        h += '</div>';
+
+        // strengths / weaknesses / revisionAdvice
+        if (data.strengths && data.strengths.length) h += '<div style="margin-top:8px;font-size:12px;color:var(--success);">👍 ' + esc(data.strengths.join('；')) + '</div>';
+        if (data.weaknesses && data.weaknesses.length) h += '<div style="margin-top:4px;font-size:12px;color:var(--warning);">⚠️ ' + esc(data.weaknesses.join('；')) + '</div>';
+        if (data.revisionAdvice) h += '<div style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--text);line-height:1.6;">💡 ' + esc(data.revisionAdvice) + '</div>';
+
+        // 一键应用建议修改
+        var patches = data.suggestedPatches || [];
+        if (patches.length > 0) {
+          h += '<div style="margin-top:12px;padding:10px;background:rgba(245,158,11,0.08);border:1px solid var(--warning);border-radius:8px;">';
+          h += '<div class="text-xs" style="color:var(--warning-light);margin-bottom:6px;">🔧 建议的局部修改（' + patches.length + '项）</div>';
+          patches.forEach(function(p, i) {
+            h += '<div style="font-size:11px;color:var(--text);padding:3px 0;">' + (i + 1) + '. [' + esc(p.type) + '] <strong>' + esc(p.target) + '</strong>: ' + esc(p.operation) + ' — ' + esc(p.description) + '</div>';
+          });
+          h += '<button class="btn btn-warning btn-sm btn-auto" style="margin-top:8px;" onclick="applyPatches(\'' + id + '\', ' + esc(JSON.stringify(patches)) + ')">⚡ 一键应用修改</button>';
+          h += '<span id="patchResult" style="font-size:11px;margin-left:8px;"></span>';
+          h += '</div>';
+        }
+
+        prog.innerHTML = '<div class="panel">' + h + '</div>';
       })
       .catch(function(e) { prog.innerHTML = '<div class="alert alert-danger">评测失败: ' + e.message + '</div>'; });
+  }
+
+  function applyPatches(id, patchesJson) {
+    var btn = event.target;
+    btn.disabled = true;
+    btn.textContent = "应用修改中...";
+    var patches = typeof patchesJson === 'string' ? JSON.parse(patchesJson) : patchesJson;
+    api("/api/admin/scripts/" + id + "/apply-patches", {
+      method: "POST",
+      body: JSON.stringify({ patches: patches })
+    }).then(function(res) { return res.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          document.getElementById("patchResult").innerHTML = '<span style="color:var(--success);">✅ 已应用，请重新评测</span>';
+        } else {
+          document.getElementById("patchResult").innerHTML = '<span style="color:var(--danger);">❌ ' + esc(data.error || '失败') + '</span>';
+        }
+      })
+      .catch(function(e) {
+        document.getElementById("patchResult").innerHTML = '<span style="color:var(--danger);">❌ ' + e.message + '</span>';
+      })
+      .finally(function() { btn.disabled = false; btn.textContent = "⚡ 一键应用修改"; });
   }
 
   function reviewAndReviseScript(id) {
@@ -551,6 +611,7 @@
   window.createRoom = createRoom;
   window.createRoomFromScript = createRoomFromScript;
   window.closeRoom = closeRoom;
+  window.applyPatches = applyPatches;
 
   // ===================== Init =====================
   loadScripts();

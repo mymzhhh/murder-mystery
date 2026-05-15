@@ -2,7 +2,7 @@
 
 const { verifyToken } = require("../modules/auth");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, clearVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
-const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue } = require("../modules/game-engine");
+const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue, searchClues } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
@@ -199,7 +199,7 @@ function setupGameSocket(io) {
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
     });
 
-    socket.on("investigate", async ({ roomCode }) => {
+    socket.on("investigate", async ({ roomCode, query }) => {
       try {
         const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
@@ -211,11 +211,27 @@ function setupGameSocket(io) {
         const playerClues = await getPlayerClues(roomCode, socket.id);
         const available = getAvailableCluesForPlayer(allClues, socket.id, round);
         if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
-        const parsed = JSON.parse(room.parsedScript || "{}");
-        const clue = pickRandomClue(available);
+
+        // 自然语言搜证 vs 随机发放
+        var searchResult;
+        if (query && query.trim()) {
+          searchResult = searchClues(query, available);
+        } else {
+          searchResult = { clue: pickRandomClue(available), matchLevel: "random", message: "" };
+        }
+
+        const clue = searchResult.clue;
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
         const finder = players.find(p => p.playerId === socket.id);
+
+        // 有 DM 叙事消息时先发 narrative，再发线索
+        if (searchResult.message) {
+          io.to(roomCode).emit("chat_message", {
+            playerId: "dm", playerName: "DM", characterName: "AI DM",
+            content: searchResult.message, timestamp: Date.now(),
+          });
+        }
         io.to(roomCode).emit("clue_received", { clue, foundBy: finder?.characterName || finder?.playerName || "未知" });
       } catch (e) { socket.emit("error", { code: "INVESTIGATE_FAILED", message: e.message }); }
     });

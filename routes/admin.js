@@ -10,6 +10,7 @@ const { splitScript, getSplitData } = require("../modules/script-splitter");
 const { optimizePrompt } = require("../modules/prompt-agent");
 const { createGameRoom } = require("../modules/game-room-creator");
 const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/game-manager");
+const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 剧本列表（含未切分 session + 已切分 split 数据）
@@ -166,6 +167,17 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       const result = await reviewScript(req.params.id);
       if (!result.ok) return res.status(400).json({ error: result.error });
       res.json(result.review);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 应用评测建议的局部修改
+  app.post("/api/admin/scripts/:id/apply-patches", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { patches } = req.body;
+      if (!patches || !patches.length) return res.status(400).json({ error: "无修改项" });
+      const result = await applyPatchesAndReSplit(req.params.id, patches);
+      if (!result.ok) return res.status(400).json({ error: result.error });
+      res.json(result);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

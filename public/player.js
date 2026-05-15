@@ -760,7 +760,12 @@
       h += '<div class="clue-card found"><div class="clue-id">' + esc(c.id) + (c.foundBy ? ' <span class="text-xs text-dim">— ' + esc(c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="clue-body">' + esc(c.content || '') + '</div></div>';
     });
     h += '</div>';
-    h += '<button class="btn btn-primary btn-auto" style="margin-top:16px;" onclick="investigate()">申请调查</button>';
+    // 自然语言搜证输入
+    h += '<div style="margin-top:16px;display:flex;gap:8px;">';
+    h += '<input id="investigateInput" class="form-input flex-1" placeholder="描述你想调查的地点或物品，如：书房的书桌抽屉" onkeydown="if(event.key===\'Enter\')investigate()" />';
+    h += '<button class="btn btn-primary btn-auto" onclick="investigate()">🔍 调查</button>';
+    h += '</div>';
+    h += '<p class="text-xs text-dim mt-sm">输入调查地点可精准获取线索，留空则随机发放</p>';
     if (gs.myClues.length >= 3) h += '<p class="text-xs text-dim mt-sm">已获得多条线索，可以准备进入讨论阶段</p>';
 
     document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
@@ -768,7 +773,10 @@
   }
 
   function investigate() {
-    socket.emit("investigate", { roomCode: gs.room && gs.room.roomCode });
+    var input = document.getElementById("investigateInput");
+    var query = input ? input.value.trim() : "";
+    if (input) input.value = "";
+    socket.emit("investigate", { roomCode: gs.room && gs.room.roomCode, query: query });
   }
 
   // ===================== NPC Dialog =====================
