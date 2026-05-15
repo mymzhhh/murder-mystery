@@ -284,23 +284,38 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   app.get("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const s = await getSession(req.params.id);
       let markdown = "";
       let topic = "";
-      if (s) {
-        markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
-        topic = s.metadata?.topic || "";
-      }
+
+      // 1. 优先 PostgreSQL
+      try {
+        const { getScript } = require("../modules/db");
+        const pg = await getScript(req.params.id);
+        if (pg && pg.original_markdown) {
+          markdown = pg.original_markdown;
+          topic = pg.title;
+        }
+      } catch (e) { /* PG不可用 */ }
+
+      // 2. 回退 Session
       if (!markdown) {
-        const r = getRedis();
-        const meta = await r.hgetall(`split:${req.params.id}:meta`);
+        const s = await getSession(req.params.id);
+        if (s) {
+          markdown = s.messages.filter(m => m.role === "assistant").map(m => m.content).join("\n\n");
+          topic = s.metadata?.topic || "";
+        }
+      }
+
+      // 3. 回退 Redis split meta
+      if (!markdown) {
+        const meta = await getRedis().hgetall(`split:${req.params.id}:meta`);
         if (meta?.title) {
           if (meta.originalMarkdown && meta.originalMarkdown.length > 100) {
             markdown = meta.originalMarkdown;
             topic = meta.title;
           } else {
             const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
-            const pipe = r.pipeline();
+            const pipe = getRedis().pipeline();
             charKeys.forEach(k => pipe.hgetall(k));
             const results = await pipe.exec();
             let text = '# ' + (meta.title || '') + '\n\n';
@@ -317,17 +332,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           }
         }
       }
-      // PG 回退（Redis 无数据时）
-      if (!markdown) {
-        try {
-          const { getScript } = require("../modules/db");
-          const pg = await getScript(req.params.id);
-          if (pg && pg.original_markdown) {
-            markdown = pg.original_markdown;
-            topic = pg.title;
-          }
-        } catch (e) { /* PG不可用 */ }
-      }
+
       if (!markdown) return res.status(404).json({ error: "剧本不存在" });
       const parsed = parseScript(markdown);
       res.json({ session: { sessionId: req.params.id, createdAt: "", topic }, parsed, markdown });
@@ -337,65 +342,69 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 查看切分后的剧本文件
   app.get("/api/admin/scripts/:id/split-view", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const r2 = getRedis();
-      let meta = await r2.hgetall(`split:${req.params.id}:meta`);
+      let meta = null;
       let characters = [];
       let clues = [];
       let dmData = {};
 
-      if (meta && meta.title) {
-        const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
-        const clueKeys = await scanKeys(`split:${req.params.id}:clue:*`);
-        dmData = await r2.hgetall(`split:${req.params.id}:dm`) || {};
+      // 1. 优先 PostgreSQL
+      try {
+        const { getScript } = require("../modules/db");
+        const pg = await getScript(req.params.id);
+        if (pg && pg.title) {
+          meta = {
+            title: pg.title, era: pg.era || "", location: pg.location || "",
+            playerCount: String(pg.player_count || 0), npcCount: String(pg.npc_count || 0),
+            clueCount: String(pg.clue_count || 0), characterNames: "[]",
+          };
+          characters = (pg.characters || []).map(c => ({
+            name: c.name, roleType: c.role_type || "player",
+            isMurderer: c.is_murderer, occupation: c.occupation || "",
+            script: c.player_script || "", secret: c.secret || "",
+          }));
+          clues = (pg.clues || []).map(c => ({
+            id: c.clue_id, content: (c.content || "").substring(0, 300),
+            round: c.round, location: c.location || "",
+          }));
+          dmData = {
+            murdererName: pg.dm?.murderer_name || "",
+            murdererMotive: pg.dm?.murderer_motive || "",
+            truthReveal: pg.dm?.truth_reveal || "",
+          };
+        }
+      } catch (e) { /* PG不可用 */ }
 
-        const pipeline = r2.pipeline();
-        charKeys.forEach(k => pipeline.hgetall(k));
-        clueKeys.forEach(k => pipeline.hgetall(k));
-        const results = await pipeline.exec();
+      // 2. 回退 Redis split 数据
+      if (!meta || !meta.title) {
+        const r2 = getRedis();
+        meta = await r2.hgetall(`split:${req.params.id}:meta`);
+        if (meta && meta.title) {
+          const charKeys = await scanKeys(`split:${req.params.id}:char:*`);
+          const clueKeys = await scanKeys(`split:${req.params.id}:clue:*`);
+          dmData = await r2.hgetall(`split:${req.params.id}:dm`) || {};
 
-        for (let i = 0; i < results.length; i++) {
-          const d = results[i][1];
-          if (!d) continue;
-          if (i < charKeys.length) {
-            characters.push({
-              name: d.name || "",
-              roleType: d.roleType || "player",
-              isMurderer: d.isMurderer === "1",
-              occupation: d.occupation || "",
-              script: d.playerScript || "",
-              secret: d.secret || "",
-            });
-          } else {
-            clues.push({ id: d.id, content: (d.content || "").substring(0, 300), round: d.round, location: d.location || "" });
+          const pipeline = r2.pipeline();
+          charKeys.forEach(k => pipeline.hgetall(k));
+          clueKeys.forEach(k => pipeline.hgetall(k));
+          const results = await pipeline.exec();
+
+          for (let i = 0; i < results.length; i++) {
+            const d = results[i][1];
+            if (!d) continue;
+            if (i < charKeys.length) {
+              characters.push({
+                name: d.name || "",
+                roleType: d.roleType || "player",
+                isMurderer: d.isMurderer === "1",
+                occupation: d.occupation || "",
+                script: d.playerScript || "",
+                secret: d.secret || "",
+              });
+            } else {
+              clues.push({ id: d.id, content: (d.content || "").substring(0, 300), round: d.round, location: d.location || "" });
+            }
           }
         }
-      } else {
-        // PG 回退（Redis 无数据时）
-        try {
-          const { getScript } = require("../modules/db");
-          const pg = await getScript(req.params.id);
-          if (pg && pg.title) {
-            meta = {
-              title: pg.title, era: pg.era || "", location: pg.location || "",
-              playerCount: String(pg.player_count || 0), npcCount: String(pg.npc_count || 0),
-              clueCount: String(pg.clue_count || 0), characterNames: "[]",
-            };
-            characters = (pg.characters || []).map(c => ({
-              name: c.name, roleType: c.role_type || "player",
-              isMurderer: c.is_murderer, occupation: c.occupation || "",
-              script: c.player_script || "", secret: c.secret || "",
-            }));
-            clues = (pg.clues || []).map(c => ({
-              id: c.clue_id, content: (c.content || "").substring(0, 300),
-              round: c.round, location: c.location || "",
-            }));
-            dmData = {
-              murdererName: pg.dm?.murderer_name || "",
-              murdererMotive: pg.dm?.murderer_motive || "",
-              truthReveal: pg.dm?.truth_reveal || "",
-            };
-          }
-        } catch (e) { /* PG不可用 */ }
       }
 
       if (!meta || !meta.title) return res.status(404).json({ error: "切分数据不存在" });
