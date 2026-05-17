@@ -189,13 +189,19 @@ function setupGameSocket(io) {
           const char = parsed.characters?.find(c => c.name === p.characterName);
           if (char) io.to(p.playerId).emit("character_assigned", { characterName: p.characterName, character: char, isMurderer: char.isMurderer || false });
         }
-        // 生成开场叙事（约3-5秒延迟，前端有倒计时提示）
-        const narrative = await generatePhaseNarrative(parsed, "reading", {});
-        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: narrative });
-        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative });
-        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative });
+        // 立即进入 reading 阶段，叙事异步生成（不再阻塞玩家等待 LLM）
+        await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: "" });
+        io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative: "AI DM 正在准备开场叙事..." });
+        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative: "" });
         (await getRedis()).srem("rooms:open", roomCode);
-        // 阶段推进改为全员确认机制，不再用自动计时器
+
+        // 异步生成开场叙事，完成后推送
+        generatePhaseNarrative(parsed, "reading", {}).then(async (narrative) => {
+          try {
+            await updateRoom(roomCode, { aiNarrative: narrative });
+            io.to(roomCode).emit("narrative_ready", { phase: "reading", narrative });
+          } catch (e) { console.error("[narrative] 推送失败:", e.message); }
+        }).catch(e => console.error("[narrative] 生成失败:", e.message));
       } catch (e) { socket.emit("error", { code: "START_FAILED", message: e.message }); }
     });
 
@@ -315,19 +321,20 @@ function setupGameSocket(io) {
         if (!player) return socket.emit("error", { code: "NOT_IN_ROOM", message: "玩家不在房间内，请刷新页面重新加入" });
         if (player.isNPC) return;
 
-        // 将当前玩家加入就绪集合
+        // 倒计时进行中：忽略重复 ready 事件
+        const countdownKey = `game:${roomCode}:countdown`;
+        if (await r.exists(countdownKey)) return;
+
         const readyKey = `game:${roomCode}:ready`;
         await r.sadd(readyKey, socket.id);
         const readyCount = await r.scard(readyKey);
 
-        // 统计人类玩家数
         const allPlayers = await getPlayers(roomCode);
         const humanCount = allPlayers.filter(p => !p.isNPC && p.connected).length;
 
-        // 广播就绪状态
         io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
 
-        // 启动10分钟推进计时器（仅第一次有人点击时启动）
+        // 10分钟超时计时器（仅首次）
         if (readyCount === 1 && !phaseTimers[roomCode]) {
           phaseTimers[roomCode] = setTimeout(async () => {
             try {
@@ -340,7 +347,8 @@ function setupGameSocket(io) {
               const r2 = await getRedis();
               const curPlayers = await getPlayers(roomCode);
               const curHuman = curPlayers.filter(p => !p.isNPC && p.connected).length;
-              await r2.del(`game:${roomCode}:ready`);
+              await r2.del(readyKey);
+              await r2.setex(countdownKey, 30, "1");
               io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: curHuman, forceAdvance: true, countdown: 5 });
               io.to(roomCode).emit("narrative", { text: "⏰ 等待超时，AI DM 将自动进入下一阶段。" });
 
@@ -354,14 +362,16 @@ function setupGameSocket(io) {
               }
               const preGenNarrative = await narrativePromise;
               await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
+              await r2.del(countdownKey);
               delete phaseTimers[roomCode];
-            } catch (e) { delete phaseTimers[roomCode]; }
+            } catch (e) { await getRedis().del(countdownKey); delete phaseTimers[roomCode]; }
           }, 10 * 60 * 1000); // 10分钟
         }
 
-        // 所有人就绪：取消计时器，立即5秒倒计时推进
+        // 所有人就绪：取消计时器，立即倒计时推进
         if (readyCount >= humanCount) {
           if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
+          await r.setex(countdownKey, 30, "1"); // 互斥锁防重复触发
           await r.del(readyKey);
           io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 5 });
 
@@ -375,6 +385,7 @@ function setupGameSocket(io) {
           }
           const preGenNarrative = await narrativePromise;
           await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
+          await r.del(countdownKey);
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
