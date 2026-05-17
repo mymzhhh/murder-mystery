@@ -9,6 +9,7 @@ function parseScript(markdown) {
     murderer: {},
     clues: { round1: [], round2: [], round3: [], redHerrings: [] },
     dmGuide: {},
+    layoutDescription: "",
     errors: [],
   };
 
@@ -80,6 +81,12 @@ function parseScript(markdown) {
         wrongEnding: extractSection(markdown, "误判", 500),
       },
     };
+
+    // === 场景布局 ===
+    result.layoutDescription = extractSection(markdown, "场景布局", 3000)
+      || extractSection(markdown, "场景布局图", 3000)
+      || extractField(markdown, "布局")
+      || "";
 
   } catch (e) {
     result.errors.push("解析异常: " + e.message);
