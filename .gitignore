@@ -5,3 +5,12 @@ node_modules
 server.log
 stress-report.txt
 race-report.txt
+e2e-report.txt
+full-test-report.txt
+memory-report.txt
+resilience-report.txt
+stress-test.js
+race-test.js
+e2e-full-test.js
+优化方案.md
+修改方案.md
