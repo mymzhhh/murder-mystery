@@ -47,28 +47,35 @@ function sseResponse(req, res, timeoutMs = 5 * 60 * 1000) {
 
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
-  // 辅助：确保 session 存在（PG/Redis 回退重建临时 session）
+  // 辅助：确保 session 存在，用原始 id 避免生成重复条目
   async function ensureSession(id) {
     let s = await getSession(id);
     if (s) return s;
+    // Session 不存在：从 PG 或 Redis split meta 重建，以原始 id 为 key
     let markdown = "";
     let topic = "";
-    // PG
     try {
       const { getScript } = require("../modules/db");
       const pg = await getScript(id);
       if (pg && pg.original_markdown) { markdown = pg.original_markdown; topic = pg.title; }
     } catch (e) { /* ignore */ }
-    // Redis split meta
     if (!markdown) {
       const meta = await getRedis().hgetall(`split:${id}:meta`);
       if (meta && meta.originalMarkdown) { markdown = meta.originalMarkdown; topic = meta.title; }
     }
     if (!markdown) return null;
-    const ns = await createSession({ textType: "murder-mystery", topic: topic || "剧本杀", templateName: "剧本杀" });
-    await addMessage(ns.sessionId, "user", topic || "");
-    await addMessage(ns.sessionId, "assistant", markdown);
-    return await getSession(ns.sessionId);
+    // 直接用原始 id 写入 session（不用 createSession 的 uuidv4），
+    // 这样不会在剧本列表中产生新条目
+    const r2 = getRedis();
+    const now = new Date().toISOString();
+    const ts = Date.now();
+    await r2.multi()
+      .hset(`session:${id}`, { sessionId: id, createdAt: now, updatedAt: now, textType: "murder-mystery", topic: topic || "剧本杀", templateName: "剧本杀" })
+      .rpush(`session:${id}:messages`, JSON.stringify({ role: "user", content: topic || "", timestamp: now }))
+      .rpush(`session:${id}:messages`, JSON.stringify({ role: "assistant", content: markdown, timestamp: now }))
+      .zadd("sessions:index", ts, id)
+      .exec();
+    return await getSession(id);
   }
 
 
