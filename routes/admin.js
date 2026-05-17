@@ -298,6 +298,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         if (!splitResult.ok) { sse.send("error", { message: splitResult.error }); return sse.end(); }
 
         // 把切分结果从临时id迁移到原sid（先清旧数据再迁移）
+        const r = getRedis();
         const oldKeys = await scanKeys(`split:${sid}:*`);
         if (oldKeys.length > 0) await r.del(...oldKeys);
 
