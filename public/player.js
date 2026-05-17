@@ -172,6 +172,12 @@
       renderGame();
     });
 
+    // 异步叙事就绪（start_game 不再阻塞等 LLM）
+    socket.on("narrative_ready", function(data) {
+      gs.narrative = data.narrative || "";
+      if (gs.phase === "reading") renderReading();
+    });
+
     socket.on("clue_received", function(data) {
       data.clue.foundByName = data.foundBy;
       gs.myClues.push(data.clue);

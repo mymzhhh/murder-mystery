@@ -29,6 +29,15 @@ const DM_SYSTEM_PROMPT = `你是一位专业剧本杀DM（主持人），负责�
  * 生成阶段开场叙事
  */
 async function generatePhaseNarrative(script, phase, gameState) {
+  // 检查缓存（script title + phase 作为 key）
+  const { getRedis } = require("./redis-client");
+  try {
+    const r = getRedis();
+    const cacheKey = `narrative:${script.title || 'untitled'}:${phase}`;
+    const cached = await r.get(cacheKey);
+    if (cached) return cached;
+  } catch (e) { /* Redis 不可用，跳过缓存 */ }
+
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
   const players = (script.characters || []).filter(c => c.roleType !== "npc");
   const npcNames = npcs.map(c => c.name).join("、");
@@ -67,7 +76,31 @@ ${npcs.length > 0 ? '提醒玩家：NPC嫌疑人' + npcNames + '也在投票范�
   const desc = phaseDescriptions[phase] || "请生成适合当前阶段的引导内容。";
   const userPrompt = `${desc}\n\n剧本标题：《${script.title || '未命名'}》\n时代背景：${script.setting?.era || ''}\n地点：${script.setting?.location || ''}\n死者：${script.victim?.name || ''}，死因：${script.victim?.causeOfDeath || ''}\n角色：${getCharacterNames(script).join('、')}${npcInfo}\n\n请输出100-300字的叙事内容：`;
 
-  const result = await generate(DM_SYSTEM_PROMPT, userPrompt, { maxTokens: 1024, temperature: 0.8 });
+  // 15s 超时保护 + 默认叙事 fallback
+  const result = await Promise.race([
+    generate(DM_SYSTEM_PROMPT, userPrompt, { maxTokens: 1024, temperature: 0.8 }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("narrative_timeout")), 15000)),
+  ]).catch(err => {
+    console.warn(`[dm-agent] 叙事生成失败 (${phase}):`, err.message);
+    return null;
+  });
+
+  if (!result) {
+    const fallbacks = {
+      reading: "欢迎各位来到这场谋杀之谜。请仔细阅读你的角色剧本，了解自己的身份、秘密和动机。",
+      round1_investigation: "案件已经发生，现场留下了许多痕迹。请各位开始调查，寻找可能指向凶手的线索。",
+      round1_discussion: "第一轮调查结束，请各位分享你的发现。记住——每个人都有自己的秘密。",
+    };
+    return fallbacks[phase] || `游戏进入 ${phase} 阶段。请根据DM指导继续游戏。`;
+  }
+
+  // 缓存结果（1小时 TTL）
+  try {
+    const r = getRedis();
+    const cacheKey = `narrative:${script.title || 'untitled'}:${phase}`;
+    await r.setex(cacheKey, 3600, result.content);
+  } catch (e) { /* ignore */ }
+
   return result.content;
 }
 

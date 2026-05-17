@@ -8,8 +8,35 @@ const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
 
 function setupGameSocket(io) {
-  const disconnectTimers = {}; // 断线重连计时器
-  const phaseTimers = {}; // 阶段推进计时器：{roomCode: timerId}
+  const disconnectTimers = {};
+  const phaseTimers = {};
+
+  // 简单的 per-socket 频率限制
+  const rateLimits = {}; // socketId → { eventName → lastTimestamp }
+  const RATE_LIMIT_MS = {
+    chat: 800,
+    investigate: 1500,
+    vote: 2000,
+    ready: 3000,
+    ask_npc: 2000,
+  };
+
+  function checkRateLimit(socket, eventName) {
+    if (!RATE_LIMIT_MS[eventName]) return true;
+    const now = Date.now();
+    if (!rateLimits[socket.id]) rateLimits[socket.id] = {};
+    const last = rateLimits[socket.id][eventName] || 0;
+    if (now - last < RATE_LIMIT_MS[eventName]) return false;
+    rateLimits[socket.id][eventName] = now;
+    return true;
+  }
+
+  // 定期清理断线的 rate limit 记录
+  setInterval(() => {
+    for (const sid of Object.keys(rateLimits)) {
+      if (!io.sockets.sockets.get(sid)) delete rateLimits[sid];
+    }
+  }, 60000);
 
   io.on("connection", (socket) => {
     console.log(`[socket] ${socket.id}`);
@@ -192,7 +219,7 @@ function setupGameSocket(io) {
         // 立即进入 reading 阶段，叙事异步生成（不再阻塞玩家等待 LLM）
         await updateRoom(roomCode, { status: "playing", phase: "reading", phaseStartedAt: Date.now(), aiNarrative: "" });
         io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative: "AI DM 正在准备开场叙事..." });
-        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", narrative: "" });
+        io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", config: getPhaseConfig("reading"), narrative: "" });
         (await getRedis()).srem("rooms:open", roomCode);
 
         // 异步生成开场叙事，完成后推送
@@ -206,6 +233,7 @@ function setupGameSocket(io) {
     });
 
     socket.on("investigate", async ({ roomCode, query }) => {
+      if (!checkRateLimit(socket, "investigate")) return;
       try {
         const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
@@ -243,6 +271,7 @@ function setupGameSocket(io) {
     });
 
     socket.on("chat", async ({ roomCode, content }) => {
+      if (!checkRateLimit(socket, "chat")) return;
       try {
         const room = await getRoom(roomCode);
         const player = await getPlayer(roomCode, socket.id);
@@ -255,6 +284,7 @@ function setupGameSocket(io) {
 
     // 审讯NPC：玩家向NPC嫌疑人提问
     socket.on("ask_npc", async ({ roomCode, npcName, question }) => {
+      if (!checkRateLimit(socket, "ask_npc")) return;
       try {
         const room = await getRoom(roomCode);
         const players = await getPlayers(roomCode);
@@ -291,6 +321,7 @@ function setupGameSocket(io) {
     });
 
     socket.on("vote", async ({ roomCode, targetCharacterName }) => {
+      if (!checkRateLimit(socket, "vote")) return;
       try {
         const room = await getRoom(roomCode);
         const allPlayers = await getPlayers(roomCode);
@@ -312,6 +343,7 @@ function setupGameSocket(io) {
     });
 
     socket.on("ready", async ({ roomCode }) => {
+      if (!checkRateLimit(socket, "ready")) return;
       try {
         const room = await getRoom(roomCode);
         if (room.phase === "truth_reveal" || room.phase === "finished" || room.phase === "lobby") return;
