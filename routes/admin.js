@@ -296,35 +296,24 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           return sse.end();
         }
         // 创建临时session
-        const s = await createSession({ textType: "murder-mystery", topic: fallbackTopic || "剧本杀", templateName: "剧本杀" });
-        await addMessage(s.sessionId, "user", fallbackTopic || "");
-        await addMessage(s.sessionId, "assistant", fallbackMarkdown);
-
-        // 先用splitScript正常切分（有进度显示）
-        const splitResult = await splitScript(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
-        if (!splitResult.ok) { sse.send("error", { message: splitResult.error }); return sse.end(); }
-
-        // 清理旧 split 数据，把临时切分结果迁移到原 sid
+        // 用原始 sid 重建 session（不生成新 UUID，避免剧本列表重复）
         const r = getRedis();
+        const now = new Date().toISOString();
+        const ts = Date.now();
+        await r.multi()
+          .hset(`session:${sid}`, { sessionId: sid, createdAt: now, updatedAt: now, textType: "murder-mystery", topic: fallbackTopic || "剧本杀", templateName: "剧本杀" })
+          .del(`session:${sid}:messages`)
+          .rpush(`session:${sid}:messages`, JSON.stringify({ role: "user", content: fallbackTopic || "", timestamp: now }))
+          .rpush(`session:${sid}:messages`, JSON.stringify({ role: "assistant", content: fallbackMarkdown, timestamp: now }))
+          .zadd("sessions:index", ts, sid)
+          .exec();
+
+        // 清除旧 split 数据，直接切分（用 sid 作为 key）
         const oldKeys = await scanKeys(`split:${sid}:*`);
         if (oldKeys.length > 0) await r.del(...oldKeys);
 
-        const tempKeys = await scanKeys(`split:${s.sessionId}:*`);
-        const pipe2 = r.pipeline();
-        for (const k of tempKeys) {
-          const newKey = k.replace(s.sessionId, sid);
-          const data = await r.hgetall(k);
-          if (data && Object.keys(data).length > 0) {
-            pipe2.hset(newKey, data);
-          }
-          pipe2.del(k);
-        }
-        await pipe2.exec();
-
-        // 清理临时数据：先从索引移除临时id，再删临时session
-        await r.srem("scripts:split", s.sessionId);
-        await r.sadd("scripts:split", sid);
-        try { await deleteSession(s.sessionId); } catch (e) { console.warn("[split] 临时session清理失败:", e.message); }
+        const splitResult = await splitScript(sid, (stage, msg) => sse.send("progress", { stage, message: msg }));
+        if (!splitResult.ok) { sse.send("error", { message: splitResult.error }); return sse.end(); }
 
         // 修复标题：从原始markdown直接提取
         const titleFromMD = extractTitleFromMarkdown(fallbackMarkdown || "");
