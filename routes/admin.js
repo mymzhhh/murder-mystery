@@ -12,6 +12,39 @@ const { createGameRoom } = require("../modules/game-room-creator");
 const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/game-manager");
 const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
+// SSE 辅助：带超时保护的 SSE 连接（超时默认 5 分钟）
+function sseResponse(req, res, timeoutMs = 5 * 60 * 1000) {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  let closed = false;
+
+  const timer = setTimeout(() => {
+    if (!closed) {
+      try { res.write('event: error\ndata: {"message":"操作超时"}\n\n'); } catch (_) {}
+      try { res.end(); } catch (_) {}
+      closed = true;
+    }
+  }, timeoutMs);
+
+  req.on("close", () => { closed = true; });
+
+  return {
+    isClosed: () => closed,
+    send: (event, data) => {
+      if (!closed) {
+        try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) { closed = true; }
+      }
+    },
+    end: () => {
+      if (!closed) { clearTimeout(timer); try { res.end(); } catch (_) {} closed = true; }
+    },
+  };
+}
+
 function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   // 辅助：确保 session 存在（PG/Redis 回退重建临时 session）
@@ -86,17 +119,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   app.post("/api/admin/scripts/generate", authMiddleware, adminMiddleware, async (req, res) => {
     const { input, config } = req.body;
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    let closed = false;
-    req.on("close", () => { closed = true; });
-    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
+    const sse = sseResponse(req, res);
     try {
-      const result = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
-      if (closed) return;
-      if (!result.ok) { send("error", { message: result.error }); return res.end(); }
-      send("complete", { sessionId: result.sessionId, summary: result.summary });
-    } catch (err) { if (!closed) send("error", { message: err.message }); }
-    if (!closed) res.end();
+      const result = await writeScript(input, (stage, msg) => sse.send("progress", { stage, message: msg }), config);
+      if (sse.isClosed()) return;
+      if (!result.ok) { sse.send("error", { message: result.error }); return sse.end(); }
+      sse.send("complete", { sessionId: result.sessionId, summary: result.summary });
+    } catch (err) { if (!sse.isClosed()) sse.send("error", { message: err.message }); }
+    sse.end();
   });
 
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
@@ -150,43 +180,39 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     const { input, config } = req.body;
     if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
 
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    let closed = false;
-    req.on("close", () => { closed = true; });
-    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
-
+    const sse = sseResponse(req, res);
     let currentSessionId = null;
 
     try {
       currentSessionId = require("uuid").v4();
-      send("phase", { phase: "write", message: "正在生成剧本...", sessionId: currentSessionId });
+      sse.send("phase", { phase: "write", message: "正在生成剧本...", sessionId: currentSessionId });
 
-      const writeResult = await writeScript(input, (stage, msg) => send("progress", { stage, message: msg }), config);
-      if (closed) return;
+      const writeResult = await writeScript(input, (stage, msg) => sse.send("progress", { stage, message: msg }), config);
+      if (sse.isClosed()) return;
 
-      if (!writeResult.ok) { send("error", { message: writeResult.error, phase: "write", sessionId: currentSessionId }); return res.end(); }
+      if (!writeResult.ok) { sse.send("error", { message: writeResult.error, phase: "write", sessionId: currentSessionId }); return sse.end(); }
       currentSessionId = writeResult.sessionId;
-      send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
+      sse.send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
 
-      send("phase", { phase: "review", message: "正在评测剧本..." });
+      sse.send("phase", { phase: "review", message: "正在评测剧本..." });
       const reviewResult = await reviewAndRevise(currentSessionId, (stage, msg) => {
-        send("progress", { stage: "review_" + stage, message: msg });
+        sse.send("progress", { stage: "review_" + stage, message: msg });
       });
-      if (closed) return;
+      if (sse.isClosed()) return;
 
-      if (!reviewResult.ok) { send("error", { message: reviewResult.error, phase: "review" }); return res.end(); }
-      send("phase", { phase: "review_done", passed: reviewResult.passed, score: reviewResult.finalScore, rounds: reviewResult.totalRounds });
+      if (!reviewResult.ok) { sse.send("error", { message: reviewResult.error, phase: "review" }); return sse.end(); }
+      sse.send("phase", { phase: "review_done", passed: reviewResult.passed, score: reviewResult.finalScore, rounds: reviewResult.totalRounds });
 
       if (!reviewResult.passed) {
-        send("complete", { status: "review_failed", message: `${reviewResult.totalRounds}轮评测后仍未通过（${reviewResult.finalScore}分）` });
-        return res.end();
+        sse.send("complete", { status: "review_failed", message: `${reviewResult.totalRounds}轮评测后仍未通过（${reviewResult.finalScore}分）` });
+        return sse.end();
       }
 
-      send("phase", { phase: "split", message: "剧本已评测通过并完成切分！" });
-      send("complete", { status: "done", sessionId: reviewResult.sessionId });
+      sse.send("phase", { phase: "split", message: "剧本已评测通过并完成切分！" });
+      sse.send("complete", { status: "done", sessionId: reviewResult.sessionId });
 
-    } catch (e) { if (!closed) { try { send("error", { message: e.message }); } catch (_) {} } }
-    if (!closed) res.end();
+    } catch (e) { if (!sse.isClosed()) sse.send("error", { message: e.message }); }
+    sse.end();
   });
 
   // 评测剧本（单次）
@@ -213,17 +239,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
   // 评测+重新生成循环（SSE，最多3轮）
   app.post("/api/admin/scripts/:id/review-revise", authMiddleware, adminMiddleware, async (req, res) => {
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    let closed = false;
-    req.on("close", () => { closed = true; });
-    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
+    const sse = sseResponse(req, res);
     try {
       const s = await ensureSession(req.params.id);
-      if (!s) { send("error", { message: "剧本不存在" }); return res.end(); }
-      const result = await reviewAndRevise(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
-      if (!closed) send("complete", result);
-    } catch (e) { if (!closed) send("error", { message: e.message }); }
-    if (!closed) res.end();
+      if (!s) { sse.send("error", { message: "剧本不存在" }); return sse.end(); }
+      const result = await reviewAndRevise(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
+      if (!sse.isClosed()) sse.send("complete", result);
+    } catch (e) { if (!sse.isClosed()) sse.send("error", { message: e.message }); }
+    sse.end();
   });
 
   // 切分剧本（SSE）
@@ -240,17 +263,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   }
 
   app.post("/api/admin/scripts/:id/split", authMiddleware, adminMiddleware, async (req, res) => {
-    res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no" });
-    let closed = false;
-    req.on("close", () => { closed = true; });
-    const send = (e, d) => { if (!closed) res.write(`event: ${e}\ndata: ${JSON.stringify(d)}\n\n`); };
+    const sse = sseResponse(req, res);
     try {
       const sid = req.params.id;
       // 先尝试从split meta恢复原始剧本（session可能已被删除）
       let result;
       const session = await getSession(sid);
       if (session) {
-        result = await splitScript(sid, (stage, msg) => send("progress", { stage, message: msg }));
+        result = await splitScript(sid, (stage, msg) => sse.send("progress", { stage, message: msg }));
       } else {
         // Session不存在，从 PG / Redis split meta 获取 originalMarkdown 重建临时 session
         let fallbackMarkdown = "";
@@ -265,8 +285,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           if (meta && meta.originalMarkdown) { fallbackMarkdown = meta.originalMarkdown; fallbackTopic = meta.title; }
         }
         if (!fallbackMarkdown) {
-          send("error", { message: "剧本不存在" });
-          return res.end();
+          sse.send("error", { message: "剧本不存在" });
+          return sse.end();
         }
         // 创建临时session
         const s = await createSession({ textType: "murder-mystery", topic: fallbackTopic || "剧本杀", templateName: "剧本杀" });
@@ -274,8 +294,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         await addMessage(s.sessionId, "assistant", fallbackMarkdown);
 
         // 先用splitScript正常切分（有进度显示）
-        const splitResult = await splitScript(s.sessionId, (stage, msg) => send("progress", { stage, message: msg }));
-        if (!splitResult.ok) { send("error", { message: splitResult.error }); return res.end(); }
+        const splitResult = await splitScript(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
+        if (!splitResult.ok) { sse.send("error", { message: splitResult.error }); return sse.end(); }
 
         // 把切分结果从临时id迁移到原sid（先清旧数据再迁移）
         const oldKeys = await scanKeys(`split:${sid}:*`);
@@ -305,13 +325,13 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         // 清理临时session
         await deleteSession(s.sessionId);
 
-        send("complete", { ok: true, result: splitResult.result });
-        return res.end();
+        sse.send("complete", { ok: true, result: splitResult.result });
+        return sse.end();
       }
-      if (!result.ok) { send("error", { message: result.error }); return res.end(); }
-      send("complete", { ok: true, result });
-    } catch (e) { if (!closed) send("error", { message: e.message }); }
-    if (!closed) res.end();
+      if (!result.ok) { sse.send("error", { message: result.error }); return sse.end(); }
+      sse.send("complete", { ok: true, result });
+    } catch (e) { if (!sse.isClosed()) sse.send("error", { message: e.message }); }
+    sse.end();
   });
 
   // 获取已切分数据

@@ -2,3 +2,6 @@
 data/sessions/*
 node_modules
 修改记录.md
+server.log
+stress-report.txt
+race-report.txt

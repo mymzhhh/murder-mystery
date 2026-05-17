@@ -1,53 +1,91 @@
 services:
   redis:
     image: redis:7-alpine
-    container_name: text-gen-redis
+    container_name: murder-redis
     ports:
       - "6380:6379"
     restart: unless-stopped
     volumes:
       - redis-data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 900 1
+      --save 300 10
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 3s
+      start_period: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
 
   postgres:
     image: postgres:16-alpine
-    container_name: text-gen-pg
+    container_name: murder-pg
     ports:
       - "5433:5432"
     environment:
-      POSTGRES_USER: murder
-      POSTGRES_PASSWORD: murder123
-      POSTGRES_DB: murder_mystery
+      POSTGRES_USER: ${POSTGRES_USER:-murder}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-murder123}
+      POSTGRES_DB: ${POSTGRES_DB:-murder_mystery}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
     volumes:
       - pg-data:/var/lib/postgresql/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U murder -d murder_mystery"]
-      interval: 5s
-      timeout: 3s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-murder} -d ${POSTGRES_DB:-murder_mystery}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 10s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
-  text-gen-agent:
+  app:
     build: .
-    container_name: text-gen-agent
+    container_name: murder-app
     ports:
-      - "3001:3000"
+      - "${PORT:-3000}:3000"
     env_file:
       - .env
     environment:
       - REDIS_URL=redis://redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-murder}:${POSTGRES_PASSWORD:-murder123}@postgres:5432/${POSTGRES_DB:-murder_mystery}
+      - NODE_ENV=production
+      - REDIS_POOL_SIZE=4
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
       postgres:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+        reservations:
+          memory: 256M
+    # 日志轮转（防止日志撑满磁盘）
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
 
 volumes:
   redis-data:
+    driver: local
   pg-data:
+    driver: local
