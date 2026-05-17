@@ -82,10 +82,17 @@ function parseScript(markdown) {
       },
     };
 
-    // === 场景布局 ===
-    result.layoutDescription = extractSection(markdown, "场景布局", 3000)
+    // === 场景布局（多模式提取） ===
+    result.layoutDescription =
+      extractSection(markdown, "场景布局", 3000)
       || extractSection(markdown, "场景布局图", 3000)
+      || extractSection(markdown, "平面布局", 3000)
+      || extractSection(markdown, "房间布局", 3000)
+      || extractSection(markdown, "场景地图", 3000)
+      || extractSection(markdown, "房间位置描述", 3000)
+      || extractSection(markdown, "地图", 3000)
       || extractField(markdown, "布局")
+      || extractField(markdown, "场景")
       || "";
 
   } catch (e) {

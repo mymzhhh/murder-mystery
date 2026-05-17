@@ -7,26 +7,26 @@ const { parseScript } = require("./script-parser");
  * 纯化一段玩家剧本
  */
 function extractLayoutDescription(markdown) {
-  // 匹配多种常见的布局章节标题
   const headingPatterns = [
     /#{1,3}\s*(?:场景布局|场景布局图|平面布局|平面图|房间布局|建筑布局|地点布局|布局图|地图|场景地图|位置图|空间布局)\s*\n([\s\S]*?)(?=\n#{1,3}\s+(?!-|\d+\.)|\n---\s*\n|$)/i,
     /#{1,3}\s*房间位置描述\s*\n([\s\S]*?)(?=\n#{1,3}\s+(?!-|\d+\.)|\n---\s*\n|$)/i,
-    /\*\*(?:场景布局|场景布局图|平面布局|场景地图|布局图)\*\*[：:]\s*([\s\S]*?)(?=\n\*\*|\n#{1,3}|$)/i,
-    /(?:场景布局|场景布局图|平面布局)[：:]\s*([\s\S]*?)(?=\n(?:#{1,3}\s|[一二三四五六七八九]、|\*\*角色|\*\*凶手|$))/i,
+    /\*\*(?:场景布局|场景布局图|平面布局|场景地图|布局图|房间分布|空间结构)\*\*[：:]\s*([\s\S]*?)(?=\n\*\*|\n#{1,3}|$)/i,
+    /(?:场景布局|场景布局图|平面布局|房间分布|地图|场景地形)[：:]\s*([\s\S]*?)(?=\n(?:#{1,3}\s|[一二三四五六七八九]、|\*\*角色|\*\*凶手|$))/i,
+    // 兜底：匹配包含典型布局关键词的段落
+    /\n((?:(?:[一二三四五六七八九]楼|[地上地下下][一二三四五六七八九]层|房间|大厅|厨房|书房|卧室|阳台|走廊|楼梯|花园|密室|客厅|餐厅|卫生间|浴室|储藏室|车库|阁楼|地下室).{0,200}(?:\n|$)){2,})/i,
   ];
 
   for (const pattern of headingPatterns) {
     const match = markdown.match(pattern);
     if (match) {
       let text = (match[1] || match[0]).trim();
-      // 去掉首行可能残留的标题
       text = text.replace(/^#{1,3}\s*(?:场景布局|场景布局图|平面布局|平面图|房间布局|建筑布局|地点布局|布局图|地图|场景地图|位置图|空间布局|房间位置描述)[^\n]*\n?/i, "").trim();
-      // 截断尾部不相干内容
       const cutMarks = [
         /\n#{1,3}\s+(?!-|\d+\.)/,
         /\n---\s*\n/,
         /\n(?:玩家角色剧本|NPC嫌疑人信息|第[一二三四五六七八九]部分)/i,
         /\n\*\*重要约束/,
+        /\n#{1,3}\s*(?:线索|证据|DM|真相|复盘|凶手|故事背景|角色介绍)/i,
       ];
       for (const cut of cutMarks) {
         const idx = text.search(cut);
@@ -53,8 +53,8 @@ async function splitScript(sessionId, onProgress) {
   onProgress("parse", "正在解析剧本结构...");
   const parsed = parseScript(markdown);
 
-  // 从 markdown 中提取场景布局描述
-  const layoutDescription = extractLayoutDescription(markdown);
+  // 从 markdown 中提取场景布局描述（extractLayoutDescription + parseScript 互补）
+  const layoutDescription = extractLayoutDescription(markdown) || parsed.layoutDescription || "";
 
   const result = {
     sessionId,
