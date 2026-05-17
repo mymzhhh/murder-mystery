@@ -70,6 +70,16 @@ const authLimiter = rateLimit({
 app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/register", authLimiter);
 
+// 生成类 API 严格限流（消耗 LLM 配额）
+const generationLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: "剧本生成请求过于频繁，请1分钟后再试" },
+});
+app.use("/api/admin/scripts/generate", generationLimiter);
+app.use("/api/admin/pipeline/run", generationLimiter);
+app.use("/api/admin/scripts/:id/review-revise", generationLimiter);
+
 app.get("/", (req, res) => res.redirect("/login.html"));
 
 // 健康检查

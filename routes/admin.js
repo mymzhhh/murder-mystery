@@ -12,7 +12,7 @@ const { createGameRoom } = require("../modules/game-room-creator");
 const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/game-manager");
 const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
-// SSE 辅助：带超时保护的 SSE 连接（超时默认 5 分钟）
+// SSE 辅助：带超时保护 + AbortController 的 SSE 连接
 function sseResponse(req, res, timeoutMs = 5 * 60 * 1000) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -21,26 +21,32 @@ function sseResponse(req, res, timeoutMs = 5 * 60 * 1000) {
     "X-Accel-Buffering": "no",
   });
   let closed = false;
+  const controller = new AbortController();
 
   const timer = setTimeout(() => {
     if (!closed) {
+      controller.abort();
       try { res.write('event: error\ndata: {"message":"操作超时"}\n\n'); } catch (_) {}
       try { res.end(); } catch (_) {}
       closed = true;
     }
   }, timeoutMs);
 
-  req.on("close", () => { closed = true; });
+  req.on("close", () => {
+    controller.abort();
+    closed = true;
+  });
 
   return {
     isClosed: () => closed,
+    signal: controller.signal,
     send: (event, data) => {
       if (!closed) {
         try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) { closed = true; }
       }
     },
     end: () => {
-      if (!closed) { clearTimeout(timer); try { res.end(); } catch (_) {} closed = true; }
+      if (!closed) { controller.abort(); clearTimeout(timer); try { res.end(); } catch (_) {} closed = true; }
     },
   };
 }

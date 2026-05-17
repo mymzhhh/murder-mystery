@@ -11,7 +11,13 @@ function setupGameSocket(io) {
   const disconnectTimers = {};
   const phaseTimers = {};
 
-  // 简单的 per-socket 频率限制
+  // async socket handler 错误边界
+  function safeHandler(fn) {
+    return (...args) => fn(...args).catch(err => {
+      console.error("[socket] handler:", err.message);
+    });
+  }
+
   const rateLimits = {}; // socketId → { eventName → lastTimestamp }
   const RATE_LIMIT_MS = {
     chat: 800,
@@ -437,6 +443,7 @@ function setupGameSocket(io) {
     });
 
     socket.on("disconnect", async () => {
+      delete rateLimits[socket.id]; // 即时清理，不等定时器
       const { getRedis } = require("../modules/game-manager");
       const codes = await (await getRedis()).smembers("rooms:open");
       for (const code of codes) {
