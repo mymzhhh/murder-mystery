@@ -297,7 +297,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         const splitResult = await splitScript(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
         if (!splitResult.ok) { sse.send("error", { message: splitResult.error }); return sse.end(); }
 
-        // 把切分结果从临时id迁移到原sid（先清旧数据再迁移）
+        // 清理旧 split 数据，把临时切分结果迁移到原 sid
         const r = getRedis();
         const oldKeys = await scanKeys(`split:${sid}:*`);
         if (oldKeys.length > 0) await r.del(...oldKeys);
@@ -308,23 +308,22 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           const newKey = k.replace(s.sessionId, sid);
           const data = await r.hgetall(k);
           if (data && Object.keys(data).length > 0) {
-            // 用hmset确保所有字段都写入
             pipe2.hset(newKey, data);
           }
           pipe2.del(k);
         }
         await pipe2.exec();
-        await getRedis().srem("scripts:split", s.sessionId);
-        await getRedis().sadd("scripts:split", sid);
 
-        // 修复标题：从原始markdown直接提取，覆盖parser可能产生的错误标题
+        // 清理临时数据：先从索引移除临时id，再删临时session
+        await r.srem("scripts:split", s.sessionId);
+        await r.sadd("scripts:split", sid);
+        try { await deleteSession(s.sessionId); } catch (e) { console.warn("[split] 临时session清理失败:", e.message); }
+
+        // 修复标题：从原始markdown直接提取
         const titleFromMD = extractTitleFromMarkdown(fallbackMarkdown || "");
         if (titleFromMD && titleFromMD.length >= 2) {
           await r.hset(`split:${sid}:meta`, "title", titleFromMD);
         }
-
-        // 清理临时session
-        await deleteSession(s.sessionId);
 
         sse.send("complete", { ok: true, result: splitResult.result });
         return sse.end();
