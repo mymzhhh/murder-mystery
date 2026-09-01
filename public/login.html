@@ -66,11 +66,12 @@
       if (t === "login") {
         loginForm.style.display = "block";
         registerForm.style.display = "none";
-        loginForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
+        // forwards: 动画结束后保持最终状态(opacity:1)，否则会被 .stagger 的 opacity:0 覆盖导致表单消失
+        loginForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards";
       } else {
         loginForm.style.display = "none";
         registerForm.style.display = "block";
-        registerForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)";
+        registerForm.style.animation = "fadeUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards";
       }
       errorEl.style.display = "none";
     }
