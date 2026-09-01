@@ -696,7 +696,8 @@
 
   // ===================== 开场介绍 =====================
   function renderIntro() {
-    var h = '<div class="panel"><h3>🎭 开场介绍</h3>' +
+    var h = topBar(gs.phase) +
+      '<div class="panel"><h3>🎭 开场介绍</h3>' +
       '<p class="text-dim">向所有人交代你的身份、你的故事，以及案发时你在哪里。全员提交介绍后，点击「进入下一阶段」继续游戏。</p>' +
       '<div id="introList" style="margin:14px 0;"></div>' +
       '<textarea id="introInput" class="form-textarea" rows="4" placeholder="大家好，我是… 案发时我在…"></textarea>' +
@@ -986,8 +987,9 @@
       });
       h += '</div>';
     }
-    h += '<div style="margin-top:20px;text-align:center;">' +
+    h += '<div style="margin-top:20px;text-align:center;display:flex;justify-content:center;gap:8px;flex-wrap:wrap;">' +
       '<button class="btn btn-outline btn-auto" onclick="openReview()">📋 查看完整复盘</button>' +
+      '<button class="btn btn-outline btn-auto" onclick="leaveRoom()">🚪 退出房间</button>' +
       '</div>';
     h += '</div>';
 
