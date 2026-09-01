@@ -226,7 +226,11 @@
       renderTruth(data);
     });
 
-    socket.on("game_ended", function() { location.reload(); });
+    socket.on("game_ended", function() {
+      // 房间已被删除：清掉残留房间码再回大厅，避免刷新后自动 join 报"房间不存在"
+      sessionStorage.removeItem("_roomCode");
+      location.reload();
+    });
 
     socket.on("narrative", function(data) {
       gs.narrative = data.text;
@@ -235,6 +239,13 @@
 
     socket.on("error", function(data) {
       showToast(data.message || "发生错误", "error");
+      // 房间不存在 / 登录失效：无法再进入原房间，退出"重新连接中"状态回大厅
+      if (data && (data.code === "NOT_FOUND" || data.code === "AUTH" || data.code === "JOIN_LOCKED")) {
+        sessionStorage.removeItem("_roomCode");
+        document.getElementById("gameView").style.display = "none";
+        document.getElementById("lobbyView").style.display = "block";
+        loadRooms();
+      }
     });
 
     socket.on("left_room", function() { location.reload(); });
