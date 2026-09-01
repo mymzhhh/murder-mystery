@@ -1,6 +1,6 @@
 // Player API routes
 
-const { getRoom, getPlayers } = require("../modules/game-manager");
+const { getRoom, getPlayers, getClues, getVotes, getChatMessages } = require("../modules/game-manager");
 const { getRedis } = require("../modules/redis-client");
 
 function setupPlayerRoutes(app, authMiddleware) {
@@ -50,6 +50,46 @@ const { createGameRoom } = require("../modules/game-room-creator");
       const { scriptSessionId, maxPlayers } = req.body;
       if (!scriptSessionId) return res.status(400).json({ error: "请选择剧本" });
       res.json(await createGameRoom(scriptSessionId, maxPlayers || 6));
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 游戏复盘：真相揭示、凶手、投票分布、线索发现、聊天记录
+  app.get("/api/player/review/:code", authMiddleware, async (req, res) => {
+    try {
+      const room = await getRoom(req.params.code);
+      if (!room) return res.status(404).json({ error: "房间不存在" });
+      if (!["truth_reveal", "finished"].includes(room.phase)) {
+        return res.status(403).json({ error: "游戏尚未结束，无法查看复盘" });
+      }
+      const parsed = JSON.parse(room.parsedScript || "{}");
+      const players = await getPlayers(req.params.code);
+      const votesRaw = await getVotes(req.params.code);
+      const votes = Object.entries(votesRaw || {}).map(([pid, target]) => {
+        const p = players.find(x => x.playerId === pid);
+        return { voter: p?.characterName || p?.playerName || "未知", target };
+      });
+      const clues = (await getClues(req.params.code)).map(c => {
+        const finder = players.find(p => (c.foundBy || []).includes(p.playerId));
+        return {
+          id: c.id, content: (c.content || "").substring(0, 200),
+          location: c.location || "", round: c.round,
+          foundBy: finder ? (finder.characterName || finder.playerName) : null,
+        };
+      });
+      const chat = (await getChatMessages(req.params.code, 120)).map(m => ({
+        ...m,
+        content: (m.content || "").substring(0, 300),
+      }));
+      res.json({
+        roomCode: req.params.code,
+        title: parsed.title,
+        murderer: parsed.murderer || {},
+        truthReveal: parsed.dmGuide?.truthReveal || "",
+        characters: parsed.characters || [],
+        players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, isNPC: !!p.isNPC })),
+        votes, clues, chat,
+        generatedAt: new Date().toISOString(),
+      });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

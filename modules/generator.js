@@ -5,11 +5,14 @@ const OpenAI = require("openai");
 
 const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
-const defaultModel = process.env.DEFAULT_MODEL || "deepseek-chat";
+const defaultModel = process.env.DEFAULT_MODEL || "deepseek-v4-flash";
 
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 1000;
 const API_TIMEOUT_MS = 120000; // 单次调用最长等待2分钟
+
+// LLM 用量统计（进程内累计，供管理端仪表盘展示）
+const usageStats = { calls: 0, inputTokens: 0, outputTokens: 0 };
 
 let client = null;
 
@@ -51,11 +54,16 @@ async function _callWithRetry(messages, options = {}) {
         temperature: options.temperature ?? 0.7,
         messages,
       }, options.signal ? { signal: options.signal } : {});
+      const inTokens = response.usage?.prompt_tokens || 0;
+      const outTokens = response.usage?.completion_tokens || 0;
+      usageStats.calls++;
+      usageStats.inputTokens += inTokens;
+      usageStats.outputTokens += outTokens;
       return {
         content: response.choices[0]?.message?.content || "",
         usage: {
-          inputTokens: response.usage?.prompt_tokens || 0,
-          outputTokens: response.usage?.completion_tokens || 0,
+          inputTokens: inTokens,
+          outputTokens: outTokens,
         },
         model: response.model,
       };
@@ -82,4 +90,4 @@ async function generate(systemPrompt, userPrompt, options = {}) {
   ], options);
 }
 
-module.exports = { generate };
+module.exports = { generate, getUsageStats: () => ({ ...usageStats }) };

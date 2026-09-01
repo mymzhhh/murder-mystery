@@ -64,7 +64,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       const { getScript } = require("../modules/db");
       const pg = await getScript(id);
       if (pg && pg.original_markdown) { markdown = pg.original_markdown; topic = pg.title; }
-    } catch (e) { /* ignore */ }
+    } catch (e) { console.warn("[admin] ensureSession PG fallback failed:", e.message); }
     if (!markdown) {
       const meta = await getRedis().hgetall(`split:${id}:meta`);
       if (meta && meta.originalMarkdown) { markdown = meta.originalMarkdown; topic = meta.title; }
@@ -85,9 +85,14 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   }
 
 
-  // 剧本列表（含未切分 session + 已切分 split 数据）
+  // 剧本列表（含未切分 session + 已切分 split 数据），支持分页与关键词搜索
   app.get("/api/admin/scripts", authMiddleware, adminMiddleware, async (req, res) => {
     try {
+      // 分页 & 搜索参数
+      const page = Math.max(1, parseInt(req.query.page) || 1);
+      const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 20));
+      const q = String(req.query.q || "").trim().toLowerCase();
+
       const scripts = [];
       // PG 为主源
       try {
@@ -124,7 +129,16 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         }
       } catch (e) { console.warn("[admin] PG scripts list failed:", e.message); }
 
-      res.json({ scripts });
+      // 关键词过滤 + 按创建时间倒序 + 分页
+      const filtered = q
+        ? scripts.filter(s => (s.topic || "").toLowerCase().includes(q) || (s.sessionId || "").toLowerCase().includes(q))
+        : scripts;
+      filtered.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+      const total = filtered.length;
+      const start = (page - 1) * pageSize;
+      const items = filtered.slice(start, start + pageSize);
+
+      res.json({ scripts: items, total, page, pageSize });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
@@ -292,7 +306,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           const { getScript } = require("../modules/db");
           const pg = await getScript(sid);
           if (pg && pg.original_markdown) { fallbackMarkdown = pg.original_markdown; fallbackTopic = pg.title; }
-        } catch (e) { /* ignore */ }
+        } catch (e) { console.warn("[admin] split fallback PG failed:", e.message); }
         if (!fallbackMarkdown) {
           const meta = await getRedis().hgetall(`split:${sid}:meta`);
           if (meta && meta.originalMarkdown) { fallbackMarkdown = meta.originalMarkdown; fallbackTopic = meta.title; }
@@ -492,12 +506,70 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     res.json({ success: true });
   });
 
-  // 数据导出
+  // ============ 仪表盘统计 ============
+  // 用户 / 剧本 / 房间数量 + LLM token 消耗（进程内累计）
+  app.get("/api/admin/stats", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { getUsageStats } = require("../modules/generator");
+      const llm = getUsageStats();
+
+      let userCount = 0;
+      try { userCount = (await listUsers()).length; } catch (e) { /* 忽略 */ }
+
+      // 剧本数：PG 入库 ∪ Redis 切分 ∪ 未切分 session，去重统计
+      const scriptIds = new Set();
+      try {
+        const { listScripts } = require("../modules/db");
+        (await listScripts()).forEach(s => scriptIds.add(s.id));
+      } catch (e) { /* 忽略 */ }
+      try {
+        const r = getRedis();
+        (await r.smembers("scripts:split")).forEach(id => scriptIds.add(id));
+      } catch (e) { /* 忽略 */ }
+      try {
+        (await listSessions()).forEach(s => scriptIds.add(s.sessionId));
+      } catch (e) { /* 忽略 */ }
+
+      let roomCount = 0;
+      try { roomCount = (await getRedis().smembers("rooms:open")).length; } catch (e) { /* 忽略 */ }
+
+      res.json({
+        users: userCount,
+        scripts: scriptIds.size,
+        rooms: roomCount,
+        llm: {
+          calls: llm.calls,
+          inputTokens: llm.inputTokens,
+          outputTokens: llm.outputTokens,
+          totalTokens: llm.inputTokens + llm.outputTokens,
+        },
+        uptime: process.uptime(),
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ============ 数据备份 / 恢复 ============
+  // 业务数据 key 白名单（排除 token 等临时/敏感数据，避免全量导出扫描生产 Redis）
+  const DATA_KEY_PREFIXES = ["split:", "user:", "session:", "game:", "sessions:index", "scripts:split", "rooms:open"];
+  const DATA_MAX_KEYS = 50000;          // 单次导出/导入 key 数量上限
+  const DATA_IMPORT_MAX_BYTES = 2 * 1024 * 1024; // 2MB
+  const DATA_TTL_MAX = 30 * 24 * 3600;  // 导入 TTL 上限：30 天
+
+  function isBusinessKey(key) {
+    if (key.startsWith("token:")) return false;
+    return DATA_KEY_PREFIXES.some(p => key.startsWith(p));
+  }
+
+  // 数据导出（仅业务数据，带上限保护）
   app.get("/api/admin/export", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      // Redis 全量导出
       const r = getRedis();
-      const keys = await scanKeys("*");
+      const allKeys = await scanKeys("*");
+      const keys = allKeys.filter(isBusinessKey);
+      if (keys.length > DATA_MAX_KEYS) {
+        return res.status(413).json({ error: `可导出的数据量过大(${keys.length} keys > ${DATA_MAX_KEYS})，请先清理旧数据再导出` });
+      }
       const redisData = {};
       for (const key of keys) {
         const type = await r.type(key);
@@ -519,29 +591,47 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       } catch (e) { pgData = { error: e.message }; }
 
       res.json({
-        redis: { keys: Object.keys(redisData).length, data: redisData },
+        redis: { keys: Object.keys(redisData).length, skipped: allKeys.length - keys.length, data: redisData },
         pg: pgData,
+        exportedAt: new Date().toISOString(),
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // 数据导入
+  // 数据导入（key 白名单 + 类型校验 + 大小限制，防止覆写敏感数据）
   app.post("/api/admin/import", authMiddleware, adminMiddleware, async (req, res) => {
     try {
       const { data } = req.body;
-      if (!data) return res.status(400).json({ error: "无数据" });
+      if (!data || typeof data !== "object") return res.status(400).json({ error: "无数据" });
+      const entries = Object.entries(data);
+      if (entries.length === 0) return res.status(400).json({ error: "数据为空" });
+      if (entries.length > DATA_MAX_KEYS) {
+        return res.status(413).json({ error: `导入的 key 数量(${entries.length})超过上限(${DATA_MAX_KEYS})` });
+      }
+      const sizeBytes = Buffer.byteLength(JSON.stringify(req.body), "utf8");
+      if (sizeBytes > DATA_IMPORT_MAX_BYTES) {
+        return res.status(413).json({ error: `导入数据过大(${(sizeBytes / 1024 / 1024).toFixed(1)}MB > 2MB)` });
+      }
       const r = getRedis();
+      const allowedTypes = ["string", "hash", "set", "zset", "list"];
       let count = 0;
-      for (const [key, info] of Object.entries(data)) {
+      let rejected = 0;
+      for (const [key, info] of entries) {
+        // key 白名单：只允许业务数据，防止覆写 token / 未知 key
+        if (!isBusinessKey(key)) { rejected++; continue; }
+        if (!info || typeof info !== "object" || !allowedTypes.includes(info.type)) { rejected++; continue; }
+        if (info.type === "string" && typeof info.val !== "string") { rejected++; continue; }
+        if (info.type !== "string" && !(Array.isArray(info.val) || typeof info.val === "object")) { rejected++; continue; }
         if (info.type === "string") await r.set(key, info.val);
         else if (info.type === "hash" && info.val) await r.hset(key, info.val);
-        else if (info.type === "set" && info.val?.length) await r.sadd(key, ...info.val);
-        else if (info.type === "zset" && info.val?.length) await r.zadd(key, ...info.val);
-        else if (info.type === "list" && info.val?.length) await r.rpush(key, ...info.val);
-        if (info.ttl > 0) await r.expire(key, info.ttl);
+        else if (info.type === "set" && info.val && info.val.length) await r.sadd(key, ...info.val);
+        else if (info.type === "zset" && info.val && info.val.length) await r.zadd(key, ...info.val);
+        else if (info.type === "list" && info.val && info.val.length) await r.rpush(key, ...info.val);
+        const ttl = info.ttl;
+        if (Number.isFinite(ttl) && ttl > 0 && ttl <= DATA_TTL_MAX) await r.expire(key, Math.floor(ttl));
         count++;
       }
-      res.json({ imported: count });
+      res.json({ imported: count, rejected });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

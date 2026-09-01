@@ -15,7 +15,9 @@ function createClient() {
     maxRetriesPerRequest: 3,
     retryStrategy: (t) => Math.min(t * 500, 5000),
     lazyConnect: true,
-    enableOfflineQueue: false,  // 关闭离线队列，避免内存积压
+    // 开启离线队列：启动初期命令先排队，连接建立后自动冲刷。
+    // （过度使用会导致内存积压，但 maxRetriesPerRequest 会在重试耗尽后拒绝排队的命令）
+    enableOfflineQueue: true,
     connectTimeout: 5000,
     commandTimeout: 10000,
   };
@@ -37,6 +39,10 @@ function getRedis() {
       console.warn("[redis] 写连接断开，重建中...");
       writeClient = null;
     });
+    // 懒连接模式下主动连接，确保启动初期命令不长时间排队
+    if (writeClient.status === "wait") {
+      writeClient.connect().catch(err => console.error("[redis] 写连接初始连接失败:", err.message));
+    }
   }
   return writeClient;
 }

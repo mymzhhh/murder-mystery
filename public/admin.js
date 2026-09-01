@@ -43,8 +43,9 @@
     document.querySelectorAll(".page").forEach(function(el) { el.classList.remove("active"); });
     document.getElementById("page-" + p).classList.add("active");
     if (p === "scripts") loadScripts();
+    if (p === "stats") loadStats();
     if (p === "users") loadUsers();
-    if (p === "rooms") loadRooms();
+    if (p === "rooms") { loadRooms(); loadRoomScriptSelect(); }
   }
 
   // ===================== Pipeline =====================
@@ -274,43 +275,123 @@
     return 'var(--text-dim)';
   }
 
+  // ===================== 仪表盘 =====================
+  function fmtTokens(n) {
+    n = Number(n) || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+    return String(n);
+  }
+
+  function loadStats() {
+    api("/api/admin/stats")
+      .then(function(res) { return res.json(); })
+      .then(function(d) {
+        document.getElementById("statCards").innerHTML =
+          '<div class="card card-static"><div class="card-num">' + esc(d.users) + '</div><div class="card-label">用户数</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(d.scripts) + '</div><div class="card-label">剧本数</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(d.rooms) + '</div><div class="card-label">活跃房间</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + Math.floor((d.uptime || 0) / 60) + ' 分钟</div><div class="card-label">服务运行时长</div></div>';
+        var l = d.llm || {};
+        document.getElementById("llmCards").innerHTML =
+          '<div class="card card-static"><div class="card-num">' + esc(l.calls) + '</div><div class="card-label">API 调用次数</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(fmtTokens(l.inputTokens)) + '</div><div class="card-label">输入 tokens</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(fmtTokens(l.outputTokens)) + '</div><div class="card-label">输出 tokens</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(fmtTokens(l.totalTokens)) + '</div><div class="card-label">总 tokens</div></div>';
+        var meta = document.getElementById("statsMeta");
+        if (meta) meta.textContent = "统计时间: " + (d.updatedAt || "").replace("T", " ").replace(/\.\d+Z$/, " UTC");
+      })
+      .catch(function(e) {
+        console.error("[admin] loadStats failed:", e.message);
+        document.getElementById("statCards").innerHTML = '<div class="state-error">加载失败，刷新重试</div>';
+      });
+  }
+
   // ===================== Script CRUD =====================
-  function loadScripts() {
-    api("/api/admin/scripts")
+  var SCRIPT_PAGE_SIZE = 10;
+  var scriptPage = 1;
+  var scriptTotal = 0;
+  var scriptQuery = "";
+  var _searchTimer = null;
+
+  function scriptPageMove(delta) {
+    var maxPage = Math.max(1, Math.ceil(scriptTotal / SCRIPT_PAGE_SIZE));
+    var np = scriptPage + delta;
+    if (np < 1 || np > maxPage) return;
+    scriptPage = np;
+    loadScripts();
+  }
+  window.scriptPageMove = scriptPageMove;
+
+  // 房间创建下拉需要全量剧本（独立于分页表）
+  function loadRoomScriptSelect() {
+    api("/api/admin/scripts?pageSize=100")
       .then(function(res) { return res.json(); })
       .then(function(data) {
+        var sel = document.getElementById("roomScriptSelect");
+        if (!sel) return;
+        sel.innerHTML = '<option value="">-- 选择剧本 --</option>' +
+          (data.scripts || []).map(function(s) { return '<option value="' + esc(s.sessionId) + '">' + esc(s.topic.substring(0, 40)) + '</option>'; }).join("");
+      })
+      .catch(function(e) { console.error("[admin] loadRoomScriptSelect failed:", e.message); });
+  }
+
+  function loadScripts() {
+    var params = "?page=" + scriptPage + "&pageSize=" + SCRIPT_PAGE_SIZE + (scriptQuery ? "&q=" + encodeURIComponent(scriptQuery) : "");
+    api("/api/admin/scripts" + params)
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        scriptTotal = data.total || 0;
         var tbody = document.querySelector("#scriptTable tbody");
         if (!data.scripts || data.scripts.length === 0) {
           tbody.innerHTML = '<tr><td colspan="4"><div class="state-empty">暂无剧本</div></td></tr>';
-          return;
+        } else {
+          tbody.innerHTML = data.scripts.map(function(s) {
+            return '<tr>' +
+              '<td>' + esc(s.topic) + '</td>' +
+              '<td>' + (s.characterCount || '?') + '人</td>' +
+              '<td>' + new Date(s.createdAt).toLocaleString() + '</td>' +
+              '<td>' +
+              '<button class="btn btn-outline btn-xs" onclick="createRoomFromScript(\'' + esc(s.sessionId) + '\')">创建房间</button>' +
+              '<button class="btn btn-outline btn-xs" onclick="viewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看原文</button>' +
+              (s.isSplit ? '<button class="btn btn-outline btn-xs" onclick="viewSplitData(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看切分</button>' : '') +
+              '<button class="btn btn-outline btn-xs" onclick="reviewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测</button>' +
+              '<button class="btn btn-outline btn-xs" onclick="reviewAndReviseScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测+修复</button>' +
+              '<button class="btn btn-outline btn-xs" onclick="splitScriptBtn(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">切分</button>' +
+              '<button class="btn btn-outline btn-xs" onclick="deleteScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">删除</button>' +
+              '</td></tr>';
+          }).join("");
         }
-        tbody.innerHTML = data.scripts.map(function(s) {
-          return '<tr>' +
-            '<td>' + esc(s.topic) + '</td>' +
-            '<td>' + (s.characterCount || '?') + '人</td>' +
-            '<td>' + new Date(s.createdAt).toLocaleString() + '</td>' +
-            '<td>' +
-            '<button class="btn btn-outline btn-xs" onclick="createRoomFromScript(\'' + esc(s.sessionId) + '\')">创建房间</button>' +
-            '<button class="btn btn-outline btn-xs" onclick="viewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看原文</button>' +
-            (s.isSplit ? '<button class="btn btn-outline btn-xs" onclick="viewSplitData(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看切分</button>' : '') +
-            '<button class="btn btn-outline btn-xs" onclick="reviewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测</button>' +
-            '<button class="btn btn-outline btn-xs" onclick="reviewAndReviseScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测+修复</button>' +
-            '<button class="btn btn-outline btn-xs" onclick="splitScriptBtn(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">切分</button>' +
-            '<button class="btn btn-outline btn-xs" onclick="deleteScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">删除</button>' +
-            '</td></tr>';
-        }).join("");
 
-        // Populate room creation select
-        var sel = document.getElementById("roomScriptSelect");
-        if (sel) {
-          sel.innerHTML = '<option value="">-- 选择剧本 --</option>' +
-            data.scripts.map(function(s) { return '<option value="' + esc(s.sessionId) + '">' + esc(s.topic.substring(0, 40)) + '</option>'; }).join("");
-        }
+        // 分页信息
+        var maxPage = Math.max(1, Math.ceil(scriptTotal / SCRIPT_PAGE_SIZE));
+        var info = document.getElementById("scriptPageInfo");
+        if (info) info.textContent = "共 " + scriptTotal + " 个剧本 · 第 " + scriptPage + "/" + maxPage + " 页";
+        var prev = document.getElementById("scriptPrev");
+        var next = document.getElementById("scriptNext");
+        if (prev) prev.disabled = scriptPage <= 1;
+        if (next) next.disabled = scriptPage >= maxPage;
+
+        loadRoomScriptSelect();
       })
       .catch(function(e) {
         console.error("[admin] loadScripts failed:", e.message);
         document.querySelector("#scriptTable tbody").innerHTML = '<tr><td colspan="4"><div class="state-error">加载剧本失败，请刷新重试</div></td></tr>';
       });
+  }
+
+  // 剧本搜索框（防抖 300ms）
+  function initScriptSearch() {
+    var searchEl = document.getElementById("scriptSearch");
+    if (!searchEl) return;
+    searchEl.addEventListener("input", function() {
+      clearTimeout(_searchTimer);
+      _searchTimer = setTimeout(function() {
+        scriptPage = 1;
+        scriptQuery = searchEl.value.trim();
+        loadScripts();
+      }, 300);
+    });
   }
 
   function deleteScript(id) {
@@ -616,6 +697,7 @@
   window.applyPatches = applyPatches;
 
   // ===================== Init =====================
+  initScriptSearch();
   loadScripts();
   renderPipeline();
 })();

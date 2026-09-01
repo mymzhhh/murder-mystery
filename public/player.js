@@ -910,10 +910,49 @@
       });
       h += '</div>';
     }
+    h += '<div style="margin-top:20px;text-align:center;">' +
+      '<button class="btn btn-outline btn-auto" onclick="openReview()">📋 查看完整复盘</button>' +
+      '</div>';
     h += '</div>';
 
     document.getElementById("gameContent").innerHTML = wrapWithSidebar(h, "chat");
     setTimeout(function() { var e = document.getElementById('chatMsgs'); if (e) e.scrollTop = e.scrollHeight; }, 100);
+  }
+
+  // 完整复盘：真相 / 投票 / 线索 / 聊天
+  var REVIEW_CSS = 'body{font-family:serif,sans-serif;background:#1a1a2e;color:#d4d4dc;padding:24px;line-height:1.7;max-width:820px;margin:0 auto;}h1{color:#c9a96e;font-size:24px;}h2{color:#c9a96e;margin-top:26px;border-bottom:1px solid rgba(201,169,110,.3);padding-bottom:6px;font-size:18px;}pre{white-space:pre-wrap;}.dim{color:#8a8aa8;}b{color:#c9a96e;}';
+
+  function openReview() {
+    var code = gs.room && gs.room.roomCode;
+    if (!code) { showToast("房间信息缺失", "warning"); return; }
+    var w = window.open("", "_blank", "width=880,height=760");
+    if (!w) { showToast("浏览器拦截了弹窗，请允许后重试", "warning"); return; }
+    w.document.write('<html><head><meta charset="utf-8"><title>游戏复盘</title><style>' + REVIEW_CSS + '</style></head><body><p class="dim" style="text-align:center;">加载中...</p></body></html>');
+    api("/api/player/review/" + encodeURIComponent(code))
+      .then(function(res) { return res.json(); })
+      .then(function(d) {
+        if (!d || d.error) { w.document.write('<p>加载失败: ' + esc((d && d.error) || "未知错误") + '</p>'); return; }
+        var h = '<h1>📋 游戏复盘 — ' + esc(d.title || "未命名") + '</h1>' +
+          '<p class="dim">房间: ' + esc(d.roomCode) + ' · 生成于 ' + esc((d.generatedAt || "").replace("T", " ").replace(/\.\d+Z$/, "")) + '</p>' +
+          '<h2>真相</h2>' +
+          '<p><b>凶手</b>: ' + esc((d.murderer && d.murderer.name) || "未知") + '</p>' +
+          ((d.murderer && d.murderer.motive) ? '<p><b>动机</b>: ' + esc(d.murderer.motive) + '</p>' : '') +
+          ((d.murderer && d.murderer.method) ? '<p><b>手法</b>: ' + esc(d.murderer.method) + '</p>' : '') +
+          (d.truthReveal ? '<h2>结局复盘</h2><pre>' + esc(d.truthReveal) + '</pre>' : '') +
+          '<h2>投票分布</h2>' +
+          (d.votes && d.votes.length ? d.votes.map(function(v) { return '<div>' + esc(v.voter) + ' → <b>' + esc(v.target) + '</b></div>'; }).join("") : '<p class="dim">无投票记录</p>') +
+          '<h2>线索发现</h2>' +
+          (d.clues && d.clues.length ? d.clues.map(function(c) {
+            return '<div style="margin-bottom:8px;"><b>' + esc(c.id || "线索") + '</b> · 第' + esc(c.round) + '轮 · ' + esc(c.foundBy || "未发现") + '<br/>' +
+              '<span class="dim">' + esc(c.location || "") + '</span> — ' + esc(c.content) + '</div>';
+          }).join("") : '<p class="dim">无线索记录</p>') +
+          '<h2>聊天纪要</h2>' +
+          (d.chat && d.chat.length ? d.chat.slice(-40).map(function(m) {
+            return '<div><b>' + esc(m.characterName || m.playerName || m.playerId) + '</b>: ' + esc(m.content) + '</div>';
+          }).join("") : '<p class="dim">无聊天记录</p>');
+        w.document.write('<html><head><meta charset="utf-8"><title>游戏复盘</title><style>' + REVIEW_CSS + '</style></head><body>' + h + '</body></html>');
+      })
+      .catch(function(e) { console.error("[player] review failed:", e.message); w.document.write('<p>加载失败: ' + esc(e.message) + '</p>'); });
   }
 
   // ===================== Utility =====================
@@ -953,6 +992,7 @@
   window.openNpcDialog = openNpcDialog;
   window.closeNpcDialog = closeNpcDialog;
   window.askNpcInDialog = askNpcInDialog;
+  window.openReview = openReview;
 
   // ===================== Sidebar Auto-Refresh =====================
   var sidePatched = false;

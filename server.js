@@ -15,8 +15,13 @@ const { setupGameSocket } = require("./socket/game");
 
 const app = express();
 const server = http.createServer(app);
+// CORS 可通过环境变量配置（逗号分隔多来源），默认 "*"（同源部署无需改动）
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
 const io = new Server(server, {
-  cors: { origin: "*" },
+  cors: {
+    origin: CORS_ORIGIN === "*" ? "*" : CORS_ORIGIN.split(",").map(s => s.trim()).filter(Boolean),
+    methods: ["GET", "POST"],
+  },
   pingTimeout: 60000,
   pingInterval: 25000,
   maxHttpBufferSize: 1e6,       // 1MB 上限，防止大 payload 攻击

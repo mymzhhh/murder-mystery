@@ -1,6 +1,7 @@
 // WebSocket 游戏事件处理
 
 const { verifyToken } = require("../modules/auth");
+const { getRedis } = require("../modules/redis-client");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue, searchClues } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
@@ -25,6 +26,7 @@ function setupGameSocket(io) {
     vote: 2000,
     ready: 3000,
     ask_npc: 2000,
+    join_room: 1000,
   };
 
   function checkRateLimit(socket, eventName) {
@@ -37,10 +39,37 @@ function setupGameSocket(io) {
     return true;
   }
 
+  // 防房间码撞库：对"房间不存在"的连续尝试计数，超阈值临时锁定该房间码
+  const failedJoin = {}; // roomCode → { count, windowStart, lockedUntil }
+  const FAILED_JOIN_MAX = 20;
+  const FAILED_JOIN_WINDOW_MS = 60 * 1000;
+  const FAILED_JOIN_LOCK_MS = 10 * 60 * 1000;
+
+  function markFailedJoin(roomCode) {
+    const now = Date.now();
+    const f = failedJoin[roomCode];
+    if (!f || now - f.windowStart > FAILED_JOIN_WINDOW_MS) {
+      failedJoin[roomCode] = { count: 1, windowStart: now, lockedUntil: 0 };
+      return;
+    }
+    f.count++;
+    if (f.count >= FAILED_JOIN_MAX) f.lockedUntil = now + FAILED_JOIN_LOCK_MS;
+  }
+
+  function isJoinLocked(roomCode) {
+    const f = failedJoin[roomCode];
+    return !!(f && f.lockedUntil > Date.now());
+  }
+
   // 定期清理断线的 rate limit 记录
   setInterval(() => {
     for (const sid of Object.keys(rateLimits)) {
       if (!io.sockets.sockets.get(sid)) delete rateLimits[sid];
+    }
+    const now = Date.now();
+    for (const code of Object.keys(failedJoin)) {
+      const f = failedJoin[code];
+      if (now - f.windowStart > FAILED_JOIN_WINDOW_MS && f.lockedUntil < now) delete failedJoin[code];
     }
   }, 60000);
 
@@ -49,10 +78,19 @@ function setupGameSocket(io) {
 
     socket.on("join_room", async ({ roomCode, token }) => {
       try {
+        if (!checkRateLimit(socket, "join_room")) {
+          return socket.emit("error", { code: "RATE_LIMITED", message: "操作过于频繁，请稍后再试" });
+        }
         const user = await verifyToken(token);
         if (!user) return socket.emit("error", { code: "AUTH", message: "请先登录" });
         const room = await getRoom(roomCode);
-        if (!room) return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });
+        if (!room) {
+          markFailedJoin(roomCode);
+          if (isJoinLocked(roomCode)) {
+            return socket.emit("error", { code: "JOIN_LOCKED", message: "该房间连接尝试次数过多，已临时限制" });
+          }
+          return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });
+        }
 
         // 清除断线计时器（玩家重连成功）
         const timerKey = roomCode + ":" + socket.id;
@@ -305,6 +343,17 @@ function setupGameSocket(io) {
         const player = players.find(p => p.playerId === socket.id);
         const askerName = player?.characterName || player?.playerName || "未知";
 
+        // 每局每个NPC的提问次数上限（防止上下文无限膨胀、LLM成本失控）
+        const NPC_MAX_QUESTIONS = 20;
+        const r = getRedis();
+        const qKey = `game:${roomCode}:npcq:${npcName}`;
+        const asked = parseInt(await r.get(qKey)) || 0;
+        if (asked >= NPC_MAX_QUESTIONS) {
+          return socket.emit("error", { code: "NPC_LIMIT", message: `该NPC已被盘问过${NPC_MAX_QUESTIONS}次，去和其他人聊聊吧` });
+        }
+        await r.incr(qKey);
+        await r.expire(qKey, 3 * 3600); // 3小时覆盖一局游戏时长，局后自动清理
+
         // 获取最近的聊天记录作为上下文
         const chatHistory = await getChatMessages(roomCode, 10);
 
@@ -426,20 +475,6 @@ function setupGameSocket(io) {
           await r.del(countdownKey);
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
-    });
-
-    // ==================== WebRTC 语音信令 ====================
-    socket.on("rtc_offer", ({ roomCode, targetId, offer }) => {
-      io.to(targetId).emit("rtc_offer", { fromId: socket.id, offer });
-    });
-    socket.on("rtc_answer", ({ roomCode, targetId, answer }) => {
-      io.to(targetId).emit("rtc_answer", { fromId: socket.id, answer });
-    });
-    socket.on("rtc_ice", ({ roomCode, targetId, candidate }) => {
-      io.to(targetId).emit("rtc_ice", { fromId: socket.id, candidate });
-    });
-    socket.on("rtc_mute", ({ roomCode, muted }) => {
-      socket.to(roomCode).emit("rtc_mute_update", { playerId: socket.id, muted });
     });
 
     socket.on("disconnect", async () => {

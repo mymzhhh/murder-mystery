@@ -11,6 +11,7 @@
     <h1>剧本杀管理端</h1>
     <div class="nav-tabs">
       <button class="nav-tab active" onclick="switchPage('scripts')">剧本管理</button>
+      <button class="nav-tab" onclick="switchPage('stats')">仪表盘</button>
       <button class="nav-tab" onclick="switchPage('users')">用户管理</button>
       <button class="nav-tab" onclick="switchPage('rooms')">房间管理</button>
     </div>
@@ -40,12 +41,32 @@
 
       <div class="panel">
         <h3>剧本库</h3>
+        <div class="form-group" style="display:flex;align-items:center;gap:8px;">
+          <input type="search" id="scriptSearch" class="form-input" placeholder="搜索剧本标题..." style="max-width:240px;" />
+          <span id="scriptPageInfo" class="text-dim"></span>
+          <span style="flex:1;"></span>
+          <button class="btn btn-outline btn-xs" id="scriptPrev" onclick="scriptPageMove(-1)">上一页</button>
+          <button class="btn btn-outline btn-xs" id="scriptNext" onclick="scriptPageMove(1)">下一页</button>
+        </div>
         <table class="table" id="scriptTable">
           <thead><tr><th>主题</th><th>人数</th><th>创建时间</th><th>操作</th></tr></thead>
           <tbody><tr><td colspan="4"><div class="state-loading">加载中...</div></td></tr></tbody>
         </table>
       </div>
       <div id="genProgress" style="display:none;margin-top:12px;"></div>
+    </div>
+
+    <!-- ===== 仪表盘 ===== -->
+    <div id="page-stats" class="page">
+      <div class="panel">
+        <h3>平台概览</h3>
+        <div class="grid-4" id="statCards"><div class="state-loading">加载中...</div></div>
+      </div>
+      <div class="panel">
+        <h3>LLM 消耗（本次进程启动至今）</h3>
+        <div class="grid-4" id="llmCards"><div class="state-loading">加载中...</div></div>
+        <p class="text-dim" id="statsMeta" style="margin-top:8px;"></p>
+      </div>
     </div>
 
     <!-- ===== 用户管理 ===== -->

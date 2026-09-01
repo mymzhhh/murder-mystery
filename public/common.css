@@ -265,6 +265,10 @@ h1, h2, h3, h4, h5 { font-family: var(--font); }
 .card-static { cursor: default; }
 .card-static:hover { transform: none; box-shadow: none; border-color: var(--border); }
 
+/* ===================== 仪表盘卡片 ===================== */
+.card-num { font-size: 28px; font-weight: 700; color: var(--gold); line-height: 1.2; }
+.card-label { margin-top: 6px; color: var(--text-dim); font-size: 13px; }
+
 /* ===================== Buttons ===================== */
 .btn {
   display: inline-flex;

@@ -1,6 +1,6 @@
 // 用户认证系统 — 复用统一 Redis 客户端 + Token 存 Redis（含 TTL）
 const crypto = require("crypto");
-const { getRedis, scanKeys } = require("./redis-client");
+const { getRedis, ensureRedis, scanKeys } = require("./redis-client");
 
 const TOKEN_TTL = 24 * 3600; // token 24 小时过期
 
@@ -58,7 +58,8 @@ async function login(username, password) {
 }
 
 async function verifyToken(token) {
-  const r = getRedis();
+  // 确保 Redis 连接就绪（避免服务刚启动时瞬时 401）
+  const r = await ensureRedis();
   const raw = await r.get(`token:${token}`);
   if (!raw) return null;
   try { return JSON.parse(raw); } catch (e) { return null; }

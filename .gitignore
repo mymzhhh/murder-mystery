@@ -1,8 +1,10 @@
 .env
-data/sessions/*
+data/
 node_modules
 修改记录.md
 server.log
+*.log
+.DS_Store
 stress-report.txt
 race-report.txt
 e2e-report.txt
