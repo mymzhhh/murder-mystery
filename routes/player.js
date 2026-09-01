@@ -31,7 +31,8 @@ function setupPlayerRoutes(app, authMiddleware) {
       if (room) {
         const players = await getPlayers(code);
         const parsed = JSON.parse(room.parsedScript || "{}");
-        const assigned = players.map(p => p.characterName).filter(Boolean);
+        // 真人已选角色（AI 补位的角色不占用，真人可随时抢占）
+        const assigned = players.filter(p => !p.isNPC && !p.isAI).map(p => p.characterName).filter(Boolean);
         rooms.push({
           roomCode: code, status: room.status, phase: room.phase,
           title: parsed.title || "未命名", setting: parsed.setting || {},

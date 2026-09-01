@@ -14,6 +14,13 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
   if (nextPhase === "voting") await clearVotes(roomCode);
 
   if (nextPhase === "truth_reveal") {
+    // 兜底：为所有未投票的 AI 玩家补投（防止玩家提前推进导致 AI 无票）
+    try {
+      const { voteForAllPending } = require("../modules/ai-player");
+      const aiVotes = await voteForAllPending(io, roomCode);
+      if (aiVotes > 0) console.log(`[ai-dm] AI 补投 ${aiVotes} 票`);
+    } catch (e) { console.warn("[ai-dm] AI 补投失败:", e.message); }
+
     const votes = await getVotes(roomCode);
     const players = await getPlayers(roomCode);
     const realPlayers = players.filter(p => !p.isNPC);

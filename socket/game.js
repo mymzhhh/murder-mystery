@@ -7,6 +7,8 @@ const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailabl
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
 const { autoAdvancePhase } = require("./ai-dm");
+const { syncAiFillers } = require("../modules/ai-player");
+const aiPlayer = require("../modules/ai-player");
 
 function setupGameSocket(io) {
   const disconnectTimers = {};
@@ -117,7 +119,8 @@ function setupGameSocket(io) {
         }
         socket.join(roomCode);
 
-        // 更新房主：重连的原房主保留主权，否则设第一个人类玩家为房主
+        // 同步 AI 补位：真人已选角色之外的玩家槽位自动由 AI 扮演
+        await syncAiFillers(roomCode);
         const allPlayers = await getPlayers(roomCode);
         const currentHumans = allPlayers.filter(p => !p.isNPC);
         if (wasOwner) {
@@ -139,16 +142,17 @@ function setupGameSocket(io) {
           return { ...c, foundByName: finder?.characterName || finder?.playerName || "未知" };
         });
 
-        // 检查是否可以开始游戏
+        // 检查是否可以开始游戏（AI 会补满剩余角色，真人≥1 且都选好角色即可）
         const totalPlayerSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
         const assignedCount = currentHumans.filter(p => p.characterName).length;
-        const allReady = currentHumans.length >= totalPlayerSlots && assignedCount >= currentHumans.length && currentHumans.length >= 2;
+        const aiCount = allPlayers.filter(p => p.isAI).length;
+        const allReady = currentHumans.length >= 1 && assignedCount >= currentHumans.length;
 
         socket.emit("room_state", {
           room: { roomCode, status: room.status, phase: room.phase, ownerId: updatedRoom.ownerId, maxPlayers: room.maxPlayers },
           phase: room.phase,
           playerId: socket.id,
-          players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isOwner: p.playerId === updatedRoom.ownerId })),
+          players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isAI: p.isAI || false, isOwner: p.playerId === updatedRoom.ownerId })),
           myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), narrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim, layoutDescription: parsed.layoutDescription || "" },
@@ -177,6 +181,7 @@ function setupGameSocket(io) {
 
         if (humanRemaining.length === 0) {
           if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
+          aiPlayer.cancelRoom(roomCode);
           const { getRedis } = require("../modules/game-manager");
           const r2 = await getRedis();
           await r2.srem("rooms:open", roomCode);
@@ -200,10 +205,13 @@ function setupGameSocket(io) {
         if (!char) return socket.emit("error", { code: "NOT_FOUND", message: "角色不存在" });
         if (char.roleType === "npc") return socket.emit("error", { code: "NPC_CHAR", message: "NPC角色由AI控制，不可选择" });
         if (me?.characterName && me.characterName === characterName) return socket.emit("error", { code: "SAME_CHAR", message: "你已经选择了该角色" });
-        if (players.some(p => p.characterName === characterName)) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
+        // AI 补位的角色真人可随时抢占（TAKEN 只针对真人）
+        if (players.some(p => !p.isAI && p.characterName === characterName)) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
         await updatePlayer(roomCode, socket.id, { characterName, characterScript: JSON.stringify(char) });
         socket.emit("character_selected", { characterName, character: char, isMurderer: char.isMurderer });
-        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: room.ownerId });
+        // 重新对齐 AI 补位（真人抢走 AI 角色后，AI 释放并补齐其它剩余角色）
+        const after = await syncAiFillers(roomCode);
+        io.to(roomCode).emit("room_updated", { players: after, ownerId: room.ownerId });
       } catch (e) { socket.emit("error", { code: "SELECT_FAILED", message: e.message }); }
     });
 
@@ -223,13 +231,7 @@ function setupGameSocket(io) {
         // 单人本检查：必须有NPC嫌疑人
         const npcCount = (parsed.characters || []).filter(c => c.roleType === "npc").length;
         if (humanPlayers.length === 1 && npcCount === 0) return socket.emit("error", { code: "NEED_NPC", message: "单人本需要NPC嫌疑人" });
-        const totalSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
-
-        // 检查人数是否足够
-        if (humanPlayers.length < totalSlots) {
-          return socket.emit("error", { code: "NOT_FULL", message: `等待更多玩家加入（${humanPlayers.length}/${totalSlots}人）` });
-        }
-        // 检查是否所有人已选角色
+        // 检查是否所有人已选角色（AI 会补满剩余槽位）
         const unassigned = humanPlayers.filter(p => !p.characterName);
         if (unassigned.length > 0) {
           return socket.emit("error", { code: "NOT_READY", message: `还有${unassigned.length}名玩家未选择角色` });
@@ -253,7 +255,9 @@ function setupGameSocket(io) {
             });
           }
         }
-        // 重新获取完整玩家列表（含NPC）
+        // 同步 AI 补位玩家（真人选角后剩余槽位由 AI 扮演）
+        await syncAiFillers(roomCode);
+        // 重新获取完整玩家列表（含 NPC 审讯角色 + AI 补位）
         const allPlayers = await getPlayers(roomCode);
 
         for (const p of assigned) {
@@ -265,6 +269,8 @@ function setupGameSocket(io) {
         io.to(roomCode).emit("game_started", { phase: "reading", config: getPhaseConfig("reading"), narrative: "AI DM 正在准备开场叙事..." });
         io.to(roomCode).emit("phase_changed", { phase: "reading", label: "阅读剧本", config: getPhaseConfig("reading"), narrative: "" });
         (await getRedis()).srem("rooms:open", roomCode);
+        // 调度 AI 玩家行为（reading 阶段无行动，下一阶段由 ready 推进时调度）
+        aiPlayer.scheduleRoom(io, roomCode, "reading");
 
         // 异步生成开场叙事，完成后推送
         generatePhaseNarrative(parsed, "reading", {}).then(async (narrative) => {
@@ -384,11 +390,12 @@ function setupGameSocket(io) {
         if (!player) return socket.emit("error", { code: "NOT_FOUND", message: "玩家不存在" });
         const val = validateAction("cast_vote", { phase: room.phase, players: allPlayers }, socket.id);
         if (!val.ok) return socket.emit("error", { code: val.error, message: val.message || "当前阶段无法投票" });
-        // 检查投票目标是否存在（含NPC角色）
+        // 检查投票目标是否存在（真人角色 + AI 补位角色 + 审讯NPC角色）
         const humanPlayers = allPlayers.filter(p => !p.isNPC);
         const parsed = JSON.parse(room.parsedScript || "{}");
         const npcNames = (parsed.characters || []).filter(c => c.roleType === "npc").map(c => c.name);
-        const allCharNames = [...new Set([...humanPlayers.map(p => p.characterName).filter(Boolean), ...npcNames])];
+        const aiNames = allPlayers.filter(p => p.isAI && p.characterName).map(p => p.characterName);
+        const allCharNames = [...new Set([...humanPlayers.map(p => p.characterName).filter(Boolean), ...aiNames, ...npcNames])];
         if (!allCharNames.includes(targetCharacterName)) return socket.emit("error", { code: "INVALID_TARGET", message: "投票目标不存在" });
         await recordVote(roomCode, socket.id, targetCharacterName);
         socket.emit("vote_recorded", { target: targetCharacterName });
@@ -449,6 +456,7 @@ function setupGameSocket(io) {
               }
               const preGenNarrative = await narrativePromise;
               await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
+              aiPlayer.scheduleRoom(io, roomCode, nextPhase);
               await r2.del(countdownKey);
               delete phaseTimers[roomCode];
             } catch (e) { await getRedis().del(countdownKey); delete phaseTimers[roomCode]; }
@@ -472,6 +480,7 @@ function setupGameSocket(io) {
           }
           const preGenNarrative = await narrativePromise;
           await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
+          aiPlayer.scheduleRoom(io, roomCode, nextPhase);
           await r.del(countdownKey);
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
@@ -495,6 +504,7 @@ function setupGameSocket(io) {
               const remaining = await getPlayers(code);
               const humanRemaining = remaining.filter(p => !p.isNPC);
               if (humanRemaining.length === 0) {
+                aiPlayer.cancelRoom(code);
                 const r = await getRedis();
                 await r.srem("rooms:open", code);
                 await deleteGameRoom(code);

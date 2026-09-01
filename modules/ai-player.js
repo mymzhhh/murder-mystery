@@ -1,0 +1,273 @@
+// AI 玩家行为执行器 — 真人选完角色后，剩余玩家槽位角色自动由 AI 扮演
+// 纯规则引擎（不调用 LLM）：
+//   - 选角补位：computeAiFillers 计算剩余角色，syncAiFillers 差量创建/释放 AI 玩家
+//   - 搜证：复用 game-engine 的 searchClues / pickRandomClue + assignClue
+//   - 讨论：基于自己已发现线索的模板发言
+//   - 投票：线索指向加权 + 随机噪声（AI 若为凶手则绝不投自己）
+// 公平性红线：所有 AI 决策只读【公开信息】（已发现线索 / 角色名单），不读凶手答案。
+
+const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage } = require("./game-manager");
+const { getAvailableCluesForPlayer, pickRandomClue, searchClues, getPhaseRound } = require("./game-engine");
+
+// ==================== 纯逻辑（可单测） ====================
+
+/**
+ * 计算需要 AI 扮演的剩余角色
+ * @param {Array} humans 真人玩家（!isNPC）
+ * @param {Array} characters 剧本全部角色（含 roleType: player / npc）
+ * @returns {Array} 剩余未被真人选择的玩家槽位角色
+ */
+function computeAiFillers(humans, characters) {
+  const taken = new Set((humans || []).map(p => p && p.characterName).filter(Boolean));
+  return (characters || []).filter(c => c && c.roleType !== "npc" && !taken.has(c.name));
+}
+
+/**
+ * AI 投票目标选择（只读公开线索）
+ * @param {object|null} aiScript AI 玩家的角色信息（characterScript 解析后，含 isMurderer）
+ * @param {Array} publicClues 已发现的公开线索 [{content, location, id, foundBy}]
+ * @param {Array} candidates 候选目标角色名数组（不含自己）
+ * @returns {string} 目标角色名
+ */
+function chooseVoteTarget(aiScript, publicClues, candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) return "";
+  // 30% 概率完全随机（模拟真人随意/甩票）
+  if (Math.random() < 0.3) {
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+  // 线索指向加权：角色名在公开线索内容/地点中出现次数
+  const weights = {};
+  for (const c of candidates) weights[c] = Math.random() * 1.5; // 噪声底分
+  for (const clue of publicClues) {
+    const text = ((clue.content || "") + " " + (clue.location || "") + " " + (clue.id || "")).toLowerCase();
+    for (const c of candidates) {
+      if (text.includes(c.toLowerCase())) weights[c] += 2;
+    }
+  }
+  // 凶手 AI：额外压低自己（已排除在自己之外）——对手里权重最高的施加轻微随机
+  let best = candidates[0];
+  let bestW = -Infinity;
+  for (const c of candidates) {
+    // 略偏"疑邻盗斧"：权重越高越可能投
+    const noise = weights[c];
+    const v = noise + Math.random() * 1.2;
+    if (v > bestW) { bestW = v; best = c; }
+  }
+  return best;
+}
+
+/** 从候选里挑一个"非自己"的角色名列表（含真人/AI/审讯NPC），供投票用 */
+function voteCandidates(players, characters, selfName) {
+  const names = new Set();
+  for (const p of (players || [])) {
+    if (p.characterName && p.characterName !== selfName) names.add(p.characterName);
+  }
+  for (const c of (characters || [])) {
+    if (c.name && c.name !== selfName) names.add(c.name);
+  }
+  return [...names];
+}
+
+/**
+ * AI 讨论发言模板（基于自己发现的线索）
+ * @param {Array} myClues AI 自己找到的线索
+ * @param {Array} allChars 全部角色（用于随机提及）
+ * @returns {string}
+ */
+function buildAiSpeech(myClues, allChars) {
+  const chars = (allChars || []).map(c => c.name).filter(Boolean);
+  const hint = (myClues && myClues[0] && myClues[0].content || "").trim().substring(0, 24);
+  const someone = chars.length ? chars[Math.floor(Math.random() * chars.length)] : "某人";
+  const templates = [
+    `我查了下线索${hint ? "，" + hint + "…" : ""}，觉得${someone}有点问题。`,
+    `目前我掌握的信息还不多，但${someone}的举动很可疑。`,
+    `我这边线索指向不太明确，大家怎么看${someone}？`,
+    hint ? `这条线索${hint}，让我对${someone}多了几分怀疑。` : `这个阶段先不做结论，我继续观察。`,
+  ];
+  return templates[Math.floor(Math.random() * templates.length)];
+}
+
+// ==================== 房间级操作（依赖 io / Redis） ====================
+
+/**
+ * 同步 AI 补位玩家：保证"真人已选角色"之外的所有玩家槽位都有 AI 扮演（差量增删）
+ * 进程内房间级互斥锁：并发 join_room / select_character 时会重入，
+ * 若不加锁会造成重复创建/覆盖错乱，串行化后天然幂等。
+ * @returns {Promise<Array>} 更新后的完整玩家列表
+ */
+const syncLocks = {}; // roomCode → Promise
+
+async function syncAiFillers(roomCode) {
+  if (!syncLocks[roomCode]) {
+    syncLocks[roomCode] = (async () => {
+      const players = await getPlayers(roomCode);
+      const humans = players.filter(p => !p.isNPC);
+      const room = await getRoom(roomCode);
+      if (!room) return players;
+      const parsed = JSON.parse(room.parsedScript || "{}");
+      const wanted = computeAiFillers(humans, parsed.characters);
+
+      const wantedNames = new Set(wanted.map(c => c.name));
+      // 释放：被真人抢走 / 不再需要的 AI
+      const ais = players.filter(p => p.isNPC && p.isAI);
+      for (const ai of ais) {
+        if (!wantedNames.has(ai.characterName)) {
+          await removePlayer(roomCode, ai.playerId).catch(() => {});
+          console.log(`[ai-player] 释放 AI 角色: ${ai.characterName || ai.playerId}`);
+        }
+      }
+
+      // 补充：缺失的 AI（差值）
+      const curAis = new Set((await getPlayers(roomCode)).filter(p => p.isNPC && p.isAI).map(p => p.characterName));
+      for (const c of wanted) {
+        if (curAis.has(c.name)) continue;
+        const aiId = "ai_" + roomCode + "_" + (c.name || "x").replace(/\s+/g, "");
+        await addPlayer(roomCode, aiId, "AI 玩家", false);
+        await updatePlayer(roomCode, aiId, {
+          characterName: c.name,
+          characterScript: JSON.stringify(c),
+          isNPC: true,
+          isAI: true,
+          connected: true,
+        });
+        console.log(`[ai-player] ${c.name} 由 AI 扮演 (${aiId})`);
+      }
+    })().finally(() => { delete syncLocks[roomCode]; });
+  }
+  return syncLocks[roomCode].then(() => getPlayers(roomCode));
+}
+
+/** 房间的 AI 定时器组 */
+const timers = {};
+
+function scheduleDelay(roomCode, fn, delayMs) {
+  const t = setTimeout(async () => {
+    try { await fn(); } catch (e) { console.warn("[ai-player] 行动失败:", e.message); }
+  }, delayMs);
+  if (t.unref) t.unref();
+  if (!timers[roomCode]) timers[roomCode] = [];
+  timers[roomCode].push(t);
+}
+
+/** 清除某房间所有 AI 定时器 */
+function cancelRoom(roomCode) {
+  const list = timers[roomCode];
+  if (list) { for (const t of list) clearTimeout(t); delete timers[roomCode]; }
+}
+
+/**
+ * 进入新阶段时为房间内所有 AI 玩家排定行动
+ * 由 game.js 在 phase 切换（start_game / ready 推进 / 超时推进）后调用
+ */
+function scheduleRoom(io, roomCode, phase) {
+  cancelRoom(roomCode);
+  if (!phase || phase === "reading" || phase === "lobby") return;
+  getPlayers(roomCode).then(async (players) => {
+    const ais = players.filter(p => p.isAI && p.characterName);
+    if (!ais.length) return;
+    const room = await getRoom(roomCode);
+    if (!room || room.phase !== phase) return; // 阶段已变，作废
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const allChars = parsed.characters || [];
+    const round = getPhaseRound(phase);
+
+    for (const ai of ais) {
+      // 搜证轮：每名 AI 随机延迟后搜证一次
+      if (phase.includes("investigation") || phase === "round3" || (round > 0 && phase.includes("investigation"))) {
+        scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 3000 + Math.random() * 12000);
+      }
+      // 讨论轮：模板发言一次
+      if (phase.includes("discussion") || phase === "round3") {
+        scheduleDelay(roomCode, () => actSpeak(io, roomCode, ai, allChars), 10000 + Math.random() * 20000);
+      }
+      // 投票轮：延迟随机后投票
+      if (phase === "voting") {
+        scheduleDelay(roomCode, () => actVote(io, roomCode, ai, allChars), 30000 + Math.random() * 90000);
+      }
+    }
+  }).catch(() => {});
+}
+
+async function actInvestigate(io, roomCode, ai) {
+  const room = await getRoom(roomCode);
+  if (!room || !room.phase.includes("investigation")) return;
+  const round = getPhaseRound(room.phase);
+  const allClues = await getClues(roomCode);
+  if (!allClues || !allClues.length) return;
+  const available = getAvailableCluesForPlayer(allClues, ai.playerId, round);
+  if (!available.length) return;
+
+  const searchResult = searchClues("", available); // 随机发放
+  const clue = searchResult && searchResult.clue ? searchResult.clue : pickRandomClue(available);
+  if (!clue) return;
+  await assignClue(roomCode, clue.id, ai.playerId);
+  io.to(roomCode).emit("clue_received", { clue, foundBy: ai.characterName || "AI" });
+  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI",
+    `🤖 我搜到了线索【${clue.id || ""}】: ${(clue.content || "").substring(0, 60)}${(clue.location ? "（" + clue.location + "）" : "")}`,
+    room.phase);
+  io.to(roomCode).emit("chat_message", msg);
+}
+
+async function actSpeak(io, roomCode, ai, allChars) {
+  const room = await getRoom(roomCode);
+  if (!room || !(room.phase.includes("discussion") || room.phase === "round3")) return;
+  const allClues = await getClues(roomCode);
+  const myClues = (allClues || []).filter(c => (c.foundBy || []).includes(ai.playerId));
+  const text = "🤖 " + buildAiSpeech(myClues, allChars);
+  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, room.phase);
+  io.to(roomCode).emit("chat_message", msg);
+}
+
+async function actVote(io, roomCode, ai, allChars) {
+  const room = await getRoom(roomCode);
+  if (!room || room.phase !== "voting") return;
+  // 已投过则跳过
+  const votes = await getVotes(roomCode);
+  if (votes && votes[ai.playerId]) return;
+
+  let aiScript = null;
+  try { aiScript = ai.characterScript ? JSON.parse(ai.characterScript) : null; } catch (e) { /* ignore */ }
+  const players = await getPlayers(roomCode);
+  const candidates = voteCandidates(players, allChars, ai.characterName);
+  if (!candidates.length) return;
+
+  const publicClues = (await getClues(roomCode) || []).filter(c => c.foundBy && c.foundBy.length);
+  const target = chooseVoteTarget(aiScript, publicClues, candidates);
+  if (!target) return;
+
+  await recordVote(roomCode, ai.playerId, target);
+  // 与人类投票一致：广播给房间
+  const humans = players.filter(p => !p.isNPC);
+  io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length + 1, total: humans.length + players.filter(p => p.isAI).length, aiVoted: true });
+  io.to(roomCode).emit("chat_message", await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI",
+    `🤖 我投票给 ${target}`, room.phase));
+  console.log(`[ai-player] ${ai.characterName} 投票给 ${target}`);
+}
+
+/**
+ * 真相揭晓前为所有未投票的 AI 补投（兜底：玩家可能提前推进 voting 阶段，
+ * 仅靠 30-120s 定时器不够）。
+ * @returns {Promise<number>} 补投数量
+ */
+async function voteForAllPending(io, roomCode) {
+  const room = await getRoom(roomCode);
+  if (!room) return 0;
+  const players = await getPlayers(roomCode);
+  const ais = players.filter(p => p.isAI && p.characterName);
+  const votes = await getVotes(roomCode);
+  let count = 0;
+  for (const ai of ais) {
+    if (votes && votes[ai.playerId]) continue;
+    try {
+      const parsed = JSON.parse(room.parsedScript || "{}");
+      await actVote(io, roomCode, ai, parsed.characters || []);
+      count++;
+    } catch (e) { console.warn("[ai-player] 补投失败:", ai.characterName, e.message); }
+  }
+  return count;
+}
+
+module.exports = {
+  computeAiFillers, chooseVoteTarget, voteCandidates, buildAiSpeech,
+  syncAiFillers, scheduleRoom, cancelRoom, voteForAllPending,
+};

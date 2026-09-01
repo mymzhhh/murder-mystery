@@ -356,31 +356,36 @@
     var el = document.getElementById("gameContent");
     var parsed = gs.scriptSummary || {};
     var humanPlayers = (gs.players || []).filter(function(p) { return !p.isNPC; });
+    var aiPlayers = (gs.players || []).filter(function(p) { return p.isAI; });
     var totalSlots = gs.totalSlots || (gs.allCharacters || []).filter(function(c) { return c.roleType !== 'npc'; }).length;
     var assignedCount = humanPlayers.filter(function(p) { return p.characterName; }).length;
-    var canStart = humanPlayers.length >= totalSlots && assignedCount >= humanPlayers.length && humanPlayers.length >= 1;
+    // AI 自动补满剩余角色：真人 ≥1 且都已选角即可开始
+    var canStart = humanPlayers.length >= 1 && assignedCount >= humanPlayers.length;
     var isOwner = gs.room && gs.room.ownerId === gs.playerId;
 
     var h = '<div class="panel"><div class="text-center" style="margin:20px 0;">' +
       '<h3>房间 ' + esc(gs.room && gs.room.roomCode) + '</h3>' +
       '<p class="text-dim">' + esc(parsed.title || '剧本杀') + '</p>' +
       '<p class="text-sm text-dim">' + esc(parsed.setting && parsed.setting.era || '') + ' | ' + esc(parsed.setting && parsed.setting.location || '') + '</p>' +
-      '<p class="text-xs" style="color:var(--gold);">' + humanPlayers.length + '/' + totalSlots + '人 | ' + assignedCount + '人已选角色</p>' +
+      '<p class="text-xs" style="color:var(--gold);">' + humanPlayers.length + '/' + totalSlots + '人 | ' + assignedCount + '人已选角色' + (aiPlayers.length ? ' | 🤖 AI补位 ' + aiPlayers.length + ' 人' : '') + '</p>' +
       '</div>';
 
     h += '<div class="grid-2"><div><h4>玩家列表</h4><div id="playerListEl">' +
       gs.players.map(function(p) {
         var label = esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选角色)');
+        if (p.isAI) label = '🤖 ' + label;
         if (p.isOwner) label = '👑 ' + label;
         return '<div class="card card-static" style="margin-bottom:4px;padding:10px;">' + label + '</div>';
       }).join("") +
-      '</div></div><div><h4>选择你的角色</h4><div id="charSelectEl"></div></div></div>';
+      '</div></div><div><h4>选择你的角色</h4><div id="charSelectEl"></div>' +
+      (aiPlayers.length ? '<p class="text-xs text-dim" style="margin-top:8px;">🤖 标记的角色当前由 AI 扮演，你可以直接点击接管。</p>' : '') +
+      '</div></div>';
 
     h += '<div class="text-center mt-lg">' +
       '<button class="btn btn-outline btn-auto" onclick="leaveRoom()" style="margin-right:8px;">离开房间</button>';
     if (isOwner) {
       h += '<button class="btn btn-success btn-auto" onclick="startGame()"' + (canStart ? '' : ' disabled style="opacity:0.5;"') + '>' +
-        (canStart ? '开始游戏（AI DM主持）' : (humanPlayers.length < totalSlots ? '等待玩家加入...' : '等待所有人选择角色...')) + '</button>';
+        (canStart ? '开始游戏（AI DM主持）' : (humanPlayers.length < 1 ? '等待玩家加入...' : '等待所有人选择角色...（剩余由AI补位）')) + '</button>';
     } else {
       h += '<span class="text-sm text-dim">等待房主开始游戏...</span>';
     }
@@ -412,6 +417,7 @@
     if (!list) return;
     list.innerHTML = gs.players.map(function(p) {
       var label = esc(p.playerName) + (p.characterName ? ' → ' + esc(p.characterName) : ' (未选角色)');
+      if (p.isAI) label = '🤖 ' + label;
       if (p.isOwner) label = '👑 ' + label;
       return '<div class="card card-static" style="margin-bottom:4px;padding:10px;">' + label + '</div>';
     }).join("");
@@ -420,7 +426,9 @@
   function updateCharSelect() {
     var sel = document.getElementById("charSelectEl");
     if (!sel) return;
-    var assigned = gs.players.map(function(p) { return p.characterName; }).filter(Boolean);
+    // 真人已选（AI 占位不阻塞，真人可抢）
+    var assigned = gs.players.filter(function(p) { return !p.isAI; }).map(function(p) { return p.characterName; }).filter(Boolean);
+    var aiAssigned = gs.players.filter(function(p) { return p.isAI; }).map(function(p) { return p.characterName; }).filter(Boolean);
     var chars = (gs.allCharacters || []).filter(function(c) { return c.roleType !== 'npc'; });
     if (chars.length === 0) { loadCharOptions(); return; }
     var me = gs.players.find(function(p) { return p.playerId === gs.playerId; });
@@ -428,10 +436,11 @@
     sel.innerHTML = chars.map(function(c) {
       var name = c.name || c;
       var taken = assigned.indexOf(name) !== -1 && name !== myChar;
+      var aiHeld = aiAssigned.indexOf(name) !== -1 && !taken;
       if (c.roleType === "npc") {
         return '<button class="btn btn-outline btn-auto" style="margin:4px;opacity:0.3;cursor:not-allowed;" disabled>' + esc(name) + ' [NPC]</button>';
       }
-      return '<button class="btn btn-outline btn-auto" style="margin:4px;' + (taken ? 'opacity:0.4;' : '') + (name === myChar ? 'border-color:var(--gold);' : '') + '" onclick="selectChar(\'' + esc(name) + '\')"' + (taken ? ' disabled' : '') + '>' + esc(name) + '</button>';
+      return '<button class="btn btn-outline btn-auto" style="margin:4px;' + (taken ? 'opacity:0.4;' : '') + (name === myChar ? 'border-color:var(--gold);' : '') + (aiHeld ? 'border-color:var(--gold);' : '') + '" onclick="selectChar(\'' + esc(name) + '\')"' + (taken ? ' disabled' : '') + '>' + esc(name) + (aiHeld ? ' 🤖' : '') + '</button>';
     }).join("") || '<span class="text-dim">暂无可用角色</span>';
   }
 
@@ -545,9 +554,10 @@
     h += '<div class="panel" style="margin-bottom:8px;"><h4 style="font-size:13px;margin-bottom:4px;">玩家</h4>';
     (gs.players || []).forEach(function(p) {
       var isMe = p.playerId === myId;
+      var isAI = p.isAI || (p.playerId && p.playerId.indexOf("ai_") === 0);
       var isNPC = p.isNPC || (p.playerId && p.playerId.indexOf("npc_") === 0);
       h += '<div class="flex-between" style="padding:2px 0;font-size:11px;">' +
-        '<span>' + esc(p.characterName || p.playerName) + (isMe ? ' (你)' : '') + (isNPC ? ' <span class="tag tag-npc">NPC</span>' : '') + '</span>' +
+        '<span>' + (isAI ? '🤖 ' : '') + esc(p.characterName || p.playerName) + (isMe ? ' (你)' : '') + (isNPC ? ' <span class="tag tag-npc">' + (isAI ? 'AI' : 'NPC') + '</span>' : '') + '</span>' +
         '</div>';
     });
     h += '</div>';
