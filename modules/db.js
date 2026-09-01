@@ -128,9 +128,15 @@ async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
   }
 }
 
-/** 查询剧本列表 */
+/** 查询剧本列表（带真实角色数：老数据的 player_count 可能为 0，用 characters 表聚合兜底） */
 async function listScripts() {
-  const r = await query("SELECT id, title, era, location, game_mode, player_count, npc_count, clue_count, layout_description, split_at, created_at FROM scripts ORDER BY split_at DESC NULLS LAST, created_at DESC");
+  const r = await query(`
+    SELECT s.id, s.title, s.era, s.location, s.game_mode, s.player_count, s.npc_count, s.clue_count,
+           s.layout_description, s.split_at, s.created_at,
+           (SELECT COUNT(*) FROM characters ch WHERE ch.script_id = s.id AND ch.role_type = 'player') AS real_player_count,
+           (SELECT COUNT(*) FROM characters ch WHERE ch.script_id = s.id AND ch.role_type = 'npc') AS real_npc_count
+    FROM scripts s
+    ORDER BY s.split_at DESC NULLS LAST, s.created_at DESC`);
   return r.rows;
 }
 

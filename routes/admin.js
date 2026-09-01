@@ -101,7 +101,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         pgList.forEach(s => scripts.push({
           sessionId: s.id, topic: s.title, textType: "murder-mystery",
           createdAt: s.split_at || s.created_at,
-          characterCount: s.player_count || 0, messageCount: s.clue_count || 0, isSplit: true,
+          characterCount: Number(s.real_player_count) || Number(s.player_count) || 0, messageCount: s.clue_count || 0, isSplit: true,
         }));
       } catch (e) { /* PG不可用，跳过 */ }
 
@@ -122,7 +122,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
             const meta = await r2.hgetall(`split:${id}:meta`);
             if (meta?.title) scripts.push({
               sessionId: id, topic: meta.title, textType: "murder-mystery",
-              createdAt: meta.splitAt || "", characterCount: parseInt(meta.playerCount) || 0,
+              createdAt: meta.splitAt || "", 
+              characterCount: parseInt(meta.playerCount) || (JSON.parse(meta.characterNames || "[]") || []).length || 0,
               messageCount: parseInt(meta.clueCount) || 0, isSplit: true,
             });
           }
