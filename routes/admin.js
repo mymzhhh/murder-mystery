@@ -549,6 +549,51 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // PG 异步同步队列状态
+  app.get("/api/admin/sync-status", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { pendingIds } = require("../modules/pg-sync");
+      const r = getRedis();
+      const failed = await r.smembers("sync:failed").catch(() => []);
+      const pending = pendingIds();
+      res.json({ pending, pendingCount: pending.length, failed, failedCount: failed.length });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 手动触发 PG 同步（队列 + 挂起失败项；body.reconcileAll=true 时全量对账缺失剧本）
+  app.post("/api/admin/sync-now", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { syncOne, pendingIds } = require("../modules/pg-sync");
+      const r = getRedis();
+      const body = req.body || {};
+      const targets = new Set(pendingIds());
+      (await r.smembers("sync:failed").catch(() => [])).forEach(id => targets.add(id));
+      if (body.reconcileAll) {
+        const splitIds = await r.smembers("scripts:split").catch(() => []);
+        let pgIds = new Set();
+        try {
+          const { listScripts } = require("../modules/db");
+          pgIds = new Set((await listScripts()).map(s => s.id));
+        } catch (e) { /* 忽略 */ }
+        splitIds.forEach(id => { if (!pgIds.has(id)) targets.add(id); });
+      }
+      const ids = [...targets];
+      if (ids.length === 0) return res.json({ synced: [], failed: [], note: "无需同步" });
+      const synced = [];
+      const failed = [];
+      for (const id of ids) {
+        try {
+          await syncOne(id);
+          synced.push(id);
+          await r.srem("sync:failed", id);
+        } catch (e) {
+          failed.push({ id, error: e.message });
+        }
+      }
+      res.json({ synced, failed });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // ============ 数据备份 / 恢复 ============
   // 业务数据 key 白名单（排除 token 等临时/敏感数据，避免全量导出扫描生产 Redis）
   const DATA_KEY_PREFIXES = ["split:", "user:", "session:", "game:", "sessions:index", "scripts:split", "rooms:open"];

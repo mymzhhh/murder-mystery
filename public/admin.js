@@ -300,11 +300,49 @@
           '<div class="card card-static"><div class="card-num">' + esc(fmtTokens(l.totalTokens)) + '</div><div class="card-label">总 tokens</div></div>';
         var meta = document.getElementById("statsMeta");
         if (meta) meta.textContent = "统计时间: " + (d.updatedAt || "").replace("T", " ").replace(/\.\d+Z$/, " UTC");
+        loadSyncStatus();
       })
       .catch(function(e) {
         console.error("[admin] loadStats failed:", e.message);
         document.getElementById("statCards").innerHTML = '<div class="state-error">加载失败，刷新重试</div>';
       });
+  }
+
+  // ===================== PG 同步面板 =====================
+  function loadSyncStatus() {
+    var el = document.getElementById("syncPanel");
+    if (!el) return;
+    api("/api/admin/sync-status")
+      .then(function(res) { return res.json(); })
+      .then(function(d) {
+        el.innerHTML =
+          '<div class="grid-4">' +
+          '<div class="card card-static"><div class="card-num">' + esc(d.pendingCount || 0) + '</div><div class="card-label">待同步</div></div>' +
+          '<div class="card card-static"><div class="card-num">' + esc(d.failedCount || 0) + '</div><div class="card-label">失败挂起</div></div>' +
+          '</div>' +
+          '<div style="margin-top:10px;display:flex;gap:8px;">' +
+          '<button class="btn btn-primary btn-auto" onclick="syncNow(false)">立即同步</button>' +
+          '<button class="btn btn-outline btn-auto" onclick="syncNow(true)">全量对账</button>' +
+          '</div>' +
+          '<p class="text-dim" id="syncResult" style="margin-top:8px;"></p>';
+      })
+      .catch(function(e) {
+        console.error("[admin] loadSyncStatus failed:", e.message);
+        el.innerHTML = '<div class="state-error">加载失败</div>';
+      });
+  }
+
+  function syncNow(reconcileAll) {
+    var btns = document.querySelectorAll('#syncPanel button');
+    for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+    api("/api/admin/sync-now", { method: "POST", body: JSON.stringify({ reconcileAll: !!reconcileAll }) })
+      .then(function(res) { return res.json(); })
+      .then(function(d) {
+        var el = document.getElementById("syncResult");
+        if (el) el.textContent = "已同步 " + (d.synced || []).length + " 个，失败 " + ((d.failed || []).length) + " 个" + ((d.failed||[]).length ? "（可在日志查看原因）" : "");
+        loadStats();
+      })
+      .catch(function(e) { showToast("同步失败: " + e.message, "error"); loadStats(); });
   }
 
   // ===================== Script CRUD =====================
@@ -695,6 +733,7 @@
   window.createRoomFromScript = createRoomFromScript;
   window.closeRoom = closeRoom;
   window.applyPatches = applyPatches;
+  window.syncNow = syncNow;
 
   // ===================== Init =====================
   initScriptSearch();

@@ -209,18 +209,12 @@ async function saveToRedis(sessionId, result) {
   pipeline.sadd("scripts:split", sessionId);
   await pipeline.exec();
 
-  // 双写 PostgreSQL（持久存储）
+  // 双写 PostgreSQL → 异步同步队列（不阻塞切分流程；失败自动重试/挂起）
   try {
-    const { saveSplitScript } = require("./db");
-    await saveSplitScript(sessionId,
-      { title: result.meta.title, era: result.meta.era, location: result.meta.location,
-        playerCount, npcCount, clueCount: result.meta.clueCount,
-        layoutDescription: result.meta.layoutDescription || "",
-        originalMarkdown: result.meta.originalMarkdown || "" },
-      result.characters, result.clues, result.dm);
-    console.log("[split] PostgreSQL 同步完成:", result.meta.title);
+    const { enqueueSync } = require("./pg-sync");
+    enqueueSync(sessionId);
   } catch (e) {
-    console.warn("[split] PostgreSQL 写入失败（Redis 已保存）:", e.message);
+    console.warn("[split] 加入 PG 同步队列失败（Redis 已保存）:", e.message);
   }
 }
 

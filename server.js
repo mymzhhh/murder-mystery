@@ -158,6 +158,11 @@ process.on("SIGINT", () => gracefulShutdown(0));
 (async () => {
   try { await initDB(); } catch (e) { console.log("[warn] PostgreSQL 初始化失败:", e.message); }
   try { await initAdmin(); } catch (e) { console.log("[warn] Redis不可用，使用内存模式"); }
+  // PG 异步同步对账：Redis 已切分但 PG 缺失/挂起的剧本重新入队（不阻塞启动）
+  try {
+    const { reconcileOnStart } = require("./modules/pg-sync");
+    reconcileOnStart();
+  } catch (e) { console.warn("[warn] PG 同步对账失败:", e.message); }
   server.listen(PORT, () => {
     console.log(`\n  剧本杀平台已启动: http://localhost:${PORT}`);
     console.log(`  管理员账号: admin（密码由 ADMIN_PASSWORD 环境变量或默认值配置）`);
