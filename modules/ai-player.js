@@ -153,6 +153,10 @@ async function syncAiFillers(roomCode) {
 /** 房间的 AI 定时器组 */
 const timers = {};
 
+// 每轮每 AI 搜证上限（防止异常数据死循环；正常剧本单轮线索通常少于 8 条）
+const SEARCH_MAX_PER_ROUND = 8;
+const searchCounts = {}; // `${roomCode}:${round}` → { aiId → count }
+
 function scheduleDelay(roomCode, fn, delayMs) {
   const t = setTimeout(async () => {
     try { await fn(); } catch (e) { console.warn("[ai-player] 行动失败:", e.message); }
@@ -166,6 +170,10 @@ function scheduleDelay(roomCode, fn, delayMs) {
 function cancelRoom(roomCode) {
   const list = timers[roomCode];
   if (list) { for (const t of list) clearTimeout(t); delete timers[roomCode]; }
+  // 清理该房间的搜证计数
+  for (const k of Object.keys(searchCounts)) {
+    if (k.startsWith(roomCode + ":")) delete searchCounts[k];
+  }
 }
 
 /**
@@ -231,6 +239,15 @@ async function actInvestigate(io, roomCode, ai) {
   const room = await getRoom(roomCode);
   if (!room || !room.phase.includes("investigation")) return;
   const round = getPhaseRound(room.phase);
+  if (!round) return;
+
+  // 防御计数：本轮搜证次数上限
+  const ck = roomCode + ":" + round;
+  if (!searchCounts[ck]) searchCounts[ck] = {};
+  const cnt = (searchCounts[ck][ai.playerId] || 0) + 1;
+  searchCounts[ck][ai.playerId] = cnt;
+  if (cnt > SEARCH_MAX_PER_ROUND) { delete searchCounts[ck][ai.playerId]; return; }
+
   const allClues = await getClues(roomCode);
   if (!allClues || !allClues.length) return;
   const available = getAvailableCluesForPlayer(allClues, ai.playerId, round);
@@ -245,6 +262,17 @@ async function actInvestigate(io, roomCode, ai) {
     `🤖 我搜到了线索【${clue.id || ""}】: ${(clue.content || "").substring(0, 60)}${(clue.location ? "（" + clue.location + "）" : "")}`,
     room.phase);
   io.to(roomCode).emit("chat_message", msg);
+
+  // 续搜：本轮还有未被发现的线索 → 稍后继续，直到没有线索为止
+  try {
+    const latest = await getClues(roomCode);
+    const remaining = getAvailableCluesForPlayer(latest, ai.playerId, round);
+    if (remaining.length > 0) {
+      scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 4000 + Math.random() * 8000);
+    } else {
+      console.log(`[ai-player] ${ai.characterName} 已搜完本轮全部线索(${round})`);
+    }
+  } catch (e) { /* 忽略 */ }
 }
 
 async function actSpeak(io, roomCode, ai, allChars) {
