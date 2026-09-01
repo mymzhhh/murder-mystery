@@ -469,8 +469,18 @@
       if (ov) ov.remove();
       clearInterval(timer);
       socket.off("game_started", onStarted);
+      socket.off("error", onStartError);
+    };
+    // 失败兜底：开局请求出错（NEED_NPC / START_FAILED / NOT_READY...）时移除遮罩，
+    // 避免永久卡在"AI DM 正在准备游戏"
+    var onStartError = function() {
+      var ov = document.getElementById("startCountdown");
+      if (ov) { ov.remove(); clearInterval(timer); }
+      socket.off("game_started", onStarted);
+      socket.off("error", onStartError);
     };
     socket.on("game_started", onStarted);
+    socket.on("error", onStartError);
   }
 
   // ===================== Game Rendering =====================

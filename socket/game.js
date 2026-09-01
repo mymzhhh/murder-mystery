@@ -228,9 +228,11 @@ function setupGameSocket(io) {
 
         const parsed = JSON.parse(room.parsedScript || "{}");
 
-        // 单人本检查：必须有NPC嫌疑人
+        // 单人本检查：只有剧本本身是单人本（1 个玩家槽位）且无 NPC 嫌疑人才阻止开局
+// （1 真人 + AI 补位的多人本凶手在玩家槽位里，不需要 NPC 嫌疑人）
         const npcCount = (parsed.characters || []).filter(c => c.roleType === "npc").length;
-        if (humanPlayers.length === 1 && npcCount === 0) return socket.emit("error", { code: "NEED_NPC", message: "单人本需要NPC嫌疑人" });
+        const totalSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
+        if (totalSlots === 1 && npcCount === 0) return socket.emit("error", { code: "NEED_NPC", message: "单人本需要NPC嫌疑人" });
         // 检查是否所有人已选角色（AI 会补满剩余槽位）
         const unassigned = humanPlayers.filter(p => !p.characterName);
         if (unassigned.length > 0) {
