@@ -227,6 +227,17 @@
       if (gs.phase === "intro") renderIntroList();
     });
 
+    socket.on("ai_answer", function(data) {
+      if (!data || !data.from) return;
+      var chats = window._aiChats[data.from] || [];
+      if (!chats.some(function(m) { return m.role === "user" && m.content === data.question; })) {
+        chats.push({ role: "user", content: data.question });
+      }
+      chats.push({ role: "ai", content: data.answer });
+      window._aiChats[data.from] = chats;
+      if (_aiDialogTarget === data.from) refreshAiDialog(data.from);
+    });
+
     socket.on("truth_revealed", function(data) {
       gs.phase = "truth_reveal";
       renderTruth(data);
@@ -586,6 +597,7 @@
       var isNPC = p.isNPC || (p.playerId && p.playerId.indexOf("npc_") === 0);
       h += '<div class="flex-between" style="padding:2px 0;font-size:11px;">' +
         '<span>' + (isAI ? '🤖 ' : '') + esc(p.characterName || p.playerName) + (isMe ? ' (你)' : '') + (isNPC ? ' <span class="tag tag-npc">' + (isAI ? 'AI' : 'NPC') + '</span>' : '') + '</span>' +
+        (isAI && p.characterName ? '<button class="btn btn-outline btn-xs" style="padding:2px 6px;font-size:10px;" onclick="openAiDialog(\'' + esc(p.characterName) + '\')">🎤 询问</button>' : '') +
         '</div>';
     });
     h += '</div>';
@@ -927,6 +939,72 @@
     body.scrollTop = body.scrollHeight;
   }
 
+  // ===================== AI 玩家询问 Dialog =====================
+  window._aiChats = {};
+  var _aiDialogTarget = null;
+
+  function openAiDialog(name) {
+    _aiDialogTarget = name;
+    var chats = window._aiChats[name] || [];
+    var h = '<div class="npc-dialog-overlay" onclick="if(event.target===this)closeAiDialog()">' +
+      '<div class="npc-dialog">' +
+      '<div class="npc-dialog-header"><span>🤖 询问 AI 玩家 ' + esc(name) + '</span>' +
+      '<button onclick="closeAiDialog()" style="background:none;border:none;color:var(--text);font-size:18px;cursor:pointer;">✕</button></div>' +
+      '<div class="npc-dialog-body" id="npcDialogBody">';
+
+    if (chats.length === 0) {
+      h += '<div class="state-empty" style="padding:40px;">向 TA 提问，帮助大家推理...</div>';
+    } else {
+      chats.forEach(function(m) {
+        h += '<div class="npc-dialog-msg"><div class="npc-dialog-role" style="color:' + (m.role === 'user' ? 'var(--gold)' : 'var(--mystic-light)') + ';">' + (m.role === 'user' ? '你' : esc(name)) + ':</div><div style="font-size:13px;">' + esc(m.content) + '</div></div>';
+      });
+    }
+    h += '</div>' +
+      '<div class="npc-dialog-input"><input id="npcDialogInput" placeholder="输入你的问题..." /><button onclick="askAiInDialog(\'' + esc(name) + '\')">发送</button></div>' +
+      '</div></div>';
+
+    var overlay = document.getElementById("npcDialogOverlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "npcDialogOverlay";
+      document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = h;
+    overlay.style.display = "block";
+    setTimeout(function() { var inp = document.getElementById("npcDialogInput"); if (inp) inp.focus(); }, 100);
+  }
+
+  function closeAiDialog() {
+    _aiDialogTarget = null;
+    var overlay = document.getElementById("npcDialogOverlay");
+    if (overlay) overlay.style.display = "none";
+  }
+
+  function askAiInDialog(name) {
+    var inp = document.getElementById("npcDialogInput");
+    if (!inp) return;
+    var q = inp.value.trim();
+    if (!q) return;
+    inp.value = "";
+    var chats = window._aiChats[name] || [];
+    chats.push({ role: "user", content: q });
+    window._aiChats[name] = chats;
+    refreshAiDialog(name);
+    socket.emit("ask_ai_player", { roomCode: gs.room && gs.room.roomCode, characterName: name, question: q });
+  }
+
+  function refreshAiDialog(name) {
+    var chats = window._aiChats[name] || [];
+    var body = document.getElementById("npcDialogBody");
+    if (!body) return;
+    var h = '';
+    chats.forEach(function(m) {
+      h += '<div class="npc-dialog-msg" style="margin-bottom:8px;"><div class="npc-dialog-role" style="color:' + (m.role === 'user' ? 'var(--gold)' : 'var(--mystic-light)') + ';font-weight:600;font-size:11px;">' + (m.role === 'user' ? '你' : esc(name)) + ':</div><div style="font-size:13px;">' + esc(m.content) + '</div></div>';
+    });
+    body.innerHTML = h || '<div class="state-empty" style="padding:40px;">向 TA 提问，帮助大家推理...</div>';
+    body.scrollTop = body.scrollHeight;
+  }
+
   // ===================== Discussion =====================
   function renderDiscussion() {
     var h = topBar(gs.phase);
@@ -1070,6 +1148,9 @@
   window.openNpcDialog = openNpcDialog;
   window.closeNpcDialog = closeNpcDialog;
   window.askNpcInDialog = askNpcInDialog;
+  window.openAiDialog = openAiDialog;
+  window.closeAiDialog = closeAiDialog;
+  window.askAiInDialog = askAiInDialog;
   window.openReview = openReview;
   window.submitIntro = submitIntro;
 

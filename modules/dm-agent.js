@@ -147,7 +147,7 @@ async function generateVoteReveal(script, votes, outcome) {
 }
 
 /**
- * 生成完整的真相复盘
+ * 生成完整的真相复盘（带超时保护 + DM 手册 fallback，真相揭示不能被 LLM 卡死）
  */
 async function generateTruthReveal(script, votes, outcome) {
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
@@ -172,8 +172,24 @@ ${script.dmGuide?.truthReveal || ''}
 
 请生成300-500字的戏剧化真相复盘：`;
 
-  const result = await generate(sysPrompt, userPrompt, { maxTokens: 1536, temperature: 0.8 });
-  return result.content;
+  // 20s 超时保护 + fallback 文本（DM 手册真相 + 结果概要），绝不让真相环节卡死
+  const result = await Promise.race([
+    generate(sysPrompt, userPrompt, { maxTokens: 1536, temperature: 0.8 }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error("truth_reveal_timeout")), 20000)),
+  ]).catch(err => {
+    console.warn("[dm-agent] 真相复盘生成失败:", err.message);
+    return null;
+  });
+  if (result) return result.content;
+
+  const outcomeText = {
+    true_accusation: "玩家成功指认真凶",
+    wrong_accusation: "玩家指认错误，真凶逍遥法外",
+    tie: "票数平局，凶手趁乱逃脱",
+    no_votes: "无人投票",
+  }[outcome?.outcome] || "游戏结束";
+  const manual = (script.dmGuide?.truthReveal || "").trim();
+  return `【真相复盘】${outcomeText}。\n\n${manual ? "根据DM手册记录：\n" + manual.substring(0, 1200) : "（DM手册暂无真相记录）"}`;
 }
 
 function getCharacterNames(script) {

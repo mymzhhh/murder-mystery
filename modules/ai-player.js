@@ -8,6 +8,7 @@
 
 const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage, addIntroduction } = require("./game-manager");
 const { getAvailableCluesForPlayer, pickRandomClue, searchClues, getPhaseRound } = require("./game-engine");
+const llm = require("./ai-player-llm");
 
 // ==================== 纯逻辑（可单测） ====================
 
@@ -209,7 +210,15 @@ async function actIntro(io, roomCode, ai) {
   if (!room || room.phase !== "intro") return;
   let aiScript = null;
   try { aiScript = ai.characterScript ? JSON.parse(ai.characterScript) : null; } catch (e) { /* ignore */ }
-  const text = buildAiIntro(aiScript);
+  // 优先 LLM 生成清晰自我介绍，失败回退规则模板
+  let text = null;
+  try {
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const k = await llm.buildKnowledge(roomCode, ai, parsed);
+    text = await llm.introLLM(k);
+  } catch (e) { console.warn("[ai-player] intro LLM 失败:", e.message); }
+  if (!text) text = buildAiIntro(aiScript);
+
   const who = ai.characterName || "AI";
   await addIntroduction(roomCode, who, text);
   io.to(roomCode).emit("intro_statement", { characterName: who, content: text });
@@ -241,9 +250,19 @@ async function actInvestigate(io, roomCode, ai) {
 async function actSpeak(io, roomCode, ai, allChars) {
   const room = await getRoom(roomCode);
   if (!room || !(room.phase.includes("discussion") || room.phase === "round3")) return;
-  const allClues = await getClues(roomCode);
-  const myClues = (allClues || []).filter(c => (c.foundBy || []).includes(ai.playerId));
-  const text = "🤖 " + buildAiSpeech(myClues, allChars);
+  let text = null;
+  // 优先 LLM：基于自己的角色/线索 + 公开对话发言
+  try {
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const k = await llm.buildKnowledge(roomCode, ai, parsed);
+    const context = await llm.getPublicContext(roomCode, 8);
+    text = await llm.speakLLM(k, context);
+  } catch (e) { console.warn("[ai-player] speak LLM 失败:", e.message); }
+  if (!text) {
+    const allClues = await getClues(roomCode);
+    const myClues = (allClues || []).filter(c => (c.foundBy || []).includes(ai.playerId));
+    text = "🤖 " + buildAiSpeech(myClues, allChars);
+  }
   const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, room.phase);
   io.to(roomCode).emit("chat_message", msg);
 }
@@ -262,13 +281,21 @@ async function actVote(io, roomCode, ai, allChars) {
   if (!candidates.length) return;
 
   const publicClues = (await getClues(roomCode) || []).filter(c => c.foundBy && c.foundBy.length);
-  const target = chooseVoteTarget(aiScript, publicClues, candidates);
+  // 优先 LLM 推理投票（只读自己的知识），失败回退规则加权
+  let target = null;
+  try {
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const k = await llm.buildKnowledge(roomCode, ai, parsed);
+    target = await llm.voteLLM(k, candidates);
+  } catch (e) { console.warn("[ai-player] vote LLM 失败:", e.message); }
+  if (!target) target = chooseVoteTarget(aiScript, publicClues, candidates);
   if (!target) return;
 
   await recordVote(roomCode, ai.playerId, target);
-  // 与人类投票一致：广播给房间
+  // 与人类投票一致：广播给房间（用最新票数，避免并发快照重复）
+  const afterVotes = await getVotes(roomCode);
   const humans = players.filter(p => !p.isNPC);
-  io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length + 1, total: humans.length + players.filter(p => p.isAI).length, aiVoted: true });
+  io.to(roomCode).emit("vote_update", { count: Object.keys(afterVotes).length, total: humans.length + players.filter(p => p.isAI).length, aiVoted: true });
   io.to(roomCode).emit("chat_message", await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI",
     `🤖 我投票给 ${target}`, room.phase));
   console.log(`[ai-player] ${ai.characterName} 投票给 ${target}`);

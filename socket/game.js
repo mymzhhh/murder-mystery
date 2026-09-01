@@ -30,6 +30,7 @@ function setupGameSocket(io) {
     ask_npc: 2000,
     join_room: 1000,
     intro_statement: 2000,
+    ask_ai_player: 3000,
   };
 
   function checkRateLimit(socket, eventName) {
@@ -354,6 +355,46 @@ function setupGameSocket(io) {
         const msg = await addChatMessage(roomCode, socket.id, me?.playerName || "", who, `📣【自我介绍】${text}`, room.phase);
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "INTRO_FAILED", message: e.message }); }
+    });
+
+    // 玩家向 AI 玩家审讯提问（AI 仅依据自己的剧本/线索回答，全员可见）
+    socket.on("ask_ai_player", async ({ roomCode, characterName, question }) => {
+      if (!checkRateLimit(socket, "ask_ai_player")) return;
+      try {
+        const room = await getRoom(roomCode);
+        if (!room || ["lobby", "reading"].includes(room.phase)) {
+          return socket.emit("error", { code: "WRONG_PHASE", message: "当前阶段不能询问AI玩家" });
+        }
+        const q = String(question || "").trim();
+        if (!q) return socket.emit("error", { code: "EMPTY", message: "请输入问题" });
+        if (q.length > 500) return socket.emit("error", { code: "TOO_LONG", message: "问题请控制在500字以内" });
+        const players = await getPlayers(roomCode);
+        const ai = players.find(p => p.isAI && p.characterName === characterName);
+        if (!ai) return socket.emit("error", { code: "NOT_FOUND", message: "未找到该AI玩家" });
+        const asker = players.find(p => p.playerId === socket.id);
+        const askerName = asker?.characterName || asker?.playerName || "玩家";
+
+        // AI 回答（LLM + 规则回退）
+        let answer = null;
+        try {
+          const aiLlm = require("../modules/ai-player-llm");
+          const parsed = JSON.parse(room.parsedScript || "{}");
+          const k = await aiLlm.buildKnowledge(roomCode, ai, parsed);
+          const history = await aiLlm.getPublicContext(roomCode, 8);
+          answer = await aiLlm.answerLLM(k, askerName, q, history);
+        } catch (e) { console.warn("[ai-player] ask LLM 失败:", e.message); }
+        if (!answer) {
+          answer = `🤖 ${ai.characterName || "AI"}：我这边暂时没有更多线索，关于这个问题我知道的就是剧本中提到的情况，目前还不好下结论。`;
+        }
+
+        // 问题与回答广播（全员可见，辅助集体推理）
+        const qMsg = await addChatMessage(roomCode, socket.id, asker?.playerName || "", askerName, `🎤 向 ${ai.characterName || "AI"}（AI玩家）提问：${q}`, room.phase);
+        io.to(roomCode).emit("chat_message", qMsg);
+        const aMsg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", answer, room.phase);
+        io.to(roomCode).emit("chat_message", aMsg);
+        // 弹窗事件（提问者与全房间都能收到，前端按提问目标过滤）
+        io.to(roomCode).emit("ai_answer", { from: ai.characterName || "AI", question: q, asker: askerName, answer });
+      } catch (e) { socket.emit("error", { code: "ASK_AI_FAILED", message: e.message }); }
     });
 
     // 审讯NPC：玩家向NPC嫌疑人提问
