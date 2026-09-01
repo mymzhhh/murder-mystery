@@ -3,6 +3,7 @@
 const PHASES = [
   "lobby",
   "reading",
+  "intro",
   "round1_investigation",
   "round1_discussion",
   "round2_investigation",
@@ -16,6 +17,7 @@ const PHASES = [
 const PHASE_CONFIG = {
   lobby:                { label: "等待开始",         allowClueReq: false, allowChat: true,  allowVote: false },
   reading:              { label: "阅读剧本",         allowClueReq: false, allowChat: false, allowVote: false },
+  intro:                { label: "开场介绍",         allowClueReq: false, allowChat: true,  allowVote: false },
   round1_investigation: { label: "第一轮搜证",       allowClueReq: true,  allowChat: false, allowVote: false },
   round1_discussion:    { label: "第一轮讨论",       allowClueReq: false, allowChat: true,  allowVote: false },
   round2_investigation: { label: "第二轮搜证",       allowClueReq: true,  allowChat: false, allowVote: false },

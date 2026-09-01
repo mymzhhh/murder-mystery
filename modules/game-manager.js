@@ -222,6 +222,19 @@ async function clearVotes(code) {
 }
 
 
+// ==================== 开场介绍 ====================
+
+async function addIntroduction(code, characterName, content) {
+  const r = await ensureConn();
+  await r.hset(`game:${code}:intro`, characterName, content);
+}
+
+async function getIntroductions(code) {
+  const r = await ensureConn();
+  return (await r.hgetall(`game:${code}:intro`)) || {};
+}
+
+
 // ==================== 聊天 ====================
 
 async function addChatMessage(code, playerId, playerName, characterName, content, phase) {
@@ -248,6 +261,7 @@ module.exports = {
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
   loadClues, getClues, assignClue, getPlayerClues,
   recordVote, getVotes, clearVotes,
+  addIntroduction, getIntroductions,
   addChatMessage, getChatMessages,
   getRedis,
 };

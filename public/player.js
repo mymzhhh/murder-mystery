@@ -221,6 +221,12 @@
 
     socket.on("vote_update", function() { renderVoting(); });
 
+    socket.on("intro_statement", function(data) {
+      if (!gs.introData) gs.introData = {};
+      gs.introData[data.characterName] = data.content;
+      if (gs.phase === "intro") renderIntroList();
+    });
+
     socket.on("truth_revealed", function(data) {
       gs.phase = "truth_reveal";
       renderTruth(data);
@@ -498,6 +504,7 @@
   function renderGame() {
     var p = gs.phase;
     if (p === "reading") renderReading();
+    else if (p === "intro") renderIntro();
     else if (p.indexOf("investigation") !== -1) renderInvestigation();
     else if (p.indexOf("discussion") !== -1 || p === "round3") renderDiscussion();
     else if (p === "voting") renderVoting();
@@ -507,7 +514,7 @@
   // ===================== Top Bar =====================
   function topBar(phase) {
     var labels = {
-      reading: "阅读剧本",
+      reading: "阅读剧本", intro: "开场介绍",
       round1_investigation: "第一轮搜证", round1_discussion: "第一轮讨论",
       round2_investigation: "第二轮搜证", round2_discussion: "第二轮讨论",
       round3: "最终轮", voting: "投票", truth_reveal: "真相"
@@ -685,6 +692,44 @@
   function refreshSidebar() {
     var el = document.getElementById("gameSidebar");
     if (el) el.innerHTML = sidePanel(window._sidebarTab);
+  }
+
+  // ===================== 开场介绍 =====================
+  function renderIntro() {
+    var h = '<div class="panel"><h3>🎭 开场介绍</h3>' +
+      '<p class="text-dim">向所有人交代你的身份、你的故事，以及案发时你在哪里。全员提交介绍后，点击「进入下一阶段」继续游戏。</p>' +
+      '<div id="introList" style="margin:14px 0;"></div>' +
+      '<textarea id="introInput" class="form-textarea" rows="4" placeholder="大家好，我是… 案发时我在…"></textarea>' +
+      '<div style="margin-top:10px;">' +
+      '<button class="btn btn-primary btn-auto" onclick="submitIntro()">✍️ 提交介绍</button>' +
+      '</div></div>';
+    document.getElementById("gameContent").innerHTML = wrapWithSidebar(h, "chat");
+    renderIntroList();
+    setTimeout(function() { var e = document.getElementById('chatMsgs'); if (e) e.scrollTop = e.scrollHeight; }, 100);
+  }
+
+  function renderIntroList() {
+    var el = document.getElementById("introList");
+    if (!el) return;
+    var data = gs.introData || {};
+    var entries = Object.keys(data).map(function(k) { return [k, data[k]]; });
+    el.innerHTML = entries.length === 0
+      ? '<div class="state-empty">还没有人完成介绍，先开个头吧</div>'
+      : entries.map(function(e) {
+          return '<div class="card card-static" style="margin-bottom:6px;padding:12px;">' +
+            '<b style="color:var(--gold);">' + esc(e[0]) + '</b>' +
+            '<div style="margin-top:4px;white-space:pre-wrap;font-size:14px;">' + esc(e[1]) + '</div></div>';
+        }).join("");
+  }
+
+  function submitIntro() {
+    var input = document.getElementById("introInput");
+    if (!input) return;
+    var text = input.value.trim();
+    if (!text) { showToast("介绍内容不能为空", "warning"); return; }
+    socket.emit("intro_statement", { roomCode: gs.room && gs.room.roomCode, content: text });
+    input.value = "";
+    showToast("介绍已提交", "success");
   }
 
   // ===================== Book Reader =====================
@@ -1024,6 +1069,7 @@
   window.closeNpcDialog = closeNpcDialog;
   window.askNpcInDialog = askNpcInDialog;
   window.openReview = openReview;
+  window.submitIntro = submitIntro;
 
   // ===================== Sidebar Auto-Refresh =====================
   var sidePatched = false;

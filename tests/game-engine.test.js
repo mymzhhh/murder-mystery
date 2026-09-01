@@ -14,7 +14,8 @@ const {
 
 test("getNextPhase 顺序推进", () => {
   assert.equal(getNextPhase("lobby"), "reading");
-  assert.equal(getNextPhase("reading"), "round1_investigation");
+  assert.equal(getNextPhase("reading"), "intro");
+  assert.equal(getNextPhase("intro"), "round1_investigation");
   assert.equal(getNextPhase("round3"), "voting");
   assert.equal(getNextPhase("voting"), "truth_reveal");
   assert.equal(getNextPhase("truth_reveal"), "finished");
@@ -31,6 +32,11 @@ test("getPhaseRound 轮次识别", () => {
 
 test("getPhaseConfig 各阶段行为配置", () => {
   assert.equal(getPhaseConfig("reading").allowChat, false);
+  // 开场介绍：可聊天、不可搜证/投票
+  assert.equal(getPhaseConfig("intro").label, "开场介绍");
+  assert.equal(getPhaseConfig("intro").allowChat, true);
+  assert.equal(getPhaseConfig("intro").allowClueReq, false);
+  assert.equal(getPhaseConfig("intro").allowVote, false);
   assert.equal(getPhaseConfig("round1_investigation").allowClueReq, true);
   assert.equal(getPhaseConfig("voting").allowVote, true);
   // 未知阶段回退 lobby

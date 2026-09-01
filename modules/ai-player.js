@@ -6,7 +6,7 @@
 //   - 投票：线索指向加权 + 随机噪声（AI 若为凶手则绝不投自己）
 // 公平性红线：所有 AI 决策只读【公开信息】（已发现线索 / 角色名单），不读凶手答案。
 
-const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage } = require("./game-manager");
+const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage, addIntroduction } = require("./game-manager");
 const { getAvailableCluesForPlayer, pickRandomClue, searchClues, getPhaseRound } = require("./game-engine");
 
 // ==================== 纯逻辑（可单测） ====================
@@ -88,6 +88,18 @@ function buildAiSpeech(myClues, allChars) {
 }
 
 // ==================== 房间级操作（依赖 io / Redis） ====================
+
+/**
+ * AI 开场介绍：基于角色公开信息（姓名/职业/故事首段），绝不引用 secret
+ */
+function buildAiIntro(aiScript) {
+  const name = (aiScript && aiScript.name) || "神秘人";
+  const occupation = (aiScript && aiScript.occupation) || "";
+  const story = (aiScript && (aiScript.playerScript || aiScript.story)) || "";
+  // 取故事开头第一段（自我介绍视角），截断
+  const firstPart = String(story).split(/\n{2,}/)[0].trim().substring(0, 160);
+  return `我是${name}${occupation ? "（" + occupation + "）" : ""}。${firstPart || "在这个特殊的日子里，有幸受邀来到顾府。"}`;
+}
 
 /**
  * 同步 AI 补位玩家：保证"真人已选角色"之外的所有玩家槽位都有 AI 扮演（差量增删）
@@ -172,6 +184,10 @@ function scheduleRoom(io, roomCode, phase) {
     const round = getPhaseRound(phase);
 
     for (const ai of ais) {
+      // 开场介绍：AI 自动作自我介绍
+      if (phase === "intro") {
+        scheduleDelay(roomCode, () => actIntro(io, roomCode, ai), 5000 + Math.random() * 10000);
+      }
       // 搜证轮：每名 AI 随机延迟后搜证一次
       if (phase.includes("investigation") || phase === "round3" || (round > 0 && phase.includes("investigation"))) {
         scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 3000 + Math.random() * 12000);
@@ -186,6 +202,20 @@ function scheduleRoom(io, roomCode, phase) {
       }
     }
   }).catch(() => {});
+}
+
+async function actIntro(io, roomCode, ai) {
+  const room = await getRoom(roomCode);
+  if (!room || room.phase !== "intro") return;
+  let aiScript = null;
+  try { aiScript = ai.characterScript ? JSON.parse(ai.characterScript) : null; } catch (e) { /* ignore */ }
+  const text = buildAiIntro(aiScript);
+  const who = ai.characterName || "AI";
+  await addIntroduction(roomCode, who, text);
+  io.to(roomCode).emit("intro_statement", { characterName: who, content: text });
+  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + who, who, `📣【自我介绍】${text}`, room.phase);
+  io.to(roomCode).emit("chat_message", msg);
+  console.log(`[ai-player] ${who} 开场介绍完成`);
 }
 
 async function actInvestigate(io, roomCode, ai) {
@@ -268,6 +298,6 @@ async function voteForAllPending(io, roomCode) {
 }
 
 module.exports = {
-  computeAiFillers, chooseVoteTarget, voteCandidates, buildAiSpeech,
+  computeAiFillers, chooseVoteTarget, voteCandidates, buildAiSpeech, buildAiIntro,
   syncAiFillers, scheduleRoom, cancelRoom, voteForAllPending,
 };

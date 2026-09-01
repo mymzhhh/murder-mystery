@@ -61,7 +61,7 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
 
   // 超时提醒
   const autoTimers = {
-    reading: 180000, round1_investigation: 300000, round1_discussion: 180000,
+    reading: 180000, intro: 150000, round1_investigation: 300000, round1_discussion: 180000,
     round2_investigation: 300000, round2_discussion: 180000,
     round3: 360000, voting: 120000,
   };

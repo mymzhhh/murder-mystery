@@ -2,7 +2,7 @@
 
 const { verifyToken } = require("../modules/auth");
 const { getRedis } = require("../modules/redis-client");
-const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages } = require("../modules/game-manager");
+const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions } = require("../modules/game-manager");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue, searchClues } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
@@ -29,6 +29,7 @@ function setupGameSocket(io) {
     ready: 3000,
     ask_npc: 2000,
     join_room: 1000,
+    intro_statement: 2000,
   };
 
   function checkRateLimit(socket, eventName) {
@@ -157,6 +158,7 @@ function setupGameSocket(io) {
           phaseConfig: getPhaseConfig(room.phase), narrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim, layoutDescription: parsed.layoutDescription || "" },
           allCharacters: parsed.characters || [],
+          introData: await getIntroductions(roomCode),
           canStart: allReady, totalSlots: totalPlayerSlots,
         });
         io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: room.ownerId });
@@ -332,6 +334,26 @@ function setupGameSocket(io) {
         const msg = await addChatMessage(roomCode, socket.id, player?.playerName || "", player?.characterName || "", content, room.phase);
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "CHAT_FAILED", message: e.message }); }
+    });
+
+    // 开场介绍：玩家向全员交代角色故事与时间线
+    socket.on("intro_statement", async ({ roomCode, content }) => {
+      if (!checkRateLimit(socket, "intro_statement")) return;
+      try {
+        const room = await getRoom(roomCode);
+        if (!room || room.phase !== "intro") return socket.emit("error", { code: "WRONG_PHASE", message: "当前阶段不能提交介绍" });
+        const text = String(content || "").trim();
+        if (!text) return socket.emit("error", { code: "EMPTY", message: "介绍内容不能为空" });
+        if (text.length > 1000) return socket.emit("error", { code: "TOO_LONG", message: "介绍请控制在1000字以内" });
+        const players = await getPlayers(roomCode);
+        const me = players.find(p => p.playerId === socket.id);
+        const who = me?.characterName || me?.playerName || "未知";
+        await addIntroduction(roomCode, who, text);
+        io.to(roomCode).emit("intro_statement", { characterName: who, content: text });
+        // 同步进聊天流（右侧边栏可见）
+        const msg = await addChatMessage(roomCode, socket.id, me?.playerName || "", who, `📣【自我介绍】${text}`, room.phase);
+        io.to(roomCode).emit("chat_message", msg);
+      } catch (e) { socket.emit("error", { code: "INTRO_FAILED", message: e.message }); }
     });
 
     // 审讯NPC：玩家向NPC嫌疑人提问
