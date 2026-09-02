@@ -13,8 +13,9 @@ const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/
 const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
 // SSE 辅助：带超时保护 + AbortController 的 SSE 连接
-// 生成流水线涉及多轮 LLM 调用（每轮 30-100s），默认 15 分钟超时
-function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
+// - 总时长 30 分钟兜底（防异常泄漏；大剧本+评测修订循环可达 20+ 分钟）
+// - 静默超时 5 分钟：最后一条真实事件后无任何进度则判为 LLM 卡死
+function sseResponse(req, res, timeoutMs = 30 * 60 * 1000, idleMs = 5 * 60 * 1000) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -22,18 +23,28 @@ function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
     "X-Accel-Buffering": "no",
   });
   let closed = false;
+  let idleTimer = null;
   const controller = new AbortController();
 
-  const timer = setTimeout(() => {
-    if (!closed) {
-      controller.abort();
-      try { res.write('event: error\ndata: {"message":"操作超时"}\n\n'); } catch (_) {}
-      try { res.end(); } catch (_) {}
-      closed = true;
-    }
-  }, timeoutMs);
+  function fail(msg) {
+    if (closed) return;
+    controller.abort();
+    try { res.write(`event: error\ndata: ${JSON.stringify({ message: msg })}\n\n`); } catch (_) {}
+    try { res.end(); } catch (_) {}
+    closed = true;
+  }
 
-  // SSE 心跳：生成期间 LLM 调用可能 30-90s 无事件，定期发送注释行保持连接活跃
+  // 总时长兜底
+  const timer = setTimeout(() => fail(`生成耗时过长(${Math.round(timeoutMs / 60000)}分钟)，已自动终止，请重试`), timeoutMs);
+
+  // 静默超时：收到真实事件时重置；心跳注释行不算事件
+  function armIdle() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => fail("生成长时间无响应，已自动终止，请重试"), idleMs);
+  }
+  armIdle();
+
+  // SSE 心跳：维持连接活跃（注释行，不触发前端事件）
   const heartbeat = setInterval(() => {
     if (!closed) { try { res.write(": keep-alive\n\n"); } catch (_) { closed = true; } }
   }, 15000);
@@ -41,6 +52,7 @@ function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
   req.on("close", () => {
     controller.abort();
     clearInterval(heartbeat);
+    clearTimeout(idleTimer);
     closed = true;
   });
 
@@ -49,11 +61,12 @@ function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
     signal: controller.signal,
     send: (event, data) => {
       if (!closed) {
+        armIdle();
         try { res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`); } catch (_) { closed = true; }
       }
     },
     end: () => {
-      if (!closed) { controller.abort(); clearTimeout(timer); clearInterval(heartbeat); try { res.end(); } catch (_) {} closed = true; }
+      if (!closed) { controller.abort(); clearTimeout(timer); clearInterval(heartbeat); clearTimeout(idleTimer); try { res.end(); } catch (_) {} closed = true; }
     },
   };
 }

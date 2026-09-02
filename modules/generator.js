@@ -9,7 +9,7 @@ const defaultModel = process.env.DEFAULT_MODEL || "deepseek-v4-flash";
 
 const MAX_RETRIES = 5;
 const RETRY_DELAY_MS = 1000;
-const API_TIMEOUT_MS = 120000; // 单次调用最长等待2分钟
+const API_TIMEOUT_MS = 300000; // 单次调用最长5分钟（长剧本生成可能 2-4 分钟）
 
 // LLM 用量统计（进程内累计，供管理端仪表盘展示）
 const usageStats = { calls: 0, inputTokens: 0, outputTokens: 0 };
