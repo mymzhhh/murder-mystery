@@ -33,8 +33,14 @@ function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
     }
   }, timeoutMs);
 
+  // SSE 心跳：生成期间 LLM 调用可能 30-90s 无事件，定期发送注释行保持连接活跃
+  const heartbeat = setInterval(() => {
+    if (!closed) { try { res.write(": keep-alive\n\n"); } catch (_) { closed = true; } }
+  }, 15000);
+
   req.on("close", () => {
     controller.abort();
+    clearInterval(heartbeat);
     closed = true;
   });
 
@@ -47,7 +53,7 @@ function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
       }
     },
     end: () => {
-      if (!closed) { controller.abort(); clearTimeout(timer); try { res.end(); } catch (_) {} closed = true; }
+      if (!closed) { controller.abort(); clearTimeout(timer); clearInterval(heartbeat); try { res.end(); } catch (_) {} closed = true; }
     },
   };
 }

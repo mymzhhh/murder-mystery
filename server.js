@@ -41,12 +41,15 @@ app.use((req, res, next) => {
       console.log(`[${level}] ${req.method} ${req.path} → ${res.statusCode} (${ms}ms)`);
     }
   });
-  // 全局请求超时 30s
-  res.setTimeout(30000, () => {
-    if (!res.headersSent) {
-      res.status(504).json({ error: "请求超时" });
-    }
-  });
+  // 全局请求超时 30s；SSE 长连接（剧本生成流水线等）除外——
+  // 生成期间每次 LLM 调用有 30-90s 无输出，空闲超时会把连接杀掉（前端会报 network error）
+  if (!String(req.headers.accept || "").includes("text/event-stream")) {
+    res.setTimeout(30000, () => {
+      if (!res.headersSent) {
+        res.status(504).json({ error: "请求超时" });
+      }
+    });
+  }
   next();
 });
 
