@@ -203,6 +203,9 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // Step 1: 优化提示词
   app.post("/api/admin/pipeline/optimize", authMiddleware, adminMiddleware, async (req, res) => {
     try {
+      // LLM 分析可能较久（推理型模型长 JSON 任务 30~180s），放宽到 5 分钟，
+      // 覆盖全局 30s 空闲超时
+      res.setTimeout(5 * 60 * 1000);
       const { input } = req.body;
       if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
       const result = await optimizePrompt(input);

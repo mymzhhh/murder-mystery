@@ -85,7 +85,7 @@
 
     pipeActive(2);
     var el = document.getElementById("pipelineContent");
-    el.innerHTML = '<div class="state-loading">Agent 正在分析和优化你的需求...</div>';
+    el.innerHTML = '<div class="state-loading">Agent 正在分析和优化你的需求...（通常需要1~3分钟，请耐心等待）</div>';
 
     try {
       var res = await api("/api/admin/pipeline/optimize", {
