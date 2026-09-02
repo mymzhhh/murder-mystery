@@ -13,7 +13,8 @@ const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/
 const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
 // SSE 辅助：带超时保护 + AbortController 的 SSE 连接
-function sseResponse(req, res, timeoutMs = 5 * 60 * 1000) {
+// 生成流水线涉及多轮 LLM 调用（每轮 30-100s），默认 15 分钟超时
+function sseResponse(req, res, timeoutMs = 15 * 60 * 1000) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",

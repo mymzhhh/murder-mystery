@@ -6,8 +6,13 @@ const path = require("path");
 const tplPath = path.join(__dirname, "..", "templates", "murder-mystery.js");
 const MURDER_TPL = require(tplPath);
 const stages = MURDER_TPL.stages;
+// 兼容：模块化拆分后，角色指令模板在模板顶层导出（playerInstruction 等）。
+// 历史代码以 stages.xxx 访问，这里并入 stages，避免 undefined.replace 崩溃。
+for (const key of ["playerInstruction", "soloDetectiveInstruction", "npcWitnessInstruction", "npcInstruction", "characterScript"]) {
+  if (!stages[key] && MURDER_TPL[key] !== undefined) stages[key] = MURDER_TPL[key];
+}
 const LIMITS = MURDER_TPL.limits || { minPlayers: 2, maxPlayers: 6, maxNpc: 3, maxTotal: 9 };
-const TOKENS_PER_STAGE = 10240;  // 4000-6000字中文剧本需要更大token预算
+const TOKENS_PER_STAGE = 32768;  // 推理型模型会占用大量输出预算，长剧本需要留足
 
 /**
  * 生成完整剧本杀剧本
@@ -109,7 +114,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   onProgress("clues", "正在设计线索系统和证据链...");
   try {
     const cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000));
-    const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 6144 });
+    const cluesResult = await generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: 16384 });
     report.clues = cluesResult.content;
   } catch (e) {
     console.error("[clues] 生成失败:", e.message, e.name, e.status);
@@ -120,7 +125,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   onProgress("dmGuide", "正在撰写DM完整手册（时间线、真相复盘、结局）...");
   try {
     const dmPrompt = stages.dmGuide.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000));
-    const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 6144 });
+    const dmResult = await generate(getDMSystemPrompt(), dmPrompt, { maxTokens: 16384 });
     report.dmGuide = dmResult.content;
   } catch (e) {
     console.error("[dmGuide] 生成失败:", e.message, e.name, e.status);

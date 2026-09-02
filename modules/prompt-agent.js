@@ -43,16 +43,44 @@ const PROMPT_SYSTEM = `你是一个剧本杀需求分析专家。你需要分析
   "notes": "补充说明"
 }`;
 
+/** 多策略 JSON 解析：直接 parse → 代码块 → 最外层对象提取 */
+function tryParseJson(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch (e) { /* 继续尝试 */ }
+  let cand = text;
+  const fenced = cand.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (fenced) cand = fenced[1];
+  try { return JSON.parse(cand); } catch (e) { /* 继续 */ }
+  const start = cand.indexOf("{");
+  if (start >= 0) {
+    let depth = 0;
+    for (let i = start; i < cand.length; i++) {
+      if (cand[i] === "{") depth++;
+      else if (cand[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(cand.slice(start, i + 1)); } catch (e) { break; }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 async function optimizePrompt(userInput) {
   const prompt = `用户原始需求：${userInput}\n\n请分析并输出优化后的JSON。玩家1-6人，NPC 0-3人，总人数≤9人。PVP模式也可以有NPC作为信息提供者。`;
 
   try {
-    const result = await generate(PROMPT_SYSTEM, prompt, { maxTokens: 2048, temperature: 0.4 });
-    const cleaned = result.content.trim()
-      .replace(/```json\n?/g, "").replace(/```\n?/g, "")
-      .replace(/^[^{]*\{/, "{").replace(/\}[^}]*$/, "}");
+    const result = await generate(PROMPT_SYSTEM, prompt, { maxTokens: 32768, temperature: 0.4 });
+    const cleaned = String(result.content || "")
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .replace(/^[^{]*\{/, "{")
+      .replace(/\}[^}]*$/, "}");
 
-    const data = JSON.parse(cleaned);
+    const data = tryParseJson(cleaned);
+    if (!data) throw new Error("优化结果不是有效JSON");
 
     // 强制人数约束
     if (data.playerCount > 6) data.playerCount = 6;

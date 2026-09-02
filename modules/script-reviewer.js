@@ -8,6 +8,30 @@ const { splitScript } = require("./script-splitter");
 const MAX_RETRIES = 3;
 const PASS_SCORE = 60;
 
+/** 多策略 JSON 解析：直接 parse → 代码块 → 最外层对象提取（LLM 输出容错） */
+function tryParseJson(text) {
+  if (!text) return null;
+  try { return JSON.parse(text); } catch (e) { /* 继续尝试 */ }
+  let cand = text;
+  const fenced = cand.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  if (fenced) cand = fenced[1];
+  try { return JSON.parse(cand); } catch (e) { /* 继续 */ }
+  const start = cand.indexOf("{");
+  if (start >= 0) {
+    let depth = 0;
+    for (let i = start; i < cand.length; i++) {
+      if (cand[i] === "{") depth++;
+      else if (cand[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          try { return JSON.parse(cand.slice(start, i + 1)); } catch (e) { break; }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 const MAX_PLAYERS = LIMITS.maxPlayers;
 const MAX_NPC = LIMITS.maxNpc;
 const MAX_TOTAL = LIMITS.maxTotal;
@@ -158,12 +182,16 @@ async function reviewScript(sessionId) {
 ${markdown.substring(0, 8000)}`;
 
   try {
-    const result = await generate(REVIEW_SYSTEM_PROMPT, context, { maxTokens: 3072, temperature: 0.3 });
-    const cleaned = result.content.trim()
-      .replace(/```json\n?/g, "").replace(/```\n?/g, "")
-      .replace(/^[^{]*\{/, "{").replace(/\}[^}]*$/, "}");
+    const result = await generate(REVIEW_SYSTEM_PROMPT, context, { maxTokens: 8192, temperature: 0.3 });
+    const cleaned = String(result.content || "")
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .replace(/^[^{]*\{/, "{")
+      .replace(/\}[^}]*$/, "}");
 
-    const review = JSON.parse(cleaned);
+    const review = tryParseJson(cleaned);
+    if (!review) throw new Error("评测结果不是有效JSON");
     review.sessionId = sessionId;
     review.parsed = parsed;
     // 从 dimensions 提取平铺 scores（兼容 admin.js 旧展示）
