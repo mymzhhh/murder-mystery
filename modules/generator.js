@@ -7,7 +7,7 @@ const apiKey = process.env.DEEPSEEK_API_KEY;
 const baseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const defaultModel = process.env.DEFAULT_MODEL || "deepseek-v4-flash";
 
-const MAX_RETRIES = 5;
+const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 1000;
 const API_TIMEOUT_MS = 300000; // 单次调用最长5分钟（长剧本生成可能 2-4 分钟）
 
@@ -21,7 +21,18 @@ function getClient() {
     if (!apiKey || apiKey === "your-deepseek-api-key") {
       throw new Error("未配置 DEEPSEEK_API_KEY");
     }
-    client = new OpenAI({ apiKey, baseURL, timeout: API_TIMEOUT_MS, maxRetries: 0 });
+    // keepAlive:false — 每次请求独立连接，规避 Docker/代理对空闲复用连接的
+    // 回收导致的 Premature close（nginx/网关常见行为）
+    const http = require("http");
+    const https = require("https");
+    client = new OpenAI({
+      apiKey,
+      baseURL,
+      timeout: API_TIMEOUT_MS,
+      maxRetries: 0,
+      httpAgent: new http.Agent({ keepAlive: false }),
+      httpsAgent: new https.Agent({ keepAlive: false }),
+    });
   }
   return client;
 }
@@ -72,15 +83,43 @@ async function _callWithRetry(messages, options = {}) {
       // 客户端主动中断，不重试
       if (err.name === "AbortError" || err.message === "Aborted") throw err;
       if (attempt < MAX_RETRIES && canRetry(err, attempt)) {
-        const delay = RETRY_DELAY_MS * Math.pow(2, attempt);
+        const delay = Math.min(RETRY_DELAY_MS * Math.pow(2, attempt), 30000); // 退避封顶30s
         console.warn(`[generate] 第${attempt + 1}次失败(${err.message})，${delay / 1000}s后重试...`);
         await sleep(delay);
         continue;
       }
-      throw err;
+      break; // 重试耗尽，进入双通道 fallback
     }
   }
+  // deepseek 全部重试失败 → 尝试 agnes 通道补齐（双线路同时抖动概率极低）
+  const fb = await fallbackToAgnes(messages, options);
+  if (fb) return fb;
   throw lastErr || new Error("API调用失败");
+}
+
+/**
+ * deepseek 全部重试失败后的双通道 fallback：切 agnes 再试一次
+ * （两个供应商线路同时抖动的概率远低于单个通道持续抖动）
+ */
+async function fallbackToAgnes(messages, options = {}) {
+  try {
+    const { chatMessages } = require("./agnes-client");
+    const content = await chatMessages(messages, {
+      maxTokens: options.maxTokens || 4096,
+      temperature: options.temperature ?? 0.7,
+    });
+    if (content) {
+      console.warn("[generate] deepseek 重试失败，已通过 agnes 通道补齐本次调用");
+      return {
+        content,
+        usage: { inputTokens: 0, outputTokens: 0 },
+        model: "agnes-2.5-flash(fallback)",
+      };
+    }
+  } catch (e) {
+    console.warn("[generate] agnes fallback 失败:", e.message);
+  }
+  return null;
 }
 
 async function generate(systemPrompt, userPrompt, options = {}) {

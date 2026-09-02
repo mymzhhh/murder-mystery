@@ -49,4 +49,25 @@ async function chat(systemPrompt, userPrompt, opts = {}) {
   }
 }
 
-module.exports = { chat, AGNES_MODEL };
+/**
+ * 直接以 messages 数组调用（供 generator 双通道 fallback 复用，与 deepseek 同签名）
+ */
+async function chatMessages(messages, opts = {}) {
+  const c = getClient();
+  if (!c) return null;
+  try {
+    const resp = await c.chat.completions.create({
+      model: AGNES_MODEL,
+      messages: Array.isArray(messages) ? messages : [{ role: "user", content: String(messages) }],
+      max_tokens: opts.maxTokens || 900,
+      temperature: opts.temperature ?? 0.8,
+    });
+    const content = (resp.choices && resp.choices[0] && resp.choices[0].message && resp.choices[0].message.content || "").trim();
+    return content || null;
+  } catch (e) {
+    console.warn("[agnes] chatMessages 失败:", e.message);
+    return null;
+  }
+}
+
+module.exports = { chat, chatMessages, AGNES_MODEL };
