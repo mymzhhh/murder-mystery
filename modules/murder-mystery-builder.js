@@ -134,7 +134,15 @@ async function buildMurderMystery(userInput, onProgress, config) {
 
   // ========== 组装 ==========
   onProgress("assemble", "正在组装完整剧本...");
-  const fullScript = assembleScript(report, userInput);
+  let fullScript = assembleScript(report, userInput);
+
+  // ========== 时间线一致性后处理（长期校准；失败静默保留原文） ==========
+  try {
+    const { fixTimeline } = require("./timeline-consistency");
+    fullScript = await fixTimeline(fullScript, (m) => onProgress("timeline", m));
+  } catch (e) {
+    console.warn("[builder] 时间线一致性校准跳过:", e.message);
+  }
 
   onProgress("done", `剧本生成完毕：${playerChars.length}名玩家 + ${npcChars.length}名NPC`);
   return { fullScript, stages: report, characters };
