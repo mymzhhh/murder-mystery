@@ -14,8 +14,9 @@ const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
 
 // SSE 辅助：带超时保护 + AbortController 的 SSE 连接
 // - 总时长 2 小时兜底（仅防异常泄漏；生成步骤是确定序列总会结束）
-// - 静默超时 5 分钟：最后一条真实事件后无任何进度则判为 LLM 卡死（心跳注释行不算）
-function sseResponse(req, res, timeoutMs = 120 * 60 * 1000, idleMs = 5 * 60 * 1000) {
+// - 静默超时 10 分钟：最后一条真实事件后无任何进度才判卡死（容忍单次 LLM 上限 5 分钟
+//   + 网络抖动重试；心跳注释行不算事件）
+function sseResponse(req, res, timeoutMs = 120 * 60 * 1000, idleMs = 10 * 60 * 1000) {
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
