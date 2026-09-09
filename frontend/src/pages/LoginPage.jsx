@@ -85,7 +85,7 @@ export default function LoginPage({ onLogin }) {
         </form>
 
         <div style={{ marginTop: 16, textAlign: "center", fontSize: 12, color: "var(--dim)" }}>
-          仍在使用旧版界面？<a href="/admin.html" style={{ color: "var(--gold-light)" }}>旧版管理端</a> · <a href="/player.html" style={{ color: "var(--gold-light)" }}>旧版玩家端</a>
+          管理员登录后进入管理端，普通玩家自动进入玩家端
         </div>
       </div>
     </div>

@@ -406,6 +406,8 @@ function setupGameSocket(io) {
         const ai = players.find(p => p.isAI && p.characterName === characterName);
         if (!ai) return socket.emit("error", { code: "NOT_FOUND", message: "未找到该AI玩家" });
         const asker = players.find(p => p.playerId === socket.id);
+        // 必须是在房玩家才能提问（否则任意连接可刷 LLM 成本）
+        if (!asker) return socket.emit("error", { code: "NOT_IN_ROOM", message: "你不在该房间内" });
         const askerName = asker?.characterName || asker?.playerName || "玩家";
 
         // AI 回答（LLM + 规则回退）
@@ -440,12 +442,17 @@ function setupGameSocket(io) {
         // 审讯NPC在搜证和讨论阶段均可使用（阅读和投票阶段不可用）
         if (room.phase === "reading" || room.phase === "lobby") return socket.emit("error", { code: "WRONG_PHASE", message: "当前阶段无法审讯NPC" });
         if (!question?.trim()) return socket.emit("error", { code: "EMPTY", message: "请输入问题" });
+        const qText = String(question).trim();
+        if (qText.length > 500) return socket.emit("error", { code: "TOO_LONG", message: "问题请控制在500字以内" });
+        // 必须是在房玩家才能审讯（防任意连接刷 LLM 成本）
+        const askerPlayer = players.find(p => p.playerId === socket.id);
+        if (!askerPlayer) return socket.emit("error", { code: "NOT_IN_ROOM", message: "你不在该房间内" });
 
         const parsed = JSON.parse(room.parsedScript || "{}");
         const npcChar = parsed.characters?.find(c => c.name === npcName && c.roleType === "npc");
         if (!npcChar) return socket.emit("error", { code: "NOT_FOUND", message: "未找到该NPC" });
 
-        const player = players.find(p => p.playerId === socket.id);
+        const player = askerPlayer;
         const askerName = player?.characterName || player?.playerName || "未知";
 
         // 每局每个NPC的提问次数上限（防止上下文无限膨胀、LLM成本失控）
@@ -500,6 +507,15 @@ function setupGameSocket(io) {
         const aiNames = allPlayers.filter(p => p.isAI && p.characterName).map(p => p.characterName);
         const allCharNames = [...new Set([...humanPlayers.map(p => p.characterName).filter(Boolean), ...aiNames, ...npcNames])];
         if (!allCharNames.includes(targetCharacterName)) return socket.emit("error", { code: "INVALID_TARGET", message: "投票目标不存在" });
+        // 不可投自己（剧本杀投票是"指认他人为凶手"）
+        if (player.characterName && player.characterName === targetCharacterName) {
+          return socket.emit("error", { code: "SELF_VOTE", message: "不能投票给自己" });
+        }
+        // 已投票不可改（防反复覆盖：此前 HSET 会静默改写，导致票数统计被操纵）
+        const existingVotes = await getVotes(roomCode);
+        if (existingVotes && existingVotes[socket.id]) {
+          return socket.emit("error", { code: "ALREADY_VOTED", message: "你已投过票，不能更改" });
+        }
         await recordVote(roomCode, socket.id, targetCharacterName);
         socket.emit("vote_recorded", { target: targetCharacterName });
         const votes = await getVotes(roomCode);

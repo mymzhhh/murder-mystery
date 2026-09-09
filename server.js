@@ -54,9 +54,15 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json({ limit: "5mb" }));
+// 静态资源目录（React 构建产物由下方 /assets 提供；public/ 现仅作占位，旧前端已下线）
 app.use(express.static(path.join(__dirname, "public"), {
   setHeaders: (res) => { res.set("Cache-Control", "no-cache, no-store, must-revalidate"); }
 }));
+
+// 旧版入口兼容：旧书签/外链重定向到 React 版
+app.get("/admin.html", (req, res) => res.redirect(301, "/admin"));
+app.get("/player.html", (req, res) => res.redirect(301, "/player"));
+app.get("/login.html", (req, res) => res.redirect(301, "/"));
 
 // ===== React 前端（Vite 构建产物） =====
 // 构建：npm run build:web → frontend/dist/ → 部署时拷贝到容器

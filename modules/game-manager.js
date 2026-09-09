@@ -16,28 +16,32 @@ function genRoomCode() {
 
 async function createRoom(dmPlayerId, dmName) {
   const r = await ensureConn();
-  let code;
+  let code = null;
   const now = Date.now();
+  // 用 SET NX 占位键保证房间号唯一（替代共享连接上的 WATCH/MULTI——
+  // ioredis 的事务是连接级状态，并发调用会互相污染）
   for (let attempt = 0; attempt < 20; attempt++) {
-    code = genRoomCode();
-    await r.watch(`game:${code}`);
-    const exists = await r.exists(`game:${code}`);
-    if (!exists) {
+    const cand = genRoomCode();
+    const lockKey = `game:${cand}:creating`;
+    const claimed = await r.set(lockKey, "1", "EX", 10, "NX");
+    if (!claimed) continue;
+    try {
+      if (await r.exists(`game:${cand}`)) continue;
       const room = {
-        roomCode: code, status: "lobby", phase: "lobby",
+        roomCode: cand, status: "lobby", phase: "lobby",
         createdAt: now, dmPlayerId, maxPlayers: 8,
         scriptSessionId: "", parsedScript: "",
         murdererName: "", phaseStartedAt: now, phaseDurationSec: 0,
       };
-      const result = await r.multi()
-        .hset(`game:${code}`, room)
-        .zadd("games:index", now, code)
-        .exec();
-      if (result) break;
-    } else {
-      await r.unwatch();
+      await r.hset(`game:${cand}`, room);
+      await r.zadd("games:index", now, cand);
+      code = cand;
+      break;
+    } finally {
+      await r.del(lockKey).catch(() => {});
     }
   }
+  if (!code) throw new Error("createRoom: 房间号生成失败，请重试");
   // DM 作为第一个玩家加入
   await addPlayer(code, dmPlayerId, dmName, true);
   const room = await getRoom(code);
@@ -104,19 +108,23 @@ async function getPlayer(code, playerId) {
   return raw ? JSON.parse(raw) : null;
 }
 
+// 原子合并玩家字段（Lua 脚本，避免共享连接上的 WATCH/MULTI 事务互相污染）
+const UPDATE_PLAYER_LUA = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return nil end
+local obj = cjson.decode(raw)
+local patch = cjson.decode(ARGV[1])
+for k, v in pairs(patch) do obj[k] = v end
+local out = cjson.encode(obj)
+redis.call('SET', KEYS[1], out)
+return out
+`;
+
 async function updatePlayer(code, playerId, fields) {
   const r = await ensureConn();
   const key = playerKey(code, playerId);
-  for (let attempt = 0; attempt < 10; attempt++) {
-    await r.watch(key);
-    const raw = await r.get(key);
-    if (!raw) { await r.unwatch(); return null; }
-    const player = JSON.parse(raw);
-    Object.assign(player, fields);
-    const result = await r.multi().set(key, JSON.stringify(player)).exec();
-    if (result) return player;
-  }
-  throw new Error("updatePlayer: 并发冲突，重试耗尽");
+  const out = await r.eval(UPDATE_PLAYER_LUA, 1, key, JSON.stringify(fields || {}));
+  return out ? JSON.parse(out) : null;
 }
 
 async function removePlayer(code, playerId) {
