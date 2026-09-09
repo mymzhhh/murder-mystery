@@ -4,28 +4,22 @@ const PHASES = [
   "lobby",
   "reading",
   "intro",
-  "round1_investigation",
-  "round1_discussion",
-  "round2_investigation",
-  "round2_discussion",
-  "round3",
+  "round1",
+  "round2",
   "voting",
   "truth_reveal",
   "finished",
 ];
 
 const PHASE_CONFIG = {
-  lobby:                { label: "等待开始",         allowClueReq: false, allowChat: true,  allowVote: false },
-  reading:              { label: "阅读剧本",         allowClueReq: false, allowChat: false, allowVote: false },
-  intro:                { label: "开场介绍",         allowClueReq: false, allowChat: true,  allowVote: false },
-  round1_investigation: { label: "第一轮搜证",       allowClueReq: true,  allowChat: false, allowVote: false },
-  round1_discussion:    { label: "第一轮讨论",       allowClueReq: false, allowChat: true,  allowVote: false },
-  round2_investigation: { label: "第二轮搜证",       allowClueReq: true,  allowChat: false, allowVote: false },
-  round2_discussion:    { label: "第二轮讨论",       allowClueReq: false, allowChat: true,  allowVote: false },
-  round3:               { label: "第三轮搜证+讨论",   allowClueReq: true,  allowChat: true,  allowVote: false },
-  voting:               { label: "投票阶段",         allowClueReq: false, allowChat: true,  allowVote: true  },
-  truth_reveal:         { label: "真相揭露",         allowClueReq: false, allowChat: true,  allowVote: false },
-  finished:             { label: "游戏结束",         allowClueReq: false, allowChat: true,  allowVote: false },
+  lobby:     { label: "等待开始",         allowClueReq: false, allowChat: true,  allowVote: false },
+  reading:   { label: "阅读剧本",         allowClueReq: false, allowChat: false, allowVote: false },
+  intro:     { label: "开场介绍",         allowClueReq: false, allowChat: true,  allowVote: false },
+  round1:    { label: "第一轮搜证与讨论", allowClueReq: true,  allowChat: true,  allowVote: false },
+  round2:    { label: "第二轮搜证与讨论", allowClueReq: true,  allowChat: true,  allowVote: false },
+  voting:    { label: "投票阶段",         allowClueReq: false, allowChat: true,  allowVote: true  },
+  truth_reveal: { label: "真相揭露",      allowClueReq: false, allowChat: true,  allowVote: false },
+  finished:  { label: "游戏结束",         allowClueReq: false, allowChat: true,  allowVote: false },
 };
 
 function getPhaseConfig(phase) {
@@ -39,9 +33,8 @@ function getNextPhase(current) {
 }
 
 function getPhaseRound(phase) {
-  if (phase.startsWith("round1")) return 1;
-  if (phase.startsWith("round2")) return 2;
-  if (phase === "round3") return 3;
+  if (phase === "round1") return 1;
+  if (phase === "round2") return 2;
   return 0;
 }
 

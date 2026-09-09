@@ -58,6 +58,26 @@ app.use(express.static(path.join(__dirname, "public"), {
   setHeaders: (res) => { res.set("Cache-Control", "no-cache, no-store, must-revalidate"); }
 }));
 
+// ===== React 前端（Vite 构建产物） =====
+// 构建：npm run build:web → frontend/dist/ → 部署时拷贝到容器
+// 兼容两种布局：/app/frontend/dist（标准）或 /app/frontend（直接含 index.html）
+// 旧版页面保留在 /admin.html /player.html /login.html（public/），
+// 新版入口：/admin（管理端）、/player（玩家端）
+const fs = require("fs");
+const distPath = path.join(__dirname, "frontend", "dist");
+const distPathAlt = path.join(__dirname, "frontend");
+const reactDist = fs.existsSync(path.join(distPath, "index.html"))
+  ? distPath
+  : (fs.existsSync(path.join(distPathAlt, "index.html")) ? distPathAlt : null);
+if (reactDist) {
+  app.use("/assets", express.static(path.join(reactDist, "assets"), {
+    setHeaders: (res) => { res.set("Cache-Control", "public, max-age=31536000, immutable"); }
+  }));
+  // React 入口页（SPA）
+  app.get("/admin", (req, res) => res.sendFile(path.join(reactDist, "index.html")));
+  app.get("/player", (req, res) => res.sendFile(path.join(reactDist, "index.html")));
+}
+
 // 全局限流
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000,           // 1 分钟窗口
@@ -86,20 +106,17 @@ const generationLimiter = rateLimit({
 });
 app.use("/api/admin/scripts/generate", generationLimiter);
 app.use("/api/admin/pipeline/run", generationLimiter);
-app.use("/api/admin/scripts/:id/review-revise", generationLimiter);
+app.use("/api/admin/scripts/:id/review-split", generationLimiter);
 
-app.get("/", (req, res) => res.redirect("/login.html"));
+app.get("/", (req, res) => res.redirect("/admin"));
 
 // 健康检查
+// 健康检查：仅返回最小必要信息（不暴露 pid/内存细节/连接串，减少信息泄漏面）
 app.get("/api/health", (req, res) => {
-  const redis = require("./modules/redis-client");
   res.json({
     status: "ok",
-    redisUrl: process.env.REDIS_URL ? process.env.REDIS_URL.replace(/\/\/.*@/, "//***@") : "NOT SET",
-    railwayEnv: !!process.env.RAILWAY_ENVIRONMENT,
-    uptime: process.uptime(),
-    memory: process.memoryUsage(),
-    pid: process.pid,
+    uptime: Math.floor(process.uptime()),
+    updatedAt: new Date().toISOString(),
   });
 });
 

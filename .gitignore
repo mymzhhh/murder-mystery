@@ -1,6 +1,8 @@
 .env
 data/
 node_modules
+frontend/node_modules
+frontend/dist
 修改记录.md
 server.log
 *.log

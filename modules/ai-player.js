@@ -45,7 +45,8 @@ function chooseVoteTarget(aiScript, publicClues, candidates) {
       if (text.includes(c.toLowerCase())) weights[c] += 2;
     }
   }
-  // 凶手 AI：额外压低自己（已排除在自己之外）——对手里权重最高的施加轻微随机
+  // 候选列表已排除自己（voteCandidates 传入 selfName），无需额外凶手压制逻辑。
+  // 对手里权重最高的施加轻微随机，模拟真人"疑邻盗斧"的倾向。
   let best = candidates[0];
   let bestW = -Infinity;
   for (const c of candidates) {
@@ -58,12 +59,14 @@ function chooseVoteTarget(aiScript, publicClues, candidates) {
 }
 
 /** 从候选里挑一个"非自己"的角色名列表（含真人/AI/审讯NPC），供投票用 */
-function voteCandidates(players, characters, selfName) {
+function voteCandidates(players, characters, selfName, excludeNpcs) {
   const names = new Set();
   for (const p of (players || [])) {
     if (p.characterName && p.characterName !== selfName) names.add(p.characterName);
   }
   for (const c of (characters || [])) {
+    // excludeNpcs=true（PVP）：NPC 是目击者/关系人，不进投票
+    if (excludeNpcs && c.roleType === "npc") continue;
     if (c.name && c.name !== selfName) names.add(c.name);
   }
   return [...names];
@@ -96,10 +99,11 @@ function buildAiSpeech(myClues, allChars) {
 function buildAiIntro(aiScript) {
   const name = (aiScript && aiScript.name) || "神秘人";
   const occupation = (aiScript && aiScript.occupation) || "";
-  const story = (aiScript && (aiScript.playerScript || aiScript.story)) || "";
+  const scr = (aiScript && aiScript.script) || {};
+  const story = (aiScript && (aiScript.playerScript || scr.playerScript || aiScript.fullScript || aiScript.story || scr.story)) || "";
   // 取故事开头第一段（自我介绍视角），截断
   const firstPart = String(story).split(/\n{2,}/)[0].trim().substring(0, 160);
-  return `我是${name}${occupation ? "（" + occupation + "）" : ""}。${firstPart || "在这个特殊的日子里，有幸受邀来到顾府。"}`;
+  return `我是${name}${occupation ? "（" + occupation + "）" : ""}。${firstPart || "在这个特殊的日子里，我有幸来到案发现场。"}`;
 }
 
 /**
@@ -197,12 +201,9 @@ function scheduleRoom(io, roomCode, phase) {
       if (phase === "intro") {
         scheduleDelay(roomCode, () => actIntro(io, roomCode, ai), 5000 + Math.random() * 10000);
       }
-      // 搜证轮：每名 AI 随机延迟后搜证一次
-      if (phase.includes("investigation") || phase === "round3" || (round > 0 && phase.includes("investigation"))) {
+      // 合并轮（round1/round2 = 搜证+讨论）：AI 搜证 + 发言
+      if (round > 0) {
         scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 3000 + Math.random() * 12000);
-      }
-      // 讨论轮：模板发言一次
-      if (phase.includes("discussion") || phase === "round3") {
         scheduleDelay(roomCode, () => actSpeak(io, roomCode, ai, allChars), 10000 + Math.random() * 20000);
       }
       // 投票轮：延迟随机后投票
@@ -237,7 +238,7 @@ async function actIntro(io, roomCode, ai) {
 
 async function actInvestigate(io, roomCode, ai) {
   const room = await getRoom(roomCode);
-  if (!room || !room.phase.includes("investigation")) return;
+  if (!room) return;
   const round = getPhaseRound(room.phase);
   if (!round) return;
 
@@ -257,11 +258,8 @@ async function actInvestigate(io, roomCode, ai) {
   const clue = searchResult && searchResult.clue ? searchResult.clue : pickRandomClue(available);
   if (!clue) return;
   await assignClue(roomCode, clue.id, ai.playerId);
+  // AI 搜到线索：仅广播线索事件（进入玩家线索列表），不刷聊天框
   io.to(roomCode).emit("clue_received", { clue, foundBy: ai.characterName || "AI" });
-  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI",
-    `🤖 我搜到了线索【${clue.id || ""}】: ${(clue.content || "").substring(0, 60)}${(clue.location ? "（" + clue.location + "）" : "")}`,
-    room.phase);
-  io.to(roomCode).emit("chat_message", msg);
 
   // 续搜：本轮还有未被发现的线索 → 稍后继续，直到没有线索为止
   try {
@@ -277,7 +275,7 @@ async function actInvestigate(io, roomCode, ai) {
 
 async function actSpeak(io, roomCode, ai, allChars) {
   const room = await getRoom(roomCode);
-  if (!room || !(room.phase.includes("discussion") || room.phase === "round3")) return;
+  if (!room || !getPhaseRound(room.phase)) return;
   let text = null;
   // 优先 LLM：基于自己的角色/线索 + 公开对话发言
   try {
@@ -305,7 +303,12 @@ async function actVote(io, roomCode, ai, allChars) {
   let aiScript = null;
   try { aiScript = ai.characterScript ? JSON.parse(ai.characterScript) : null; } catch (e) { /* ignore */ }
   const players = await getPlayers(roomCode);
-  const candidates = voteCandidates(players, allChars, ai.characterName);
+  let excludeNpcs = false;
+  try {
+    const roomParsed = JSON.parse(room.parsedScript || "{}");
+    excludeNpcs = (roomParsed.setting?.gameMode || "").toUpperCase() === "PVP";
+  } catch (e) { /* ignore */ }
+  const candidates = voteCandidates(players, allChars, ai.characterName, excludeNpcs);
   if (!candidates.length) return;
 
   const publicClues = (await getClues(roomCode) || []).filter(c => c.foundBy && c.foundBy.length);

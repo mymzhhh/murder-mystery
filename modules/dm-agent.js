@@ -9,13 +9,13 @@ const DM_SYSTEM_PROMPT = `你是一位专业剧本杀DM（主持人），负责�
 2. **引导玩家**：在搜证阶段提示玩家可以调查的方向，但不直接指出关键线索
 3. **管理节奏**：适时推进游戏，保持紧张感和趣味性
 4. **保持中立**：不偏袒任何玩家，不暗示凶手身份
-5. **融入NPC**：如果剧本中有NPC嫌疑人，在适当的阶段提及他们的存在，将其自然融入叙事
+5. **融入NPC**：如果剧本中有NPC（嫌疑人或目击者/关系人），在适当的阶段提及他们的存在，将其自然融入叙事
 6. **戏剧化呈现**：在关键节点（投票、真相揭露）营造戏剧性效果
 
 重要禁令：
-- **绝对不能说"凶手就在你们之中"或类似暗示凶手一定是玩家的话**。凶手可能是NPC嫌疑人
-- 投票阶段必须明确提醒：所有角色（包括NPC嫌疑人）都在投票范围内
-- 如果存在NPC嫌疑人，必须将他们列为可能的凶手
+- **绝对不能说"凶手就在你们之中"或类似暗示凶手一定是玩家的话**。PVE模式下凶手可能是NPC嫌疑人；PVP模式下凶手在玩家中
+- 投票阶段按剧本模式提醒投票范围：PVE剧本中NPC嫌疑人参与投票；PVP剧本中NPC目击者/关系人不参与投票，凶手在玩家之间
+- 如果存在NPC嫌疑人（PVE），必须将他们列为可能的凶手
 
 语言风格：
 - 与剧本的时代背景保持一致
@@ -29,45 +29,41 @@ const DM_SYSTEM_PROMPT = `你是一位专业剧本杀DM（主持人），负责�
  * 生成阶段开场叙事
  */
 async function generatePhaseNarrative(script, phase, gameState) {
-  // 检查缓存（script title + phase 作为 key）
+  // 检查缓存（key 加入剧本内容指纹，防止同名剧本跨房串叙事）
   const { getRedis } = require("./redis-client");
+  const cacheKey = narrativeCacheKey(script, phase);
   try {
     const r = getRedis();
-    const cacheKey = `narrative:${script.title || 'untitled'}:${phase}`;
     const cached = await r.get(cacheKey);
     if (cached) return cached;
   } catch (e) { /* Redis 不可用，跳过缓存 */ }
 
+  // NPC 定位：PVE=嫌疑人，PVP=目击者/关系人（与 prompt-agent / builder 设定对齐）
+  const gameMode = (script.setting?.gameMode || "").toUpperCase();
+  const isPVE = gameMode ? gameMode === "PVE" : ((script.characters || []).some(c => c.roleType === "npc" && c.isMurderer));
+  const npcLabel = isPVE ? "NPC嫌疑人" : "NPC目击者/关系人";
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
   const players = (script.characters || []).filter(c => c.roleType !== "npc");
   const npcNames = npcs.map(c => c.name).join("、");
   const npcInfo = npcs.length > 0
-    ? `\n**NPC嫌疑人（由DM扮演）**：${npcNames}\n这些NPC是案件的重要嫌疑人，他们不会主动发言，但DM会在适当时机提供关于他们的信息。`
+    ? `\n**${isPVE ? 'NPC嫌疑人' : 'NPC目击者/关系人'}（由DM扮演）**：${npcNames}\n${isPVE
+      ? '这些NPC是案件的重要嫌疑人，他们不会主动发言，但DM会在适当时机提供关于他们的信息。'
+      : '这些NPC是案件的目击者或相关人，掌握特定的时间点信息，审问他们可以获得线索（但他们不是凶手）。'}`
     : "";
   const phaseDescriptions = {
     reading: `玩家们正在阅读各自的角色剧本。请生成一段简短的开场白，欢迎玩家进入游戏。${npcInfo}`,
 
-    round1_investigation: `第一轮搜证开始。请生成一段叙事，描述案发现场的基本情况。
-${npcInfo}${npcs.length > 0 ? '同时提醒玩家：可以向DM询问NPC嫌疑人的相关信息。' : ''}
-列出3-4个可以调查的具体地点。
+    round1: `第一轮【搜证与讨论】开始。请生成一段叙事，描述案发现场的基本情况。
+${npcInfo}${npcs.length > 0 ? `同时提醒玩家：可以向DM询问${isPVE ? 'NPC嫌疑人' : 'NPC目击者/关系人'}的相关信息。` : ''}
+列出3-4个可以调查的具体地点；并提示玩家在搜证的同时可以分享交流各自的发现（本阶段可同时搜证与讨论）。
 剧本设定：${script.setting?.location || '未知地点'}，时代：${script.setting?.era || '未知'}，死者：${script.victim?.name || '未知'}。`,
 
-    round1_discussion: `第一轮讨论开始。玩家们可以分享各自发现的线索。${npcs.length > 0 ? '提醒玩家：NPC嫌疑人' + npcNames + '虽然不会发言，但他们的一举一动也是重要的推理线索。' : ''}
-请生成2-3个引导性问题，帮助玩家整理线索、交流发现。不要直接指出凶手。`,
-
-    round2_investigation: `第二轮搜证开始。请生成一段叙事，描述深入调查的过程。
+    round2: `第二轮【搜证与讨论】开始。请生成一段叙事，描述深入调查的过程。
 ${npcInfo}引导玩家调查：${[...players.slice(0, 3).map(c => c.name), ...(npcs.length > 0 ? npcs.map(c => c.name) : [])].join('、')}等人的活动轨迹。
-列出新的可调查方向。`,
-
-    round2_discussion: `第二轮讨论开始。${npcs.length > 0 ? '经过深入调查，NPC嫌疑人' + npcNames + '的可疑之处逐渐浮现。' : ''}
-请生成引导问题，帮助玩家深入分析动机和不在场证明。`,
-
-    round3: `最后一轮搜证和讨论。请生成紧张感逐渐上升的叙事。
-${npcs.length > 0 ? '此时，玩家对NPC嫌疑人' + npcNames + '的了解应该已经很深入了。' : ''}
-提醒玩家这是最后的机会。引导关注关键线索和矛盾点。`,
+列出新的可调查方向。${npcs.length > 0 ? (isPVE ? `提示：经过深入调查，NPC嫌疑人` + npcNames + '的可疑之处逐渐浮现，请玩家结合线索互相讨论。' : `提示：NPC目击者/关系人` + npcNames + '提供的线索逐渐拼合出真相轮廓，请玩家结合线索互相讨论。') : ''}`,
 
     voting: `投票阶段。请生成一段紧张、严肃的叙事。
-${npcs.length > 0 ? '提醒玩家：NPC嫌疑人' + npcNames + '也在投票范围内。请根据所有已知线索，投出你最怀疑的人。' : ''}
+${npcs.length > 0 && isPVE ? `提醒玩家：NPC嫌疑人` + npcNames + '也在投票范围内。请根据所有已知线索，投出你最怀疑的人。' : (npcs.length > 0 ? `提醒玩家：${npcNames}是目击者/关系人，不在投票指认范围内；请在玩家之间指认真凶。` : '')}
 要求每位玩家投出自己的一票。营造倒计时的紧迫感。`,
 
     truth_reveal: "真相即将揭晓。请根据DM手册中的真相复盘，用戏剧化的方式揭示真正的凶手和作案过程。",
@@ -88,62 +84,26 @@ ${npcs.length > 0 ? '提醒玩家：NPC嫌疑人' + npcNames + '也在投票范�
   if (!result) {
     const fallbacks = {
       reading: "欢迎各位来到这场谋杀之谜。请仔细阅读你的角色剧本，了解自己的身份、秘密和动机。",
-      round1_investigation: "案件已经发生，现场留下了许多痕迹。请各位开始调查，寻找可能指向凶手的线索。",
-      round1_discussion: "第一轮调查结束，请各位分享你的发现。记住——每个人都有自己的秘密。",
+      round1: "案件已经发生，现场留下了许多痕迹。请各位开始搜证调查，并可以随时分享你的发现——本阶段搜证与讨论同时进行。",
     };
     return fallbacks[phase] || `游戏进入 ${phase} 阶段。请根据DM指导继续游戏。`;
   }
 
-  // 缓存结果（1小时 TTL）
+  // 缓存结果（1小时 TTL）—— 与读取端共用同一 cacheKey 计算函数，避免"读用指纹、写用标题"导致永不命中
   try {
     const r = getRedis();
-    const cacheKey = `narrative:${script.title || 'untitled'}:${phase}`;
     await r.setex(cacheKey, 3600, result.content);
   } catch (e) { /* ignore */ }
 
   return result.content;
 }
 
-/**
- * AI 决策：为玩家选择线索
- */
-async function decideClueForPlayer(script, playerCharacter, availableClues, playerClues, round, phase) {
-  if (!availableClues || availableClues.length === 0) return null;
-  if (availableClues.length === 1) return availableClues[0];
-  if (availableClues.length <= 3) {
-    return availableClues[Math.floor(Math.random() * availableClues.length)];
-  }
-
-  const sysPrompt = `你是剧本杀线索分配决策助手。根据当前游戏状态，为玩家选择合适的线索。优先选择：1) 与该玩家角色相关的线索 2) 能推进推理的线索 3) 先给普通线索再给关键线索。只输出选中线索的ID，不要解释。`;
-
-  const userPrompt = `玩家角色：${playerCharacter?.name || '未知'}\n当前轮次：第${round || 1}轮\n该玩家已获得的线索ID：${(playerClues || []).map(c => c.id).join(',') || '无'}\n本轮可用线索：\n${availableClues.map(c => `- ${c.id}: ${(c.content || '').substring(0, 60)}`).join('\n')}\n\n请选择一个最合适的线索ID：`;
-
-  try {
-    const result = await generate(sysPrompt, userPrompt, { maxTokens: 64, temperature: 0.5 });
-    const chosenId = result.content.trim().match(/[A-C]\d+/);
-    if (chosenId) {
-      const found = availableClues.find(c => c.id === chosenId[0]);
-      if (found) return found;
-    }
-  } catch (e) { /* fallback to random */ }
-
-  return availableClues[Math.floor(Math.random() * availableClues.length)];
-}
-
-/**
- * 生成投票阶段结果叙事
- */
-async function generateVoteReveal(script, votes, outcome) {
-  const sysPrompt = `你是剧本杀DM。投票结果已出，请用戏剧化的方式公布结果。根据outcome类型：true_accusation表示抓对真凶，wrong_accusation表示冤枉了好人，tie表示平票。请营造相应的戏剧效果。`;
-
-  const voterNames = Object.keys(votes || {}).length;
-  const topTarget = outcome?.name || "";
-  const murderer = script.murderer?.name || "未知";
-
-  const userPrompt = `剧本：《${script.title || ''}》\n投票人数：${voterNames}\n最高票指向：${topTarget}\n真正的凶手：${murderer}\n结果：${outcome?.outcome || 'unknown'}\n\n请生成100-200字的公布结果叙事：`;
-
-  const result = await generate(sysPrompt, userPrompt, { maxTokens: 512, temperature: 0.8 });
-  return result.content;
+/** 叙事缓存 key：剧本指纹 + 阶段（读写单点，避免 key 不一致导致缓存永不命中） */
+function narrativeCacheKey(script, phase) {
+  const fingerprint = String(script.title || "untitled").substring(0, 40)
+    + "|" + ((script.characters || []).map(c => c.name).join(",") || "").substring(0, 60)
+    + "|" + (script.setting?.gameMode || "");
+  return `narrative:${fingerprint}:${phase}`;
 }
 
 /**
@@ -151,8 +111,9 @@ async function generateVoteReveal(script, votes, outcome) {
  */
 async function generateTruthReveal(script, votes, outcome) {
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
+  const isPVE = (script.setting?.gameMode || "").toUpperCase() === "PVE";
   const npcContext = npcs.length > 0
-    ? `\nNPC嫌疑人：${npcs.map(c => c.name + '(' + (c.occupation || '') + ')').join('、')}`
+    ? `\n${isPVE ? 'NPC嫌疑人' : 'NPC目击者/关系人'}：${npcs.map(c => c.name + '(' + (c.occupation || '') + ')').join('、')}`
     : "";
 
   const sysPrompt = `你是剧本杀DM。游戏结束，请做完整的真相复盘。内容包括：凶手的完整作案过程、动机、手法、关键线索的串联。${npcs.length > 0 ? '如果凶手是NPC，需要特别说明NPC的作案过程。' : ''}语言要有戏剧性和感染力。`;

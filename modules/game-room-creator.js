@@ -25,7 +25,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       }));
       parsed = {
         title: pgData.title,
-        setting: { era: pgData.era, location: pgData.location },
+        setting: { era: pgData.era, location: pgData.location, gameMode: pgData.game_mode || "" },
         characters,
         clues: { round1: allClues.filter(c => c.round === 1), round2: allClues.filter(c => c.round === 2), round3: allClues.filter(c => c.round === 3), redHerrings: [] },
         murderer: { name: pgData.dm?.murderer_name || "", motive: pgData.dm?.murderer_motive || "", method: pgData.dm?.murderer_method || "" },
@@ -57,7 +57,7 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
         } else { allClues.push(d); }
       }
       parsed = {
-        title: meta.title, setting: { era: meta.era, location: meta.location }, characters,
+        title: meta.title, setting: { era: meta.era, location: meta.location, gameMode: meta.gameMode || "" }, characters,
         clues: { round1: allClues.filter(c => c.round === "1"), round2: allClues.filter(c => c.round === "2"), round3: allClues.filter(c => c.round === "3"), redHerrings: [] },
         murderer: { name: dmData?.murdererName || "", motive: dmData?.murdererMotive || "", method: dmData?.murdererMethod || "" },
         dmGuide: { truthReveal: dmData?.truthReveal || "", openingMonologue: dmData?.openingMonologue || "" },
@@ -77,7 +77,12 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
   }
 
   const room = await createRoom("system_dm", "AI_DM");
-  await updateRoom(room.roomCode, { scriptSessionId, parsedScript: JSON.stringify(parsed), murdererName: parsed.murderer?.name || "", dmType: "ai", maxPlayers: maxPlayers || 6 });
+  // 凶手名兜底：优先 DM 手册解析值，其次角色列表里的 isMurderer 标记
+  // （历史 bug：DM 手册缺失时 murdererName 为空 → determineOutcome 永远判"指认错误"）
+  const murdererName = parsed.murderer?.name
+    || (parsed.characters || []).find(c => c.isMurderer)?.name
+    || "";
+  await updateRoom(room.roomCode, { scriptSessionId, parsedScript: JSON.stringify(parsed), murdererName, dmType: "ai", maxPlayers: maxPlayers || 6 });
   if (allClues.length > 0) await loadClues(room.roomCode, allClues);
   await r.sadd("rooms:open", room.roomCode);
   await removePlayer(room.roomCode, "system_dm");

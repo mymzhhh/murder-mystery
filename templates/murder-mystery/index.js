@@ -24,7 +24,8 @@ module.exports = {
   },
 
   // 角色类型模板（从 character 模块导出）
-  playerInstruction: character.player,
+  playerInstruction: character.player,          // PVP 玩家互疑详版
+  playerSleuthInstruction: character.playerSleuth, // PVE 侦探简版
   soloDetectiveInstruction: character.soloDetective,
   npcWitnessInstruction: character.npcWitness,
   npcInstruction: character.npcSuspect,

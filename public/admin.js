@@ -44,6 +44,7 @@
     document.getElementById("page-" + p).classList.add("active");
     if (p === "scripts") loadScripts();
     if (p === "stats") loadStats();
+    if (p === "models") loadModels();
     if (p === "users") loadUsers();
     if (p === "rooms") { loadRooms(); loadRoomScriptSelect(); }
   }
@@ -55,8 +56,9 @@
   var _lastPhase = null;
 
   function pipeActive(n) {
-    for (var i = 1; i <= 5; i++) {
+    for (var i = 1; i <= 6; i++) {
       var el = document.getElementById("ps" + i);
+      if (!el) continue;
       el.classList.remove("active", "done", "error");
       if (i < n) el.classList.add("done");
       else if (i === n) el.classList.add("active");
@@ -103,12 +105,15 @@
       var npcCount = data.npcCount || 0;
       var isPVE = data.isPVE !== undefined ? data.isPVE : (npcCount > 0);
       var gameMode = data.gameMode || (isPVE ? "PVE" : "PVP");
-      _scriptConfig = { playerCount: playerCount, npcCount: npcCount, isPVE: isPVE, gameMode: gameMode };
+      var advMode = ["hardcore", "emotional"].indexOf(data.advancedMode) !== -1 ? data.advancedMode : "standard";
+      var advLabel = advMode === "hardcore" ? "硬核·多重指向" : advMode === "emotional" ? "情感·反转" : "标准";
+      _scriptConfig = { playerCount: playerCount, npcCount: npcCount, isPVE: isPVE, gameMode: gameMode, advancedMode: advMode };
 
       var h = '<div class="grid-4 mb-lg">';
       h += '<div class="card card-static text-center"><div style="font-size:32px;color:var(--gold);font-weight:800;">' + playerCount + '</div><div class="text-xs text-dim">玩家角色</div></div>';
-      h += '<div class="card card-static text-center"><div style="font-size:32px;color:var(--mystic-light);font-weight:800;">' + npcCount + '</div><div class="text-xs text-dim">NPC嫌疑人</div></div>';
+      h += '<div class="card card-static text-center"><div style="font-size:32px;color:var(--mystic-light);font-weight:800;">' + npcCount + '</div><div class="text-xs text-dim">' + (gameMode === 'PVP' ? 'NPC目击者/关系人' : 'NPC嫌疑人') + '</div></div>';
       h += '<div class="card card-static text-center"><div style="font-size:18px;color:' + (isPVE ? 'var(--gold)' : 'var(--mystic-light)') + ';font-weight:800;">' + gameMode + '</div><div class="text-xs text-dim">游戏模式</div></div>';
+      h += '<div class="card card-static text-center"><div style="font-size:14px;color:var(--success);font-weight:700;">' + advLabel + '</div><div class="text-xs text-dim">创作风格档位</div></div>';
       if (data.title) h += '<div class="card card-static"><strong style="color:var(--gold);">' + esc(data.title) + '</strong><div class="text-xs text-dim mt-sm">' + esc(data.era || '') + ' | ' + esc(data.style || '') + '</div></div>';
       h += '</div>';
 
@@ -139,14 +144,14 @@
     if (!sessionId) return;
     _lastSessionId = sessionId;
     var isReviewPhase = _lastPhase === 'review';
-    pipeActive(isReviewPhase ? 4 : 5);
+    pipeActive(isReviewPhase ? 5 : 6);
     var el = document.getElementById("pipelineContent");
     el.innerHTML = '<div class="progress-steps"></div>' +
       '<div class="pipeline-buttons"><button class="btn btn-danger btn-sm btn-auto" onclick="cancelPipeline()">取消生成</button></div>';
 
     _abortController = new AbortController();
     var url = isReviewPhase
-      ? "/api/admin/scripts/" + sessionId + "/review-revise"
+      ? "/api/admin/scripts/" + sessionId + "/review-split"
       : "/api/admin/scripts/" + sessionId + "/split";
 
     streamPipeline(url, null, el, sessionId);
@@ -194,16 +199,22 @@
               var color = stageColor(d.stage);
               el.querySelector(".progress-steps").innerHTML += '<div style="font-size:12px;color:' + color + ';padding:2px 0;">' + esc(d.stage + ': ' + d.message) + '</div>';
             } else if (et === "phase") {
-              if (d.phase === "write") pipeActive(3);
-              else if (d.phase === "review") pipeActive(4);
-              else if (d.phase === "split") pipeActive(5);
+              if (d.phase === "outline") pipeActive(3);
+              else if (d.phase === "write") pipeActive(4);
+              else if (d.phase === "review") pipeActive(5);
+              else if (d.phase === "split") pipeActive(6);
               if (d.phase === "write_done" && d.sessionId) _lastSessionId = d.sessionId;
               _lastPhase = d.phase;
               el.querySelector(".progress-steps").innerHTML += '<div style="font-size:13px;color:var(--gold);padding:4px 0;font-weight:600;">' + esc(d.message) + '</div>';
+            } else if (et === "outline") {
+              // 剧本大纲可视化：渲染结构化大纲面板并推进到生成剧本步骤
+              pipeActive(4);
+              _lastPhase = "outline";
+              renderOutlinePanel(d);
             } else if (et === "complete") {
               if (d.status === "done") {
-                pipeActive(5);
-                el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;font-weight:600;">剧本生成完成！已评测通过并切分</div>';
+                pipeActive(6);
+                el.querySelector(".progress-steps").innerHTML += '<div style="color:var(--success);margin-top:8px;font-weight:600;">剧本生成完成！已评测并切分</div>';
               } else {
                 el.querySelector(".progress-steps").innerHTML += '<div class="alert alert-warning mt-sm">' + esc(d.message) + '</div>';
               }
@@ -263,6 +274,84 @@
     } finally {
       _abortController = null;
     }
+  }
+
+  // 渲染剧本大纲可视化面板（来自 SSE outline 事件）
+  function renderOutlinePanel(d) {
+    var el = document.getElementById("pipelineContent");
+    if (!el) return;
+    var o = d || {};
+    var ts = o.trickSpec || {};
+    var h = '<div class="panel" style="margin-top:10px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:center;"><h3 style="color:var(--gold);margin:0;">🎭 剧本大纲</h3>';
+    h += '<span class="tag">' + (o.isPVE ? 'PVE' : 'PVP') + ' · ' + (o.playerCount || '?') + '玩家' + ((o.npcCount||0) > 0 ? ' + ' + o.npcCount + 'NPC' : '') + '</span></div>';
+
+    // 标题 + 核心诡计
+    h += '<div class="grid-2" style="margin-top:10px;">';
+    h += '<div class="card card-static"><div class="text-xs text-dim">剧本名</div><strong style="font-size:18px;">' + esc(o.title || '未命名') + '</strong><div class="text-xs mt-sm">' + esc(o.storyBackground || '') + '</div></div>';
+    h += '<div class="card card-static"><div class="text-xs text-dim">核心诡计</div><strong style="color:var(--blood-light);">' + esc(o.coreTrick || '') + '</strong><div class="text-xs mt-sm">' + esc((ts.trick ? ts.trick + '·' : '') + (ts.type || '') + (ts.mechanism ? '｜' + ts.mechanism : '')) + '</div></div>';
+    h += '</div>';
+
+    // 死者 + 凶手（含双时间线）
+    var v = o.victim || {};
+    var m = o.murderer || {};
+    h += '<div class="grid-2" style="margin-top:8px;">';
+    h += '<div class="card card-static"><div class="text-xs text-dim">死者</div><strong>' + esc(v.name || '?') + '</strong><div class="text-xs mt-sm">' + esc([v.identity, v.causeOfDeath, v.deathPlace].filter(Boolean).join(' · ')) + '</div></div>';
+    h += '<div class="card card-static"><div class="text-xs text-dim">凶手</div><strong style="color:var(--danger);">' + esc(m.name || '?') + '</strong><div class="text-xs mt-sm">动机：' + esc(m.motive || '') + '</div></div>';
+    h += '</div>';
+
+    // 人物列表
+    var chars = [];
+    (o.players || []).forEach(function(p) { chars.push({ name: p.name, tag: p.isMurderer ? '🔪凶手' : (o.isPVE ? '玩家' : '玩家'), clazz: p.isMurderer ? 'tag-admin' : 'tag-player', meta: p.identity || '' }); });
+    (o.npcs || []).forEach(function(n) { chars.push({ name: n.name, tag: 'NPC', clazz: 'tag-npc', meta: (n.identity || '') + (n.isMurderer ? ' 🔪' : '') }); });
+    if (chars.length) {
+      h += '<div style="margin-top:8px;"><div class="text-xs text-dim mb-sm">人物</div><div class="grid-2">';
+      chars.forEach(function(c) {
+        h += '<div class="card card-static" style="padding:8px 10px;"><strong>' + esc(c.name) + '</strong> <span class="tag ' + c.clazz + '">' + esc(c.tag) + '</span><div class="text-xs text-dim mt-sm">' + esc(c.meta) + '</div></div>';
+      });
+      h += '</div></div>';
+    }
+
+    // 关系网
+    if (o.relations && o.relations.length) {
+      h += '<div style="margin-top:10px;"><div class="text-xs text-dim mb-sm">人物关系网</div>';
+      (o.relations || []).forEach(function(r) {
+        h += '<div style="font-size:12px;padding:3px 0;border-bottom:1px solid var(--border);">' + esc(r.a) + ' ↔ ' + esc(r.b) + '：<span class="text-dim">' + esc(r.link || '') + '</span> <span style="color:var(--warning);">' + esc(r.tension || '') + '</span></div>';
+      });
+      h += '</div>';
+    }
+
+    // 凶手双时间线
+    if (m.realLine || m.fakeLine) {
+      h += '<div class="grid-2" style="margin-top:10px;">';
+      if (m.realLine) h += '<div class="card card-static"><div class="text-xs text-dim">凶手真实时间线（DM真相）</div><div style="font-size:12px;white-space:pre-wrap;margin-top:4px;">' + esc(m.realLine) + '</div></div>';
+      if (m.fakeLine) h += '<div class="card card-static"><div class="text-xs" style="color:var(--warning);">凶手伪装时间线（对外谎言）</div><div style="font-size:12px;white-space:pre-wrap;margin-top:4px;">' + esc(m.fakeLine) + '</div></div>';
+      h += '</div>';
+    }
+
+    // 时间线骨架
+    if (o.timeline && o.timeline.length) {
+      h += '<div style="margin-top:10px;"><div class="text-xs text-dim mb-sm">关键时间线</div>';
+      (o.timeline || []).forEach(function(t) {
+        h += '<div style="font-size:12px;padding:2px 0;"><span style="color:var(--gold);font-family:monospace;">' + esc(t.time || '') + '</span> ' + esc(t.desc || '') + '</div>';
+      });
+      h += '</div>';
+    }
+
+    // 布局
+    if (o.layout && o.layout.length) {
+      h += '<div style="margin-top:10px;"><div class="text-xs text-dim mb-sm">场景布局</div><div style="font-size:12px;">' + esc(o.layout.join(' · ')) + '</div></div>';
+    }
+
+    h += '</div>';
+    // 插入到进度日志之前（作为顶部面板）
+    var steps = el.querySelector(".progress-steps");
+    var panel = document.createElement("div");
+    panel.innerHTML = h;
+    if (steps) el.insertBefore(panel.firstChild, steps);
+    else el.innerHTML = h + el.innerHTML;
+    // 滚动到顶部让用户看到大纲
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function stageColor(stage) {
@@ -394,7 +483,7 @@
               '<button class="btn btn-outline btn-xs" onclick="viewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看原文</button>' +
               (s.isSplit ? '<button class="btn btn-outline btn-xs" onclick="viewSplitData(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">查看切分</button>' : '') +
               '<button class="btn btn-outline btn-xs" onclick="reviewScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测</button>' +
-              '<button class="btn btn-outline btn-xs" onclick="reviewAndReviseScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测+修复</button>' +
+              '<button class="btn btn-outline btn-xs" onclick="reviewAndSplitScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">评测并切分</button>' +
               '<button class="btn btn-outline btn-xs" onclick="splitScriptBtn(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">切分</button>' +
               '<button class="btn btn-outline btn-xs" onclick="deleteScript(\'' + esc(s.sessionId) + '\')" style="margin-left:4px;">删除</button>' +
               '</td></tr>';
@@ -477,106 +566,36 @@
   function reviewScript(id) {
     var prog = document.getElementById("genProgress");
     prog.style.display = "block";
-    prog.innerHTML = '<div class="panel"><h3 style="color:var(--gold);margin-bottom:8px;">📊 剧本评测</h3><div class="state-loading">AI 正在多维度评测中...</div></div>';
+    prog.innerHTML = '<div class="panel"><h3 style="color:var(--gold);margin-bottom:8px;">🔍 剧本评测（逻辑漏洞检查）</h3><div class="state-loading">AI 正在查找时间线与线索链中的逻辑漏洞...</div></div>';
 
     api("/api/admin/scripts/" + id + "/review", { method: "POST" })
       .then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
       .then(function(result) {
         var data = result.data;
         if (!result.ok) { prog.innerHTML = '<div class="alert alert-danger">' + esc(data.error || '评测失败') + '</div>'; return; }
-        var scores = data.scores || {};
-        var dims = data.dimensions || {};
-        var passed = data.passed;
-        var dimNames = [
-          { key: "storyCompleteness", label: "故事完整性", color: "var(--gold)" },
-          { key: "murdererDesign", label: "凶手设计", color: "var(--blood-light)" },
-          { key: "clueSystem", label: "线索系统", color: "#4ade80" },
-          { key: "characterDesign", label: "角色设计", color: "var(--mystic-light)" },
-          { key: "playability", label: "可玩性", color: "#fcd34d" }
-        ];
-
-        var h = '<div style="color:' + (passed ? 'var(--success)' : 'var(--warning)') + ';font-size:14px;font-weight:600;margin-bottom:12px;">' +
-          (passed ? '✅ 评测通过' : '⚠️ 评测未通过') + ' — ' + data.totalScore + '分</div>';
-
-        // 5维度评分卡片
-        h += '<div class="grid-4" style="text-align:center;margin-bottom:12px;">';
-        dimNames.forEach(function(d) {
-          var score = scores[d.key] || '-';
-          h += '<div class="card card-static" style="padding:12px;"><div style="font-size:28px;color:' + d.color + ';font-weight:800;">' + score + '</div><div class="text-xs text-dim">' + d.label + '</div></div>';
-        });
-        h += '</div>';
-
-        // 每维度可展开详情（reason + suggestion）
-        h += '<div style="margin-bottom:12px;">';
-        dimNames.forEach(function(d, idx) {
-          var dim = dims[d.key];
-          if (!dim || !dim.reason) return;
-          var openAttr = idx === 0 ? ' open' : '';
-          h += '<details class="script-detail" style="margin-bottom:4px;border-left:3px solid ' + d.color + ';"' + openAttr + '>';
-          h += '<summary style="color:' + d.color + ';font-weight:600;font-size:13px;">' + d.label + ' — ' + (scores[d.key] || '?') + '分</summary>';
-          h += '<div style="font-size:12px;color:var(--text-dim);margin-top:4px;"><strong>评估：</strong>' + esc(dim.reason) + '</div>';
-          if (dim.suggestion) h += '<div style="font-size:12px;color:var(--success-light);margin-top:4px;"><strong>建议：</strong>' + esc(dim.suggestion) + '</div>';
-          h += '</details>';
-        });
-        h += '</div>';
-
-        // strengths / weaknesses / revisionAdvice
-        if (data.strengths && data.strengths.length) h += '<div style="margin-top:8px;font-size:12px;color:var(--success);">👍 ' + esc(data.strengths.join('；')) + '</div>';
-        if (data.weaknesses && data.weaknesses.length) h += '<div style="margin-top:4px;font-size:12px;color:var(--warning);">⚠️ ' + esc(data.weaknesses.join('；')) + '</div>';
-        if (data.revisionAdvice) h += '<div style="margin-top:8px;padding:8px;background:var(--surface2);border-radius:6px;font-size:12px;color:var(--text);line-height:1.6;">💡 ' + esc(data.revisionAdvice) + '</div>';
-
-        // 一键应用建议修改
-        var patches = data.suggestedPatches || [];
-        if (patches.length > 0) {
-          h += '<div style="margin-top:12px;padding:10px;background:rgba(245,158,11,0.08);border:1px solid var(--warning);border-radius:8px;">';
-          h += '<div class="text-xs" style="color:var(--warning-light);margin-bottom:6px;">🔧 建议的局部修改（' + patches.length + '项）</div>';
-          patches.forEach(function(p, i) {
-            h += '<div style="font-size:11px;color:var(--text);padding:3px 0;">' + (i + 1) + '. [' + esc(p.type) + '] <strong>' + esc(p.target) + '</strong>: ' + esc(p.operation) + ' — ' + esc(p.description) + '</div>';
-          });
-          var patchesStr = encodeURIComponent(JSON.stringify(patches));
-          h += '<button class="btn btn-warning btn-sm btn-auto" style="margin-top:8px;" onclick="applyPatches(\'' + id + '\', decodeURIComponent(\'' + patchesStr + '\'))">⚡ 一键应用修改</button>';
-          h += '<span id="patchResult" style="font-size:11px;margin-left:8px;"></span>';
-          h += '</div>';
-        }
-
+        var report = data.report || '';
+        var hasIssue = report && (report.indexOf("未发现明显漏洞") === -1 || report.indexOf("未通过") !== -1);
+        var h = '<div style="font-size:14px;font-weight:600;margin-bottom:12px;color:' + (hasIssue ? 'var(--warning)' : 'var(--success)') + ';">' +
+          (hasIssue ? '⚠️ 评测发现以下问题（逻辑漏洞或自检不通过项）' : '✅ 评测通过') + '</div>';
+        h += '<div style="padding:12px;background:var(--surface2);border-radius:8px;white-space:pre-wrap;font-size:13px;line-height:1.8;max-height:480px;overflow-y:auto;color:var(--text);">' + esc(report || '（无评测结果）') + '</div>';
+        h += '<div class="pipeline-buttons" style="margin-top:12px;">' +
+          '<button class="btn btn-primary btn-auto" onclick="reviewAndSplitScript(\'' + id + '\')">评测并切分</button>' +
+          '</div>';
         prog.innerHTML = '<div class="panel">' + h + '</div>';
       })
       .catch(function(e) { prog.innerHTML = '<div class="alert alert-danger">评测失败: ' + e.message + '</div>'; });
   }
 
-  function applyPatches(id, patchesJson) {
-    var btn = event.target;
-    btn.disabled = true;
-    btn.textContent = "应用修改中...";
-    var patches = typeof patchesJson === 'string' ? JSON.parse(patchesJson) : patchesJson;
-    api("/api/admin/scripts/" + id + "/apply-patches", {
-      method: "POST",
-      body: JSON.stringify({ patches: patches })
-    }).then(function(res) { return res.json(); })
-      .then(function(data) {
-        if (data.ok) {
-          document.getElementById("patchResult").innerHTML = '<span style="color:var(--success);">✅ 已应用，请重新评测</span>';
-        } else {
-          document.getElementById("patchResult").innerHTML = '<span style="color:var(--danger);">❌ ' + esc(data.error || '失败') + '</span>';
-        }
-      })
-      .catch(function(e) {
-        document.getElementById("patchResult").innerHTML = '<span style="color:var(--danger);">❌ ' + e.message + '</span>';
-      })
-      .finally(function() { btn.disabled = false; btn.textContent = "⚡ 一键应用修改"; });
-  }
-
-  function reviewAndReviseScript(id) {
-    if (!confirm("评测+修复将进行最多3轮评测和重新生成，每轮可能需要数分钟。确定继续？")) return;
+  function reviewAndSplitScript(id) {
     var prog = document.getElementById("genProgress");
     prog.style.display = "block";
-    prog.innerHTML = '<div class="panel"><h3 style="color:var(--gold);margin-bottom:8px;">🔄 评测+修复</h3><div class="progress-steps"></div></div>';
+    prog.innerHTML = '<div class="panel"><h3 style="color:var(--gold);margin-bottom:8px;">🔍 评测并切分</h3><div class="progress-steps"></div></div>';
 
-    fetch("/api/admin/scripts/" + id + "/review-revise", {
+    fetch("/api/admin/scripts/" + id + "/review-split", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token }
     }).then(function(res) { return readSSE(res, prog); })
-      .catch(function(e) { prog.innerHTML += '<div class="alert alert-danger mt-sm">评测修复失败: ' + e.message + '</div>'; });
+      .catch(function(e) { prog.innerHTML += '<div class="alert alert-danger mt-sm">评测切分失败: ' + e.message + '</div>'; });
   }
 
   function splitScriptBtn(id) {
@@ -704,10 +723,164 @@
   }
 
   // ===================== Utility =====================
+  // HTML 转义（含引号）：esc 结果会被拼进 onclick='...' 等属性，必须转义单双引号（XSS 防护）
   function esc(s) {
-    var d = document.createElement("div");
-    d.textContent = String(s || "");
-    return d.innerHTML;
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
+  // ===================== 模型管理 =====================
+  var _modelTesting = {};
+
+  function loadModels() {
+    var el = document.getElementById("modelsRoot");
+    if (!el) return;
+    api("/api/admin/models")
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        var h = '';
+        h += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+          '<span class="text-sm text-dim">通道：生成通道（主创作） / 推理通道（AI玩家·NPC·审讯）</span>' +
+          '<button class="btn btn-outline btn-sm" onclick="refreshModels()">↻ 刷新</button></div>';
+
+        ['generative', 'reasoning'].forEach(function(ch) {
+          var label = ch === 'generative' ? '🖋️ 生成通道' : '🧠 推理通道';
+          var models = data[ch] || [];
+          h += '<div class="card card-static" style="margin-bottom:12px;padding:14px;">';
+          h += '<h4 style="margin:0 0 10px;color:var(--gold);">' + label + '</h4>';
+
+          if (models.length === 0) {
+            h += '<p class="text-xs text-dim">（未配置模型，将使用环境变量默认值——请检查 .env 中对应 API Key）</p>';
+          }
+          models.forEach(function(m) {
+            var activeTag = m.active ? '<span class="tag tag-success">当前生效</span>' : '';
+            h += '<div class="flex-between" style="padding:8px 0;border-bottom:1px solid var(--border);">' +
+              '<div><span style="font-weight:600;">' + esc(m.name) + '</span> ' + activeTag +
+              '<div class="text-xs text-dim">模型: ' + esc(m.model || '') + (m.baseUrl ? ' | ' + esc(m.baseUrl) : '') +
+              (m.apiKey ? ' | key: ' + esc(m.apiKey) : ' | key: (环境)' ) +
+              (m.source === 'env' ? ' | 来源: 环境变量' : ' | 来源: 手动添加') + '</div></div>' +
+              '<div class="flex" style="gap:6px;">' +
+              (!m.active ? '<button class="btn btn-outline btn-xs" onclick="setActiveModel(\'' + ch + '\',\'' + esc(m.name) + '\')">设为生效</button>' : '') +
+              (m.source !== 'env' ? '<button class="btn btn-outline btn-xs" onclick="deleteModel(\'' + ch + '\',\'' + esc(m.name) + '\')">删除</button>' : '') +
+              '</div></div>';
+          });
+
+          // 测试成功回调反馈
+          if (_modelTesting[ch]) {
+            h += '<div class="alert alert-success" style="margin-top:8px;">' + esc(_modelTesting[ch]) + '</div>';
+          } else if (_modelTesting[ch] === null) {
+            h += '<div class="alert alert-warning" style="margin-top:8px;">测试失败，见输出</div>';
+          }
+
+          // 添加表单
+          h += '<div style="margin-top:12px;padding:10px;background:var(--surface);border:1px dashed var(--border);border-radius:var(--radius);">' +
+            '<div style="font-size:12px;color:var(--gold-light);margin-bottom:8px;">✚ 添加模型</div>' +
+            '<div class="grid-2" style="gap:8px;margin-bottom:8px;">' +
+            '<input id="mdlName_' + ch + '" class="form-input" placeholder="名称（如: deepseek-v4-flash）" />' +
+            '<input id="mdlModel_' + ch + '" class="form-input" placeholder="模型名（如: deepseek-v4-flash）" />' +
+            '</div>' +
+            '<input id="mdlUrl_' + ch + '" class="form-input" style="margin-bottom:8px;" placeholder="API Base URL（如 https://api.deepseek.com）" />' +
+            '<input id="mdlKey_' + ch + '" class="form-input" style="margin-bottom:8px;" type="password" placeholder="API Key（留空则用环境变量）" />' +
+            '<div class="flex" style="gap:8px;">' +
+            '<button class="btn btn-primary btn-sm" onclick="addModel(\'' + ch + '\')">添加并生效</button>' +
+            '<button class="btn btn-outline btn-sm" onclick="testModel(\'' + ch + '\')">测试连通</button>' +
+            '</div></div>';
+
+          h += '</div>';
+        });
+        el.innerHTML = h;
+      })
+      .catch(function(e) {
+        console.error("[admin] loadModels failed:", e.message);
+        el.innerHTML = '<div class="state-error">加载模型失败: ' + esc(e.message) + '</div>';
+      });
+  }
+
+  function addModel(channel) {
+    var name = document.getElementById("mdlName_" + channel).value.trim();
+    var model = document.getElementById("mdlModel_" + channel).value.trim();
+    var baseUrl = document.getElementById("mdlUrl_" + channel).value.trim();
+    var apiKey = document.getElementById("mdlKey_" + channel).value.trim();
+    if (!name || !model) { showToast("请填写名称与模型名", "warning"); return; }
+    api("/api/admin/models/" + channel, {
+      method: "POST",
+      body: JSON.stringify({ name: name, model: model, baseUrl: baseUrl, apiKey: apiKey })
+    }).then(function(res) { return res.json(); })
+      .then(function(d) {
+        if (d.error) { showToast(d.error, "error"); return; }
+        // 添加后默认设为生效
+        return api("/api/admin/models/" + channel + "/active", {
+          method: "POST", body: JSON.stringify({ name: name })
+        }).then(function() { return d; });
+      })
+      .then(function() {
+        showToast("模型已添加并生效", "success");
+        loadModels();
+      })
+      .catch(function(e) { showToast("添加失败: " + e.message, "error"); });
+  }
+
+  function setActiveModel(channel, name) {
+    if (!confirm("将「" + name + "」设为" + (channel === 'generative' ? '生成通道' : '推理通道') + "当前生效模型？切换即时生效，无需重启。")) return;
+    api("/api/admin/models/" + channel + "/active", {
+      method: "POST", body: JSON.stringify({ name: name })
+    }).then(function(res) { return res.json(); })
+      .then(function(d) {
+        if (d.error) { showToast(d.error, "error"); return; }
+        showToast("已切换生效模型: " + name, "success");
+        loadModels();
+      })
+      .catch(function(e) { showToast("切换失败: " + e.message, "error"); });
+  }
+
+  function deleteModel(channel, name) {
+    if (!confirm("删除模型「" + name + "」？")) return;
+    api("/api/admin/models/" + channel + "/" + encodeURIComponent(name), { method: "DELETE" })
+      .then(function(res) { return res.json(); })
+      .then(function() { loadModels(); showToast("已删除", "info"); })
+      .catch(function(e) { showToast("删除失败: " + e.message, "error"); });
+  }
+
+  // 测试连通（SSE）
+  function testModel(channel) {
+    var name = document.getElementById("mdlName_" + channel).value.trim();
+    var model = document.getElementById("mdlModel_" + channel).value.trim();
+    var baseUrl = document.getElementById("mdlUrl_" + channel).value.trim();
+    var apiKey = document.getElementById("mdlKey_" + channel).value.trim();
+    if (!model) { showToast("请填写模型名", "warning"); return; }
+    _modelTesting[channel] = '测试中...';
+    loadModels();
+    var params = new URLSearchParams({ model: model, name: name, baseUrl: baseUrl, apiKey: apiKey }).toString();
+    var ev = new EventSource("/api/admin/models/" + channel + "/test?" + params);
+    var done = false;
+    function finish() { if (!done) { done = true; ev.close(); } }
+    ev.addEventListener("complete", function(e) {
+      finish();
+      try { var d = JSON.parse(e.data); _modelTesting[channel] = "✅ 连通成功（HTTP " + d.httpStatus + "）模型 " + d.model + (d.reply ? "，回复: " + d.reply : ""); } catch (err) { _modelTesting[channel] = "✅ 连通成功"; }
+      loadModels();
+    });
+    ev.addEventListener("error", function(e) {
+      // error 事件也可能带 data（后端发的 error event）；读不到就提示失败
+      var msg = "";
+      if (e.data) { try { msg = JSON.parse(e.data).message || e.data; } catch (err) { msg = e.data; } }
+      finish();
+      _modelTesting[channel] = "❌ 测试失败" + (msg ? ": " + msg : "");
+      loadModels();
+    });
+    // 后端 data: {"message":"..."} 普通事件兜底
+    ev.onmessage = function(e) {
+      try { var d = JSON.parse(e.data); if (d && d.message) { _modelTesting[channel] = "❌ " + d.message; } } catch (err) {}
+    };
+  }
+
+  function refreshModels() {
+    delete _modelTesting.generative;
+    delete _modelTesting.reasoning;
+    loadModels();
   }
 
   // ===================== Global Exports =====================
@@ -723,7 +896,7 @@
   window.viewScript = viewScript;
   window.viewSplitData = viewSplitData;
   window.reviewScript = reviewScript;
-  window.reviewAndReviseScript = reviewAndReviseScript;
+  window.reviewAndSplitScript = reviewAndSplitScript;
   window.splitScriptBtn = splitScriptBtn;
   window.loadUsers = loadUsers;
   window.toggleRole = toggleRole;
@@ -732,8 +905,13 @@
   window.createRoom = createRoom;
   window.createRoomFromScript = createRoomFromScript;
   window.closeRoom = closeRoom;
-  window.applyPatches = applyPatches;
   window.syncNow = syncNow;
+  window.loadModels = loadModels;
+  window.addModel = addModel;
+  window.setActiveModel = setActiveModel;
+  window.deleteModel = deleteModel;
+  window.testModel = testModel;
+  window.refreshModels = refreshModels;
 
   // ===================== Init =====================
   initScriptSearch();

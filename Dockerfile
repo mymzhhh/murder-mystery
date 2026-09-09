@@ -1,3 +1,14 @@
+FROM node:20-alpine AS web-build
+
+WORKDIR /build
+
+# 前端依赖 + 构建（Vite + React）
+COPY package.json package-lock.json ./
+RUN npm install --ignore-scripts --no-audit --no-fund
+COPY frontend/ ./frontend/
+RUN cd frontend && npx vite build
+
+# ===== 运行时 =====
 FROM node:20-alpine
 
 # 安全: 非 root 运行
@@ -16,6 +27,9 @@ COPY templates/ ./templates/
 COPY routes/ ./routes/
 COPY socket/ ./socket/
 COPY public/ ./public/
+
+# React 构建产物（来自 web-build 阶段）
+COPY --from=web-build /build/frontend/dist ./frontend/dist
 
 # 运行时目录
 RUN mkdir -p /app/data/sessions && chown -R appuser:appgroup /app

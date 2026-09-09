@@ -40,6 +40,14 @@ test("voteCandidates：候选包含真人/AI/审讯NPC，排除自己", () => {
   assert.ok(!candidates.includes("张三"));
 });
 
+test("voteCandidates：excludeNpcs=true（PVP）时排除审讯 NPC", () => {
+  const players = [human("张三"), ai("李四")];
+  const candidates = voteCandidates(players, CHARS, "张三", true);
+  assert.ok(candidates.includes("李四"));
+  assert.ok(!candidates.includes("目击者A"));
+  assert.ok(!candidates.includes("张三"));
+});
+
 test("chooseVoteTarget：凶手 AI 绝不投自己（候选不含自己）", () => {
   const aiScript = { name: "张三", isMurderer: true };
   const clues = [{ content: "李四在案发现场留下脚印", location: "书房", foundBy: ["p1"] }];

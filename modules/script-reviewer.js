@@ -1,119 +1,102 @@
-// 剧本评测 Agent — v2 增强：per-dimension理由+建议+suggestedPatches
-const { getSession, addMessage, createSession, deleteSession } = require("./history-manager");
+// 剧本评测 Agent — 精简版：扮演挑剔玩家找时间线/线索链逻辑漏洞 + 自检清单（天眼/边缘/咬合/抗推位）
+const { getSession } = require("./history-manager");
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
-const { buildMurderMystery, LIMITS } = require("./murder-mystery-builder");
-const { splitScript } = require("./script-splitter");
 
-const MAX_RETRIES = 3;
-const PASS_SCORE = 60;
+const MAX_CONTEXT_CHARS = 12000; // 注入评测上下文的总字符上限（控成本）
 
-/** 多策略 JSON 解析：直接 parse → 代码块 → 最外层对象提取（LLM 输出容错） */
-function tryParseJson(text) {
-  if (!text) return null;
-  try { return JSON.parse(text); } catch (e) { /* 继续尝试 */ }
-  let cand = text;
-  const fenced = cand.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-  if (fenced) cand = fenced[1];
-  try { return JSON.parse(cand); } catch (e) { /* 继续 */ }
-  const start = cand.indexOf("{");
-  if (start >= 0) {
-    let depth = 0;
-    for (let i = start; i < cand.length; i++) {
-      if (cand[i] === "{") depth++;
-      else if (cand[i] === "}") {
-        depth--;
-        if (depth === 0) {
-          try { return JSON.parse(cand.slice(start, i + 1)); } catch (e) { break; }
-        }
-      }
+const REVIEW_SYSTEM_PROMPT = `你是一位极度挑剔的硬核剧本杀玩家，同时兼任资深剧本杀编辑。请审读下面提供的剧本信息，先做"逻辑漏洞检查"，再做"成品自检清单"，两部分都必须输出。
+
+## 第一部分：逻辑漏洞检查
+找出时间线与线索链中所有逻辑漏洞，重点检查：
+1. 作案时间是否冲突：各角色时间线之间、角色时间线与死亡/发现尸体时间之间是否自相矛盾
+2. 线索是否指向唯一凶手：证据链能否收敛到唯一真凶，是否有关键线索把玩家引向错误且无法合理解释的方向
+3. 有无多余线索误导到无法解释的方向：误导（红鲱鱼）线索是否都预留了"可排除"的解释路径
+4. 角色动机是否充足：真凶动机是否足够强烈到杀人；各嫌疑人的"嫌疑动机"是否都成立
+
+## 第二部分：成品自检清单
+对照下面四项逐条给出结论，防止开本翻车：
+1. **无天眼玩家**：是否存在某个角色掌握信息过多，导致只要他自曝，游戏直接结束？若有，指出是谁、暴露哪些信息会"天眼"。
+2. **无边缘角色**：每个角色是否都有"唯一性"的信息或与他人不可替代的纠葛？是否存在与案件几乎无关、全程没戏份的边缘角色？若有，指出是谁。
+3. **时间线咬合**：凶手/嫌疑人的证词是否都有其他人可通过"声响/灯光/目击"佐证或推翻的锚点？若有无法被佐证或推翻、完全孤立的说法，指出哪条。
+4. **抗推位合理**：除真凶外，是否至少有 1-2 个玩家因"动机强烈"或"行踪可疑"而容易被冤枉？若完全没有人会顶锅（所有人一上来就锁定真凶），指出该问题。
+
+## 输出要求
+- 用纯文本分条输出。先输出「【逻辑漏洞】」段落，再输出「【自检清单】」段落。
+- 每条尽量指出涉及的角色名、时间点或线索编号。
+- 某方面没有问题就略过，不要为了凑数编造问题。
+- 若整个逻辑漏洞检查没有任何发现，在【逻辑漏洞】段末明确写一行："未发现明显漏洞。"
+- 【自检清单】中每项若达标写"通过"，不达标写"未通过：<原因>"。`;
+
+/**
+ * 组装评测上下文：基本设定 + 各角色时间线片段 + DM完整时间线 + 线索内容
+ * （针对性喂给漏洞检查，比整本 markdown 首段更贴合时间线/线索链审查）
+ */
+function buildReviewContext(markdown, parsed) {
+  const L = [];
+  const playerChars = (parsed.characters || []).filter(c => c.roleType !== "npc");
+  const npcChars = (parsed.characters || []).filter(c => c.roleType === "npc");
+
+  L.push(`## 剧本基本信息
+- 标题：《${parsed.title || "未知"}》
+- 游戏模式：${parsed.setting?.gameMode || ""}（玩家${playerChars.length}人 / NPC${npcChars.length}人 / 共${(parsed.characters || []).length}人）
+- 时代：${parsed.setting?.era || "未知"} | 地点：${parsed.setting?.location || "未知"}
+- 凶手：${parsed.murderer?.name || "未知"} | 动机：${(parsed.murderer?.motive || "").substring(0, 300)}
+- 手法：${(parsed.murderer?.method || "").substring(0, 300)}`);
+
+  // 各角色（玩家+NPC）：关系/秘密/已知信息，供逻辑检查与自检清单共用
+  if ((parsed.characters || []).length) {
+    L.push("\n## 各角色信息");
+    for (const c of parsed.characters) {
+      const s = c.script || {};
+      const isMurderer = c.isMurderer ? "【凶手】" : "";
+      L.push(`### ${c.name}（${c.roleType === "npc" ? "NPC" : "玩家"}）${isMurderer} 职业：${c.occupation || ""}`);
+      // 故事开头片段：含身份与死者/他人纠葛，判断边缘角色与抗推位用
+      const storyHead = String(s.story || s.fullScript || "").substring(0, 350);
+      if (storyHead) L.push(`- 人物与纠葛（节选）：${storyHead.replace(/\n+/g, " ")}`);
+      const tl = (s.personalTimeline || "").substring(0, 300);
+      if (tl) L.push(`- 时间线：${tl.replace(/\n+/g, " ")}`);
+      // 秘密与已知信息：判断"天眼/边缘/动机"的关键
+      if (s.secret) L.push(`- 秘密：${String(s.secret).substring(0, 160).replace(/\n+/g, " ")}`);
+      if (s.knownInfo) L.push(`- 已知：${String(s.knownInfo).substring(0, 160).replace(/\n+/g, " ")}`);
+      if (s.goals) L.push(`- 目标/想查明：${String(s.goals).substring(0, 100).replace(/\n+/g, " ")}`);
     }
   }
-  return null;
-}
 
-const MAX_PLAYERS = LIMITS.maxPlayers;
-const MAX_NPC = LIMITS.maxNpc;
-const MAX_TOTAL = LIMITS.maxTotal;
+  // DM 完整时间线（权威基准） + 真相复盘
+  const dmTimeline = (parsed.dmGuide?.fullTimeline || "").substring(0, 1500);
+  if (dmTimeline) L.push(`\n## DM完整时间线（权威基准）\n${dmTimeline}`);
+  const truth = (parsed.dmGuide?.truthReveal || "").substring(0, 1200);
+  if (truth) L.push(`\n## DM真相复盘（片段）\n${truth}`);
 
-const REVIEW_SYSTEM_PROMPT = `你是一位资深剧本杀评测专家。你需要从多个维度审查一份剧本杀剧本的质量，并给出具体、可操作的建议。
-
-## 硬性约束（不合格直接低分，无法通过）
-
-1. **角色数量合规**：玩家角色：1-6人，NPC嫌疑人：0-3人，总角色数：≤9人
-   必须明确区分【玩家】和【NPC嫌疑人】角色类型
-   单人侦探本（玩家=1）：NPC必须恰好3人，凶手必须是NPC
-
-2. **凶手唯一性**：有且仅有一个凶手
-
-## 评分维度（每项0-100分）
-
-1. **故事完整性 (25%)**：故事是否有清晰开端/发展/高潮/结局？世界观是否自洽？人物关系完整合理？
-2. **凶手设计 (25%)**：凶手动机是否充分深刻？作案手法新颖且符合世界观？作案过程详细？
-3. **线索系统 (20%)**：线索分层清晰（表面→深入→关键）？物证标注发现地点？证据链完整可推理？
-4. **角色设计 (15%)**：每个角色有完整故事/秘密/时间线？纯叙事不含"你应该"等策略建议？
-5. **可玩性 (15%)**：玩家能通过线索+审讯推理出凶手？难度合适？NPC嫌疑均衡？
-
-## 输出格式（JSON — 必须严格遵守此结构）
-
-{
-  "totalScore": 85,
-  "passed": true,
-  "dimensions": {
-    "storyCompleteness": {
-      "score": 90,
-      "reason": "故事从案发到真相揭露有清晰的时间推进，世界观设定自洽。但最后的动机反转稍显突兀，缺乏前期铺垫。",
-      "suggestion": "建议在角色B的背景中加入与死者长期积怨的内容，让动机反转有更充分的铺垫。"
-    },
-    "murdererDesign": {
-      "score": 85,
-      "reason": "...",
-      "suggestion": "..."
-    },
-    "clueSystem": {
-      "score": 80,
-      "reason": "...",
-      "suggestion": "..."
-    },
-    "characterDesign": {
-      "score": 85,
-      "reason": "...",
-      "suggestion": "..."
-    },
-    "playability": {
-      "score": 85,
-      "reason": "...",
-      "suggestion": "..."
+  // 线索内容（首段截断，展示证据链指向）
+  const clueParts = [];
+  const rounds = [
+    { key: "round1", label: "第一轮" },
+    { key: "round2", label: "第二轮" },
+    { key: "round3", label: "第三轮" },
+  ];
+  for (const r of rounds) {
+    const list = parsed.clues?.[r.key] || [];
+    if (!list.length) continue;
+    clueParts.push(`【${r.label}】`);
+    for (const c of list) {
+      clueParts.push(`- ${c.id || ""}${c.location ? "（" + c.location + "）" : ""}：${(c.content || "").substring(0, 80)}`);
     }
-  },
-  "strengths": ["优点1", "优点2"],
-  "weaknesses": ["问题1", "问题2"],
-  "revisionAdvice": "总体修改建议",
-  "suggestedPatches": [
-    {"type": "clue", "target": "线索4", "operation": "split", "description": "将线索4拆成两条，降低单条线索的信息密度"},
-    {"type": "character", "target": "NPC李四", "operation": "append", "description": "给李四添加一个秘密：他曾受死者勒索"}
-  ]
+  }
+  if (clueParts.length) L.push("\n## 线索内容\n" + clueParts.join("\n"));
+
+  let ctx = L.join("\n");
+  if (ctx.length > MAX_CONTEXT_CHARS) ctx = ctx.substring(0, MAX_CONTEXT_CHARS) + "\n...（上下文截断）";
+  return ctx;
 }
 
-字段说明：
-- dimensions：每个维度必须包含 score(number)、reason(string)、suggestion(string，null表示无需改进)
-- suggestedPatches：可选数组，为空时传 []。每个patch含 type(clue/character/player_script)、target(目标名)、operation(split/append/move/remove)、description(说明)
-- reason 要具体指出问题所在，不可泛泛而谈
-- suggestion 要给出可执行的具体修改方案`;
-
-function parseScores(review) {
-  // 从 dimensions 提取平铺 scores（兼容旧格式）
-  const dims = review.dimensions || {};
-  return {
-    storyCompleteness: dims.storyCompleteness?.score ?? review.scores?.storyCompleteness ?? 0,
-    murdererDesign: dims.murdererDesign?.score ?? review.scores?.murdererDesign ?? 0,
-    clueSystem: dims.clueSystem?.score ?? review.scores?.clueSystem ?? 0,
-    characterDesign: dims.characterDesign?.score ?? review.scores?.characterDesign ?? 0,
-    playability: dims.playability?.score ?? review.scores?.playability ?? 0,
-  };
-}
-
-async function reviewScript(sessionId) {
+/**
+ * 评测剧本：扮演挑剔玩家找时间线/线索链逻辑漏洞，输出纯文本报告
+ * @returns {Promise<{ok:boolean, review?:object, error?:string}>}
+ *   review = { sessionId, parsed, report }
+ */
+async function reviewScript(sessionId, onProgress) {
   const session = await getSession(sessionId);
   if (!session) return { ok: false, error: "剧本不存在" };
 
@@ -122,194 +105,30 @@ async function reviewScript(sessionId) {
   if (!markdown || markdown.length < 500) return { ok: false, error: "剧本内容为空或过短" };
 
   const parsed = parseScript(markdown);
+  const context = buildReviewContext(markdown, parsed);
 
-  const chars = parsed.characters || [];
-  const playerCount = chars.filter(c => c.roleType !== "npc").length;
-  const npcCount = chars.filter(c => c.roleType === "npc").length;
-  const totalCount = chars.length;
-
-  // 硬性约束检查
-  const constraintErrors = [];
-  if (totalCount > MAX_TOTAL) constraintErrors.push(`总角色数超限(${totalCount}/${MAX_TOTAL})`);
-  if (playerCount > MAX_PLAYERS) constraintErrors.push(`玩家角色数超限(${playerCount}/${MAX_PLAYERS})`);
-  if (playerCount < LIMITS.minPlayers) constraintErrors.push(`玩家角色数不足(${playerCount}，需要至少${LIMITS.minPlayers}人)`);
-  if (npcCount > MAX_NPC) constraintErrors.push(`NPC数超限(${npcCount}/${MAX_NPC})`);
-
-  const isSolo = playerCount === 1;
-  if (isSolo && npcCount !== 3) constraintErrors.push(`单人本需要恰好3个NPC嫌疑人(当前${npcCount}个)`);
-
-  const hasClearMurderer = !!(parsed.murderer?.name && parsed.murderer.name.length >= 2);
-  if (!hasClearMurderer) constraintErrors.push("未明确标注凶手");
-
-  if (isSolo && hasClearMurderer) {
-    const murdererChar = chars.find(c => c.name === parsed.murderer.name);
-    if (murdererChar && murdererChar.roleType !== "npc") {
-      constraintErrors.push("单人本凶手必须是NPC嫌疑人");
-    }
-  }
-
-  if (constraintErrors.length > 0) {
-    return {
-      ok: true,
-      review: {
-        sessionId, parsed,
-        totalScore: 20, passed: false,
-        scores: { storyCompleteness: 20, murdererDesign: 20, clueSystem: 20, characterDesign: 20, playability: 20 },
-        dimensions: {},
-        strengths: [], weaknesses: constraintErrors, suggestedPatches: [],
-        revisionAdvice: `角色数量/结构违反硬性约束：${constraintErrors.join("；")}。玩家≤${MAX_PLAYERS}、NPC≤${MAX_NPC}、总计≤${MAX_TOTAL}，且有且仅有一个凶手。`,
-      }
-    };
-  }
-
-  const gameMode = isSolo ? "【单人侦探本】玩家扮演侦探，需从3个NPC中找出凶手" : (npcCount > 0 ? "【PVE】玩家+NPC嫌疑人" : "【PVP】纯玩家互疑");
-  const context = `## 剧本基本信息
-- 游戏模式：${gameMode}
-- 标题：《${parsed.title || "未知"}》
-- 时代背景：${parsed.setting?.era || "未知"}
-- 地点：${parsed.setting?.location || "未知"}
-- 玩家角色：${playerCount}人 / NPC嫌疑人：${npcCount}人 / 总计：${totalCount}人
-- 玩家角色列表：${chars.filter(c => c.roleType !== "npc").map(c => c.name).join("、") || "未知"}
-- NPC嫌疑人：${chars.filter(c => c.roleType === "npc").map(c => c.name).join("、") || "无"}
-- 凶手：${parsed.murderer?.name || "未知"}
-- 动机：${(parsed.murderer?.motive || "").substring(0, 500)}
-- 手法：${(parsed.murderer?.method || "").substring(0, 500)}
-- 第一轮线索数：${parsed.clues?.round1?.length || 0}
-- 第二轮线索数：${parsed.clues?.round2?.length || 0}
-- 第三轮线索数：${parsed.clues?.round3?.length || 0}
-
-## 完整剧本（前8000字）
-${markdown.substring(0, 8000)}`;
+  if (onProgress) onProgress("context", "已提取剧本信息，正在寻找逻辑漏洞...");
 
   try {
-    const result = await generate(REVIEW_SYSTEM_PROMPT, context, { maxTokens: 8192, temperature: 0.3 });
-    const cleaned = String(result.content || "")
-      .trim()
-      .replace(/^```(?:json)?\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .replace(/^[^{]*\{/, "{")
-      .replace(/\}[^}]*$/, "}");
+    const result = await generate(REVIEW_SYSTEM_PROMPT, context, { maxTokens: 3072, temperature: 0.3 });
+    const report = String(result.content || "").trim();
+    if (!report) return { ok: false, error: "评测结果为空" };
 
-    const review = tryParseJson(cleaned);
-    if (!review) throw new Error("评测结果不是有效JSON");
-    review.sessionId = sessionId;
-    review.parsed = parsed;
-    // 从 dimensions 提取平铺 scores（兼容 admin.js 旧展示）
-    review.scores = parseScores(review);
-    review.passed = review.totalScore >= PASS_SCORE;
-    review.dimensions = review.dimensions || {};
-    review.suggestedPatches = review.suggestedPatches || [];
-    return { ok: true, review };
-  } catch (e) {
-    console.warn("[review] LLM返回解析失败，使用默认评分：", e.message);
-    const fallbackScore = 70;
     return {
       ok: true,
       review: {
-        sessionId, parsed,
-        totalScore: fallbackScore, passed: fallbackScore >= PASS_SCORE,
-        scores: { storyCompleteness: 70, murdererDesign: 70, clueSystem: 70, characterDesign: 70, playability: 70 },
-        dimensions: {},
-        strengths: ["（评测解析异常，使用默认评分）"],
-        weaknesses: ["评测结果解析失败，建议人工审查"],
-        suggestedPatches: [],
-        revisionAdvice: "评测Agent解析异常，请人工审查剧本质量。",
+        sessionId,
+        parsed,
+        report: report.length > 20000 ? report.substring(0, 20000) : report,
       },
+    };
+  } catch (e) {
+    console.warn("[review] 评测调用失败:", e.message);
+    return {
+      ok: false,
+      error: `评测失败：${e?.message || "未知错误"}`,
     };
   }
 }
 
-async function reviewAndRevise(sessionId, onProgress) {
-  const rounds = [];
-  let currentSessionId = sessionId;
-
-  for (let round = 1; round <= MAX_RETRIES; round++) {
-    onProgress(`round${round}`, `第 ${round} 轮评测中...`);
-
-    const result = await reviewScript(currentSessionId);
-    if (!result.ok) return { ok: false, error: result.error, rounds };
-
-    const review = result.review;
-    rounds.push({
-      round, sessionId: currentSessionId,
-      totalScore: review.totalScore, passed: review.passed,
-      scores: review.scores, dimensions: review.dimensions,
-      strengths: review.strengths, weaknesses: review.weaknesses,
-      suggestedPatches: review.suggestedPatches || [],
-      advice: review.revisionAdvice,
-    });
-
-    if (review.passed) {
-      onProgress("passed", `评测通过！总分 ${review.totalScore} 分，正在自动切分...`);
-      const splitResult = await splitScript(currentSessionId, (stage, msg) => {
-        onProgress("split_" + stage, msg);
-      });
-      if (splitResult.ok) {
-        await deleteSession(currentSessionId);
-        try { const { getRedis } = require("./game-manager"); await (await getRedis()).del(`script_meta:${currentSessionId}`); } catch (e) { /* skip */ }
-      }
-      return {
-        ok: true, passed: true, sessionId: currentSessionId,
-        finalScore: review.totalScore, totalRounds: round, rounds,
-        splitted: splitResult.ok,
-      };
-    }
-
-    if (round < MAX_RETRIES) {
-      onProgress(`revise${round}`, `评测未通过（${review.totalScore}分），正在根据修改意见重新生成...`);
-      try {
-        const session = await getSession(currentSessionId);
-        const originalInput = session?.metadata?.topic || (session?.messages?.find(m => m.role === "user")?.content) || "生成剧本";
-        const meta = session?.metadata || {};
-        const genConfig = {
-          playerCount: parseInt(meta.playerCount) || LIMITS.maxPlayers,
-          npcCount: parseInt(meta.npcCount) || 0,
-          isPVE: meta.isPVE === "true",
-        };
-
-        // 将 suggestedPatches 也拼入修改要求
-        const patchesText = (review.suggestedPatches || []).length
-          ? `\n\n## 建议的具体修改项\n${review.suggestedPatches.map(p => `- [${p.type}] ${p.target}: ${p.operation} — ${p.description}`).join("\n")}`
-          : "";
-
-        const revisionInput = `## 修改要求（第${round}轮，基于评测反馈）
-${review.revisionAdvice}${patchesText}
-
-## 角色数量约束（必须遵守）
-- 玩家角色：恰好${genConfig.playerCount}人
-- NPC嫌疑人：${genConfig.npcCount > 0 ? '恰好' + genConfig.npcCount + '人' : '0人（PVP模式，无NPC）'}
-- 总人数：${genConfig.playerCount + genConfig.npcCount}人
-
-## 原有需求
-${originalInput}`;
-
-        const newResult = await buildMurderMystery(revisionInput, (stage, msg) => {
-          onProgress(`gen_${stage}`, msg);
-        }, genConfig);
-
-        const newSession = await createSession({
-          textType: "murder-mystery", topic: originalInput.slice(0, 100),
-          templateName: "剧本杀",
-          playerCount: String(genConfig.playerCount),
-          npcCount: String(genConfig.npcCount),
-          isPVE: String(genConfig.isPVE),
-        });
-        await addMessage(newSession.sessionId, "user", revisionInput);
-        await addMessage(newSession.sessionId, "assistant", newResult.fullScript.substring(0, 50000));
-        await deleteSession(currentSessionId);
-        currentSessionId = newSession.sessionId;
-      } catch (e) {
-        return { ok: false, error: `第${round}轮重新生成失败: ${e.message}`, rounds };
-      }
-    }
-  }
-
-  onProgress("failed", `已进行 ${MAX_RETRIES} 轮评测和修改，仍未达到通过标准`);
-  return {
-    ok: true, passed: false, sessionId: currentSessionId,
-    finalScore: rounds[rounds.length - 1]?.totalScore || 0,
-    totalRounds: MAX_RETRIES, rounds,
-  };
-}
-
-module.exports = { reviewScript, reviewAndRevise };
+module.exports = { reviewScript };

@@ -6,7 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test \"tests/*.test.js\""
+    "test": "node --test \"tests/*.test.js\"",
+    "dev:web": "cd frontend && npx vite",
+    "build:web": "cd frontend && npx vite build"
   },
   "dependencies": {
     "dotenv": "^16.4.0",
@@ -15,10 +17,29 @@
     "ioredis": "^5.10.1",
     "openai": "^4.73.0",
     "pg": "^8.20.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "socket.io": "^4.8.3",
     "uuid": "^10.0.0"
   },
   "devDependencies": {
-    "socket.io-client": "^4.8.3"
-  }
+    "@vitejs/plugin-react": "^6.1.1",
+    "socket.io-client": "^4.8.3",
+    "vite": "^8.2.2"
+  },
+  "directories": {
+    "test": "tests"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mymzhhh/murder-mystery.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/mymzhhh/murder-mystery/issues"
+  },
+  "homepage": "https://github.com/mymzhhh/murder-mystery#readme"
 }

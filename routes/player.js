@@ -54,6 +54,28 @@ const { createGameRoom } = require("../modules/game-room-creator");
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
+  // 我的角色剧本（只返回请求者自己的角色剧本，防止越权读取他人秘密）
+  app.get("/api/player/rooms/:code/my-script", authMiddleware, async (req, res) => {
+    try {
+      const room = await getRoom(req.params.code);
+      if (!room) return res.status(404).json({ error: "房间不存在" });
+      const players = await getPlayers(req.params.code);
+      const me = players.find(p => p.playerName === req.user.username);
+      if (!me) return res.status(403).json({ error: "你不在该房间内" });
+      if (!me.characterName) return res.json({ characterName: "", script: "", secret: "" });
+      const parsed = JSON.parse(room.parsedScript || "{}");
+      const char = (parsed.characters || []).find(c => c.name === me.characterName);
+      if (!char) return res.status(404).json({ error: "角色不存在" });
+      res.json({
+        characterName: char.name,
+        occupation: char.occupation || "",
+        script: char.script || char.playerScript || "",
+        secret: char.secret || "",
+        isMurderer: !!char.isMurderer,
+      });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
   // 游戏复盘：真相揭示、凶手、投票分布、线索发现、聊天记录
   app.get("/api/player/review/:code", authMiddleware, async (req, res) => {
     try {
@@ -62,8 +84,13 @@ const { createGameRoom } = require("../modules/game-room-creator");
       if (!["truth_reveal", "finished"].includes(room.phase)) {
         return res.status(403).json({ error: "游戏尚未结束，无法查看复盘" });
       }
-      const parsed = JSON.parse(room.parsedScript || "{}");
       const players = await getPlayers(req.params.code);
+      // 越权校验：只有本局参与者才能查看复盘（否则任意登录用户凭房号即可拿到凶手与真相）
+      const isMember = players.some(p => p.playerName === req.user.username);
+      if (!isMember && req.user.role !== "admin") {
+        return res.status(403).json({ error: "你不是本局玩家，无法查看复盘" });
+      }
+      const parsed = JSON.parse(room.parsedScript || "{}");
       const votesRaw = await getVotes(req.params.code);
       const votes = Object.entries(votesRaw || {}).map(([pid, target]) => {
         const p = players.find(x => x.playerId === pid);
@@ -86,7 +113,11 @@ const { createGameRoom } = require("../modules/game-room-creator");
         title: parsed.title,
         murderer: parsed.murderer || {},
         truthReveal: parsed.dmGuide?.truthReveal || "",
-        characters: parsed.characters || [],
+        // 复盘阶段真相已公开，可展示角色名单，但不下发各角色 secret/剧本原文
+        characters: (parsed.characters || []).map(c => ({
+          name: c.name, occupation: c.occupation || "", roleType: c.roleType || "player",
+          isMurderer: !!c.isMurderer,
+        })),
         players: players.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, isNPC: !!p.isNPC })),
         votes, clues, chat,
         generatedAt: new Date().toISOString(),

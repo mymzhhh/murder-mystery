@@ -15,8 +15,8 @@ const {
 test("getNextPhase 顺序推进", () => {
   assert.equal(getNextPhase("lobby"), "reading");
   assert.equal(getNextPhase("reading"), "intro");
-  assert.equal(getNextPhase("intro"), "round1_investigation");
-  assert.equal(getNextPhase("round3"), "voting");
+  assert.equal(getNextPhase("intro"), "round1");
+  assert.equal(getNextPhase("round2"), "voting");
   assert.equal(getNextPhase("voting"), "truth_reveal");
   assert.equal(getNextPhase("truth_reveal"), "finished");
   assert.equal(getNextPhase("finished"), null);
@@ -24,9 +24,9 @@ test("getNextPhase 顺序推进", () => {
 });
 
 test("getPhaseRound 轮次识别", () => {
-  assert.equal(getPhaseRound("round1_investigation"), 1);
-  assert.equal(getPhaseRound("round2_discussion"), 2);
-  assert.equal(getPhaseRound("round3"), 3);
+  assert.equal(getPhaseRound("round1"), 1);
+  assert.equal(getPhaseRound("round2"), 2);
+  assert.equal(getPhaseRound("round2"), 2);
   assert.equal(getPhaseRound("voting"), 0);
 });
 
@@ -37,7 +37,8 @@ test("getPhaseConfig 各阶段行为配置", () => {
   assert.equal(getPhaseConfig("intro").allowChat, true);
   assert.equal(getPhaseConfig("intro").allowClueReq, false);
   assert.equal(getPhaseConfig("intro").allowVote, false);
-  assert.equal(getPhaseConfig("round1_investigation").allowClueReq, true);
+  assert.equal(getPhaseConfig("round1").allowClueReq, true);
+  assert.equal(getPhaseConfig("round1").allowChat, true); // 合并阶段：可搜证也可聊天
   assert.equal(getPhaseConfig("voting").allowVote, true);
   // 未知阶段回退 lobby
   assert.equal(getPhaseConfig("nope").label, "等待开始");
@@ -51,7 +52,7 @@ function mkPlayer(playerId, extra = {}) {
 
 test("validateAction：发言权限随阶段变化", () => {
   const players = [mkPlayer("p1")];
-  const ok = validateAction("send_chat", { phase: "round1_discussion", players }, "p1");
+  const ok = validateAction("send_chat", { phase: "round1", players }, "p1");
   assert.equal(ok.ok, true);
   const fail = validateAction("send_chat", { phase: "reading", players }, "p1");
   assert.equal(fail.ok, false);
@@ -61,7 +62,7 @@ test("validateAction：发言权限随阶段变化", () => {
 test("validateAction：投票仅在投票阶段", () => {
   const players = [mkPlayer("p1")];
   assert.equal(validateAction("cast_vote", { phase: "voting", players }, "p1").ok, true);
-  assert.equal(validateAction("cast_vote", { phase: "round3", players }, "p1").ok, false);
+  assert.equal(validateAction("cast_vote", { phase: "round1", players }, "p1").ok, false);
 });
 
 test("validateAction：DM 专属操作非 DM 拒绝", () => {

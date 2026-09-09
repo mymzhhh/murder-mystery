@@ -24,7 +24,7 @@ function extractLayoutDescription(markdown) {
       const cutMarks = [
         /\n#{1,3}\s+(?!-|\d+\.)/,
         /\n---\s*\n/,
-        /\n(?:玩家角色剧本|NPC嫌疑人信息|第[一二三四五六七八九]部分)/i,
+        /\n(?:玩家角色剧本|NPC嫌疑人信息|NPC目击者\/关系人信息|第[一二三四五六七八九]部分)/i,
         /\n\*\*重要约束/,
         /\n#{1,3}\s*(?:线索|证据|DM|真相|复盘|凶手|故事背景|角色介绍)/i,
       ];
@@ -66,6 +66,7 @@ async function splitScript(sessionId, onProgress) {
       characterNames: parsed.characters?.map(c => c.name) || [],
       clueCount: (parsed.clues?.round1?.length || 0) + (parsed.clues?.round2?.length || 0) + (parsed.clues?.round3?.length || 0),
       layoutDescription,
+      gameMode: parsed.setting?.gameMode || "",
     },
     characters: {},
     clues: [],
@@ -202,6 +203,7 @@ async function saveToRedis(sessionId, result) {
     clueCount: String(result.meta.clueCount),
     splitAt: new Date().toISOString(),
     layoutDescription: result.meta.layoutDescription || "",
+    gameMode: result.meta.gameMode || "",
     originalMarkdown: (result.meta.originalMarkdown || "").substring(0, 50000),
   });
 

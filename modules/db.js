@@ -95,8 +95,8 @@ async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
     await c.query(
       `INSERT INTO scripts (id, title, era, location, game_mode, player_count, npc_count, clue_count, layout_description, original_markdown, split_at, created_at)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())
-       ON CONFLICT (id) DO UPDATE SET title=$2, era=$3, location=$4, player_count=$6, npc_count=$7, clue_count=$8, layout_description=$9, original_markdown=$10, split_at=NOW()`,
-      [scriptId, meta.title, meta.era, meta.location, meta.gameMode || "PVE", meta.playerCount, meta.npcCount, meta.clueCount, meta.layoutDescription || "", meta.originalMarkdown || ""]
+       ON CONFLICT (id) DO UPDATE SET title=$2, era=$3, location=$4, game_mode=$5, player_count=$6, npc_count=$7, clue_count=$8, layout_description=$9, original_markdown=$10, split_at=NOW()`,
+      [scriptId, meta.title, meta.era, meta.location, meta.gameMode || meta.game_mode || "PVE", meta.playerCount, meta.npcCount, meta.clueCount, meta.layoutDescription || "", meta.originalMarkdown || ""]
     );
     // 先删旧角色/线索再插入
     await c.query("DELETE FROM characters WHERE script_id=$1", [scriptId]);

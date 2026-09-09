@@ -46,6 +46,7 @@ async function syncOne(scriptId) {
     npcCount: parseInt(data.meta.npcCount) || 0,
     clueCount: parseInt(data.meta.clueCount) || 0,
     layoutDescription: data.meta.layoutDescription || "",
+    gameMode: data.meta.gameMode || "",
     originalMarkdown: data.meta.originalMarkdown || "",
   }, data.characters, data.clues, data.dm);
 }

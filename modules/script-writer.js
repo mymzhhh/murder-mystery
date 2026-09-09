@@ -5,11 +5,24 @@ const { createSession, addMessage, listSessions, getSession, deleteSession } = r
 const { parseScript } = require("./script-parser");
 const { generate } = require("./generator");
 
-const MIN_PLAYERS = LIMITS.minPlayers;  // 2
+const MIN_PLAYERS = LIMITS.minPlayers;  // 1（单人侦探本）
 const MAX_PLAYERS = LIMITS.maxPlayers;  // 6
 const MAX_NPC = LIMITS.maxNpc;          // 3
 const MAX_TOTAL = LIMITS.maxTotal;      // 9
 const MAX_GEN_RETRIES = 2;
+
+/** 剥离代码块围栏后取 JSON（查重/解析通用） */
+function extractJson(text) {
+  if (!text) return null;
+  const s = String(text).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "");
+  try { return JSON.parse(s); } catch (e) { /* 继续 */ }
+  const start = s.indexOf("{");
+  const end = s.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try { return JSON.parse(s.substring(start, end + 1)); } catch (e) { /* 继续 */ }
+  }
+  return null;
+}
 
 /**
  * 提取已有剧本的特征摘要用于查重
@@ -58,10 +71,11 @@ async function checkDuplication(userInput, existingSummaries) {
 
   try {
     const result = await generate(sysPrompt, `已有剧本：\n${existText}\n\n新需求：${userInput}\n\n请检测是否存在雷同：`, { maxTokens: 256, temperature: 0.2 });
-    const json = JSON.parse(result.content.trim());
+    const json = extractJson(result.content);
+    if (!json) return { ok: true, reason: "查重检测跳过（解析失败）" };
     return { ok: !json.duplicated, reason: json.reason || "", similarTo: json.similarTo || "" };
   } catch (e) {
-    return { ok: true, reason: "查重检测跳过（解析异常）" };
+    return { ok: true, reason: "查重检测跳过（调用失败）" };
   }
 }
 
@@ -141,23 +155,29 @@ async function writeScript(userInput, onProgress, scriptConfig) {
     isPVE = detectPVE(userInput);
   }
 
+  // 人数越界检查（在 clamp 之前，明确反馈而不是静默截断）
+  if (playerCount !== undefined && playerCount !== null && playerCount !== 0) {
+    if (playerCount > MAX_PLAYERS) {
+      return { ok: false, error: `玩家数量不能超过 ${MAX_PLAYERS} 人（您要求 ${playerCount} 人）。请调整后重试。` };
+    }
+    if (playerCount < MIN_PLAYERS) {
+      return { ok: false, error: `玩家数量不能少于 ${MIN_PLAYERS} 人（您要求 ${playerCount} 人）。请调整后重试。` };
+    }
+  }
+  if (npcCount !== undefined && npcCount !== null && npcCount > MAX_NPC) {
+    return { ok: false, error: `NPC 数量不能超过 ${MAX_NPC} 人（您要求 ${npcCount} 人）。请调整后重试。` };
+  }
+
+  // 单人侦探本：强制 PVE 且必须有 NPC（否则玩家无人可审问、游戏无法进行）
+  const isSinglePlayer = playerCount === 1 || (playerCount === undefined && /单人|侦探本|1人/.test(String(userInput || "")));
+  if (isSinglePlayer) {
+    isPVE = true;
+    if (npcCount === undefined || npcCount === null || npcCount === 0) npcCount = 3;
+  }
+
   // 约束到合法范围
   playerCount = playerCount > 0 ? Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, playerCount)) : MAX_PLAYERS;
   npcCount = Math.max(0, Math.min(MAX_NPC, npcCount ?? (isPVE ? 2 : 0)));
-
-  // 人数上限检查
-  if (playerCount > MAX_PLAYERS) {
-    return {
-      ok: false,
-      error: `玩家数量不能超过 ${MAX_PLAYERS} 人。请调整后重试。`,
-    };
-  }
-  if (playerCount < MIN_PLAYERS) {
-    return {
-      ok: false,
-      error: `玩家数量不能少于 ${MIN_PLAYERS} 人。请调整后重试。`,
-    };
-  }
 
   // 2. 查重
   onProgress("check", "正在检查已有剧本，避免雷同...");
@@ -173,7 +193,12 @@ async function writeScript(userInput, onProgress, scriptConfig) {
   }
 
   // 3. 构建生成配置
-  const genConfig = { playerCount, npcCount, isPVE };
+  const genConfig = {
+    playerCount,
+    npcCount,
+    isPVE,
+    advancedMode: ["hardcore", "emotional"].includes(scriptConfig?.advancedMode) ? scriptConfig.advancedMode : "standard",
+  };
   const enhancedInput = buildConstraints(userInput, playerCount, npcCount, isPVE, existing);
 
   let result, session, characters;
@@ -196,8 +221,32 @@ async function writeScript(userInput, onProgress, scriptConfig) {
     }
 
     onProgress("generate", "正在多阶段生成剧本...");
-    result = await buildMurderMystery(genInput, (stage, msg) => onProgress(stage, msg), genConfig);
-    await addMessage(session.sessionId, "assistant", result.fullScript.substring(0, 50000));
+    try {
+      result = await buildMurderMystery(genInput, (stage, msg) => onProgress(stage, msg), genConfig);
+    } catch (e) {
+      // 区分错误类型：只有角色数量/结构校验失败才算"校验未通过"；
+      // 网络/超时/LLM 错误（socket hang up、ENOTFOUND、timeout 等）是临时故障，
+      // 重试文案要如实反映，避免误导用户以为角色数有问题。
+      const msg = String((e && e.message) || "").toLowerCase();
+      const isValidation = /超限|符合|校验|恰好|expected|超出|不足|invalid|actly/.test(msg);
+      const isNetErr = /socket hang up|econn|enotfound|getaddrinfo|timeout|refused|network|aborted|fetch failed|dns/i.test(msg);
+
+      if (attempt < MAX_GEN_RETRIES) {
+        await deleteSession(session.sessionId);
+        if (isNetErr && !isValidation) {
+          onProgress("retry", `第${attempt + 1}次生成因网络故障中断（${e.message}），正在重试...`);
+        } else if (isValidation) {
+          onProgress("retry", `第${attempt + 1}次生成未通过角色校验（${e.message}），重新生成...`);
+        } else {
+          onProgress("retry", `第${attempt + 1}次生成失败（${e.message}），正在重试...`);
+        }
+        continue;
+      }
+      await deleteSession(session.sessionId);
+      return { ok: false, error: `经过${MAX_GEN_RETRIES + 1}次尝试，剧本生成仍失败：${e.message || "未知错误"}` };
+    }
+    // 完整保存剧本（不截尾——截尾会让后续 split/review 读到的剧本缺 DM 真相与结局）
+    await addMessage(session.sessionId, "assistant", result.fullScript);
 
     // 4. 验证角色数量
     characters = result.characters || [];
@@ -231,17 +280,19 @@ async function writeScript(userInput, onProgress, scriptConfig) {
     script: result.fullScript,
     config: genConfig,
     summary: {
-      title: result.stages?.framework
-        ? (result.stages.framework.match(/剧本名称[：:]\s*《?(.+?)》?/) || [])[1] || "未命名"
-        : "未命名",
+      // 标题/时代以大纲（锁定后的最终设定）为权威，framework 仅作兜底
+      // ——避免"剧本列表显示的标题"与"剧本内部标题"不一致
+      title: result.stages?.outline?.title
+        || (result.stages?.framework ? (result.stages.framework.match(/剧本名称[：:]\s*《?(.+?)》?/) || [])[1] : null)
+        || "未命名",
       characterCount: characters.length,
       playerCount: characters.filter(c => c.type === "player").length,
       npcCount: characters.filter(c => c.type === "npc").length,
       characterNames: characters.map(c => `${c.name}(${c.type})`),
       murderer: characters.find(c => c.isMurderer)?.name || "未知",
-      era: result.stages?.framework
-        ? (result.stages.framework.match(/时代背景[：:]\s*(.+)/) || [])[1] || ""
-        : "",
+      era: result.stages?.outline?.era
+        || (result.stages?.framework ? (result.stages.framework.match(/时代背景[：:]\s*(.+)/) || [])[1] : "")
+        || "",
     },
   };
 }

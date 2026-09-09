@@ -176,13 +176,14 @@
     socket.on("narrative_ready", function(data) {
       gs.narrative = data.narrative || "";
       if (gs.phase === "reading") renderReading();
+      else if (gs.phase === "round1" || gs.phase === "round2") renderCombinedRound();
     });
 
     socket.on("clue_received", function(data) {
       data.clue.foundByName = data.foundBy;
       gs.myClues.push(data.clue);
       showToast("获得新线索: " + (data.clue.id || "未知"), "success");
-      if (gs.phase && gs.phase.includes("investigation")) renderInvestigation();
+      if (gs.phase === "round1" || gs.phase === "round2") renderCombinedRound();
     });
 
     socket.on("chat_message", function(data) {
@@ -198,6 +199,16 @@
           window._npcChats[npcName] = chats;
           refreshNpcDialog(npcName);
         }
+      }
+
+      // 合并轮次：主区组合视图的聊天框实时更新（不整页重渲染）
+      if ((gs.phase === "round1" || gs.phase === "round2") && document.getElementById("chatMsgs")) {
+        var box = document.getElementById("chatMsgs");
+        var last = (gs.chatMessages || []).slice(-80);
+        box.innerHTML = last.map(function(m2) {
+          return '<div class="chat-msg"><span class="sender">' + esc(m2.characterName || m2.playerName) + ':</span>' + esc(m2.content) + '</div>';
+        }).join("");
+        box.scrollTop = box.scrollHeight;
       }
 
       setTimeout(refreshSidebar, 50);
@@ -516,8 +527,7 @@
     var p = gs.phase;
     if (p === "reading") renderReading();
     else if (p === "intro") renderIntro();
-    else if (p.indexOf("investigation") !== -1) renderInvestigation();
-    else if (p.indexOf("discussion") !== -1 || p === "round3") renderDiscussion();
+    else if (p === "round1" || p === "round2") renderCombinedRound();
     else if (p === "voting") renderVoting();
     else if (p === "truth_reveal") renderTruth();
   }
@@ -526,13 +536,11 @@
   function topBar(phase) {
     var labels = {
       reading: "阅读剧本", intro: "开场介绍",
-      round1_investigation: "第一轮搜证", round1_discussion: "第一轮讨论",
-      round2_investigation: "第二轮搜证", round2_discussion: "第二轮讨论",
-      round3: "最终轮", voting: "投票", truth_reveal: "真相"
+      round1: "第一轮 搜证与讨论", round2: "第二轮 搜证与讨论",
+      voting: "投票", truth_reveal: "真相"
     };
     var cls = "phase-reading";
-    if (phase.indexOf("investigation") !== -1) cls = "phase-investigation";
-    else if (phase.indexOf("discussion") !== -1 || phase === "round3") cls = "phase-discussion";
+    if (phase === "round1" || phase === "round2") cls = "phase-investigation";
     else if (phase === "voting") cls = "phase-voting";
 
     var h = '<div class="flex-between flex-wrap gap-sm mb">';
@@ -644,10 +652,16 @@
       if (gs.myClues.length === 0) {
         h += '<div class="state-empty" style="padding:20px;">暂无线索</div>';
       } else {
-        gs.myClues.forEach(function(c) {
-          var isPhysical = c.clueType && !/人证/.test(c.clueType);
-          var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);">📍 ' + esc(c.location) + '</div>' : '';
-          h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span class="text-xs text-dim">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="text-xs">' + esc(String(c.content || '').substring(0, 300)) + '</div></div>';
+        var clueGroups = groupCluesByLocation(gs.myClues);
+        clueGroups.forEach(function(g) {
+          h += '<details class="clue-group" open><summary>📍 ' + esc(g.loc) + ' <span class="clue-count">' + g.list.length + '</span></summary>';
+          h += '<div style="padding:8px 10px 10px;">';
+          g.list.forEach(function(c) {
+            var isPhysical = c.clueType && !/人证/.test(c.clueType);
+            var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);">📍 ' + esc(c.location) + '</div>' : '';
+            h += '<div class="sidebar-clue-card"><div class="clue-id">' + esc(c.id) + ((c.foundByName || c.foundBy) ? ' <span class="text-xs text-dim">— ' + esc(c.foundByName || c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="text-xs">' + esc(String(c.content || '').substring(0, 300)) + '</div></div>';
+          });
+          h += '</div></details>';
         });
       }
       h += '</div>';
@@ -695,6 +709,70 @@
   function switchSidebarTab(tab) {
     window._sidebarTab = tab;
     refreshSidebar();
+  }
+
+  // ===================== 线索分类分组 =====================
+  // 三大类：
+  //   1) 地点线索：按剧本真实布局归并为房间组（"书房桌面"→"书房"，"沈伯年书房"→"书房"，
+  //      "沈曼青闺房梳妆台"→"沈曼青闺房"）——先判定，避免房间内子位置被误判为搜身
+  //   2) 人物证词："XX证词/口供/陈述" → 归入"人物证词"一组
+  //   3) 搜身线索：人物名 + 部位/随身物（"周管家右手""林医生药箱""沈曼青"）→ 归入"搜身物品"一组
+  function normalizeClueLocation(loc) {
+    var s = String(loc || '').trim();
+    if (!s) return '未标注地点';
+
+    // 【第 1 类：地点线索】按布局真实地点归并（先判定，房间内子位置归房间）
+    var places = [
+      { re: /(沈伯年)?书房/, label: '书房' },          // 布局中书房唯一（沈伯年书房=书房）
+      { re: /沈曼青闺房/, label: '沈曼青闺房' },
+      { re: /林医生临时卧室/, label: '林医生临时卧室' },
+      { re: /周管家房间/, label: '周管家房间' },
+      { re: /(沈伯年)?卧室/, label: '沈伯年卧室' },
+      { re: /门框上沿|门闩/, label: '书房' },          // 书房门的痕迹（落栓/门框）
+      { re: /起居室/, label: '起居室' },
+      { re: /大厅/, label: '大厅' },
+      { re: /走廊/, label: '走廊' },
+      { re: /厨房|灶台|水井/, label: '厨房' },
+      { re: /餐厅/, label: '餐厅' },
+      { re: /前院|花园/, label: '前院/花园' },
+      { re: /仆人房/, label: '仆人房' },
+      { re: /药房/, label: '药房' },
+      { re: /后院/, label: '后院' },
+      { re: /杂物间/, label: '杂物间' },
+    ];
+    for (var i = 0; i < places.length; i++) {
+      if (places[i].re.test(s)) return places[i].label;
+    }
+
+    // 【第 2 类：人物证词】含"证词/口供/陈述/供词"字样（且未被地点表命中，如"林医生证词"）
+    if (/证词|口供|陈述|供词/.test(s)) return '人物证词';
+
+    // 【第 3 类：搜身线索】人物名 + 部位/随身物，或无地点主词的纯人物名
+    var personNames = ['沈伯年', '周管家', '沈曼青', '林医生', '管家', '医生', '大小姐', '仆役', '仆人', '丫鬟', '女佣', '车夫', '账房'];
+    var hasPerson = personNames.some(function(n) { return s.indexOf(n) >= 0; });
+    var bodyItemRe = /手|疤|伤|指|袖|口|袋|鞋|衣|裙|包|药箱|书柜|抽屉|茶盘|暗格|衣柜|梳妆台|床底|床铺|床头|枕头|长衫|物件|物品/;
+    var hasPlaceWord = /房间|闺房|卧室|书房|大厅|走廊|厨房|起居室|餐厅|药房|诊室|临时卧室|花园|前院|后院|门厅|正厅|杂物间|仆人房/.test(s);
+    if (hasPerson && (!hasPlaceWord || bodyItemRe.test(s))) {
+      return '搜身物品';
+    }
+
+    // 含"茶盏"（茶具/残留物）归并
+    if (s.indexOf("茶盏") >= 0) return "茶盏";
+    // 其余未归类 → 原样（通常是无法识别的偶发字段）
+    return s;
+  }
+
+  // 返回 [{ loc, list:[clue,...] }]，组按地点名排序，组内保持找到顺序
+  function groupCluesByLocation(clues) {
+    var map = {};
+    (clues || []).forEach(function(c) {
+      var original = (c && c.location) || '未标注地点';
+      var key = normalizeClueLocation(original);
+      if (!map[key]) map[key] = [];
+      map[key].push(c);
+    });
+    return Object.keys(map).sort(function(a, b) { return a.localeCompare(b, 'zh'); })
+      .map(function(k) { return { loc: k, list: map[k] }; });
   }
 
   function wrapWithSidebar(mainContent, activeTab) {
@@ -766,12 +844,10 @@
     });
 
     var pages = [];
-    var currentPage = '';
-    var charsPerPage = 380;
+    var charsPerPage = 360;
 
     sections.forEach(function(sec) {
       if (sec.isTitle) {
-        if (currentPage) { pages.push(currentPage); currentPage = ''; }
         var h = '<div style="text-align:center;padding-top:60px;"><h2 style="font-size:26px;">' + esc(sec.label) + '</h2>';
         if (sec.isMurderer) h += '<div class="murderer-tag">你是凶手</div>';
         h += '<p style="margin-top:40px;color:#8b7355;font-style:italic;">请仔细阅读，不要向其他玩家透露你的剧本内容</p></div>';
@@ -779,27 +855,17 @@
         return;
       }
 
-      var sectionText = '<h3>' + esc(sec.label) + '</h3><div style="white-space:pre-wrap;">' + md2html(sec.content) + '</div>';
+      // 纯字符切割分页：每个 section 的文本按 charsPerPage 直接切片为一页页
+      var secHeading = '<h3>' + esc(sec.label) + '</h3>';
+      var rawText = String(sec.content || '').trim();
+      if (!rawText) return;
 
-      if (sectionText.length > charsPerPage) {
-        if (currentPage) { pages.push(currentPage); currentPage = ''; }
-        var paragraphs = sectionText.split(/\n{2,}/);
-        paragraphs.forEach(function(para) {
-          if (currentPage.length + para.length > charsPerPage && currentPage.length > 0) {
-            pages.push(currentPage);
-            currentPage = para;
-          } else {
-            currentPage += (currentPage ? '\n\n' : '') + para;
-          }
-        });
-      } else if (currentPage.length + sectionText.length > charsPerPage && currentPage.length > 0) {
-        pages.push(currentPage);
-        currentPage = sectionText;
-      } else {
-        currentPage += (currentPage ? '\n' : '') + sectionText;
+      var maxTextPerPage = charsPerPage - 40; // 预留标题占位
+      for (var i = 0; i < rawText.length; i += maxTextPerPage) {
+        var chunk = rawText.substring(i, i + maxTextPerPage);
+        pages.push(secHeading + '<div style="white-space:pre-wrap;">' + md2html(chunk) + '</div>');
       }
     });
-    if (currentPage) pages.push(currentPage);
     if (pages.length === 0) pages.push('<div style="white-space:pre-wrap;">' + esc(char.script && char.script.fullScript || JSON.stringify(char)) + '</div>');
 
     window._bookData = { pages: pages, current: 0 };
@@ -844,17 +910,76 @@
   }
 
   // ===================== Investigation =====================
+
+  // 合并轮次视图：搜证（线索+调查输入）+ 讨论（聊天框）同时进行
+  function renderCombinedRound() {
+    var h = topBar(gs.phase);
+    h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
+    h += '<div class="combined-round">';
+
+    // 左：搜证区
+    h += '<div class="combined-clues">';
+    h += '<h4 style="margin:0 0 10px;">🔍 已获取的线索' + (gs.myClues.length ? ' (' + gs.myClues.length + '条，按地点分组)' : '') + '</h4>';
+    if (gs.myClues.length === 0) {
+      h += '<p class="text-xs text-dim">暂无已获取的线索</p>';
+    } else {
+      var clueGroups = groupCluesByLocation(gs.myClues);
+      clueGroups.forEach(function(g) {
+        h += '<details class="clue-group" open><summary>📍 ' + esc(g.loc) + ' <span class="clue-count">' + g.list.length + '</span></summary>';
+        h += '<div class="clue-grid" style="margin-top:8px;">';
+        g.list.forEach(function(c) {
+          var isPhysical = c.clueType && !/人证/.test(c.clueType);
+          var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);margin-bottom:2px;">📍 ' + esc(c.location) + '</div>' : '';
+          h += '<div class="clue-card found"><div class="clue-id">' + esc(c.id) + (c.foundBy ? ' <span class="text-xs text-dim">— ' + esc(c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="clue-body">' + esc(c.content || '') + '</div></div>';
+        });
+        h += '</div></details>';
+      });
+    }
+    // 自然语言搜证输入
+    h += '<div style="margin-top:14px;display:flex;gap:8px;">';
+    h += '<input id="investigateInput" class="form-input flex-1" placeholder="描述你想调查的地点或物品，如：书房的书桌抽屉" onkeydown="if(event.key===\'Enter\')investigate()" />';
+    h += '<button class="btn btn-primary btn-auto" onclick="investigate()">🔍 调查</button>';
+    h += '</div>';
+    h += '<p class="text-xs text-dim mt-sm">输入调查地点可精准获取线索，留空则随机发放</p>';
+    h += '</div>';
+
+    // 右：讨论区（聊天框）
+    h += '<div class="combined-chat">';
+    h += '<h4 style="margin:0 0 10px;">💬 讨论</h4>';
+    h += '<div class="chat-box" style="height:340px;"><div class="chat-messages" id="chatMsgs">';
+    (gs.chatMessages || []).slice(-80).forEach(function(m) {
+      h += '<div class="chat-msg"><span class="sender">' + esc(m.characterName || m.playerName) + ':</span>' + esc(m.content) + '</div>';
+    });
+    h += '</div></div>';
+    h += '<div class="chat-input-row" style="display:flex;gap:8px;margin-top:8px;">' +
+      '<input id="chatIn" class="form-input flex-1" placeholder="输入消息..." onkeydown="if(event.key===\'Enter\')doChat()" />' +
+      '<button class="btn btn-primary btn-auto" onclick="doChat()">发送</button></div>';
+    h += '</div>';
+
+    h += '</div>';
+    document.getElementById("gameContent").innerHTML = wrapWithSidebar(h);
+    setTimeout(function() { var e = document.getElementById('chatMsgs'); if (e) e.scrollTop = e.scrollHeight; }, 100);
+  }
+
   function renderInvestigation() {
     var h = topBar(gs.phase);
     h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
-    h += '<h4 style="margin:12px 0;">已获取的线索</h4>';
-    h += '<div class="clue-grid">';
-    gs.myClues.forEach(function(c) {
-      var isPhysical = c.clueType && !/人证/.test(c.clueType);
-      var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);margin-bottom:2px;">📍 ' + esc(c.location) + '</div>' : '';
-      h += '<div class="clue-card found"><div class="clue-id">' + esc(c.id) + (c.foundBy ? ' <span class="text-xs text-dim">— ' + esc(c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="clue-body">' + esc(c.content || '') + '</div></div>';
-    });
-    h += '</div>';
+    h += '<h4 style="margin:12px 0;">已获取的线索' + (gs.myClues.length ? ' (' + gs.myClues.length + '条，按地点分组)' : '') + '</h4>';
+    if (gs.myClues.length === 0) {
+      h += '<p class="text-xs text-dim">暂无已获取的线索</p>';
+    } else {
+      var clueGroups = groupCluesByLocation(gs.myClues);
+      clueGroups.forEach(function(g) {
+        h += '<details class="clue-group" open><summary>📍 ' + esc(g.loc) + ' <span class="clue-count">' + g.list.length + '</span></summary>';
+        h += '<div class="clue-grid" style="margin-top:8px;">';
+        g.list.forEach(function(c) {
+          var isPhysical = c.clueType && !/人证/.test(c.clueType);
+          var locHtml = (isPhysical && c.location) ? '<div style="font-size:10px;color:var(--gold);margin-bottom:2px;">📍 ' + esc(c.location) + '</div>' : '';
+          h += '<div class="clue-card found"><div class="clue-id">' + esc(c.id) + (c.foundBy ? ' <span class="text-xs text-dim">— ' + esc(c.foundBy) + ' 发现</span>' : '') + '</div>' + locHtml + '<div class="clue-body">' + esc(c.content || '') + '</div></div>';
+        });
+        h += '</div></details>';
+      });
+    }
     // 自然语言搜证输入
     h += '<div style="margin-top:16px;display:flex;gap:8px;">';
     h += '<input id="investigateInput" class="form-input flex-1" placeholder="描述你想调查的地点或物品，如：书房的书桌抽屉" onkeydown="if(event.key===\'Enter\')investigate()" />';
@@ -1027,7 +1152,9 @@
     h += gs.narrative ? '<div class="narrative-panel">' + esc(gs.narrative) + '</div>' : '';
 
     var humanNames = (gs.players || []).map(function(p) { return p.characterName; }).filter(Boolean);
-    var npcNames = (gs.allCharacters || []).filter(function(c) { return c.roleType === 'npc'; }).map(function(c) { return c.name; });
+    var gameMode = (gs.scriptSummary && gs.scriptSummary.setting && gs.scriptSummary.setting.gameMode || "").toUpperCase();
+    var npcInVote = gameMode !== "PVP";
+    var npcNames = npcInVote ? (gs.allCharacters || []).filter(function(c) { return c.roleType === 'npc'; }).map(function(c) { return c.name; }) : [];
     var allTargets = humanNames.concat(npcNames.filter(function(n) { return humanNames.indexOf(n) === -1; }));
     var chars = allTargets.filter(function(v, i, a) { return a.indexOf(v) === i; });
 
@@ -1098,10 +1225,21 @@
           '<h2>投票分布</h2>' +
           (d.votes && d.votes.length ? d.votes.map(function(v) { return '<div>' + esc(v.voter) + ' → <b>' + esc(v.target) + '</b></div>'; }).join("") : '<p class="dim">无投票记录</p>') +
           '<h2>线索发现</h2>' +
-          (d.clues && d.clues.length ? d.clues.map(function(c) {
-            return '<div style="margin-bottom:8px;"><b>' + esc(c.id || "线索") + '</b> · 第' + esc(c.round) + '轮 · ' + esc(c.foundBy || "未发现") + '<br/>' +
-              '<span class="dim">' + esc(c.location || "") + '</span> — ' + esc(c.content) + '</div>';
-          }).join("") : '<p class="dim">无线索记录</p>') +
+          (d.clues && d.clues.length ? (function() {
+            var map = {};
+            d.clues.forEach(function(c) {
+              var k = normalizeClueLocation(c && c.location);
+              if (!map[k]) map[k] = [];
+              map[k].push(c);
+            });
+            return Object.keys(map).sort(function(a, b) { return a.localeCompare(b, 'zh'); })
+              .map(function(k) {
+                return '<div style="margin:10px 0 4px;"><b style="color:#c9a96e;">📍 ' + esc(k) + '（' + map[k].length + '条）</b></div>' +
+                  map[k].map(function(c) {
+                    return '<div style="margin-bottom:6px;"><b>' + esc(c.id || "线索") + '</b> · 第' + esc(c.round) + '轮 · ' + esc(c.foundBy || "未发现") + '<br/><span class="dim">' + esc(c.content) + '</span></div>';
+                  }).join("");
+              }).join("");
+          })() : '<p class="dim">无线索记录</p>') +
           '<h2>聊天纪要</h2>' +
           (d.chat && d.chat.length ? d.chat.slice(-40).map(function(m) {
             return '<div><b>' + esc(m.characterName || m.playerName || m.playerId) + '</b>: ' + esc(m.content) + '</div>';
@@ -1112,10 +1250,15 @@
   }
 
   // ===================== Utility =====================
+  // HTML 转义（含引号）：esc 结果会被拼进 onclick='...' 等属性，必须转义单双引号，
+  // 否则 LLM 生成的角色名（可能含 '）可注入任意脚本（XSS）
   function esc(s) {
-    var d = document.createElement("div");
-    d.textContent = String(s || "");
-    return d.innerHTML;
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   function md2html(text) {

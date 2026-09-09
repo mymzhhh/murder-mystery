@@ -44,15 +44,23 @@ function extractBaseline(fullText) {
 
 /**
  * 提取所有"角色时间线"章节（排除基准类：故事时间线/表面时间线/真实时间线/DM总时间线，
- * 这些是权威依据而非待审对象）。返回 [{anchor, content}]
+ * 这些是权威依据而非待审对象）。返回 [{anchor, content, owner, ordinal}]
+ * - owner：所属角色区块（最近的上层 ### 玩家角色 N / NPC N 标题），用于区分"同名时间线章节"
+ * - ordinal：该 anchor 在全文中的第几次出现（1-based），替换时精确定位，避免多个角色
+ *   共用同一标题（如"### 二、你的时间线…"）时修订全部写进第一个角色。
  */
 function extractTimelineSections(fullText) {
   if (!fullText) return [];
   const EXCLUDE = /(故事时间线|表面时间线|真实时间线|^##\s*[一二三四五六七八九十]+、\s*完整时间线)/;
   const sections = [];
   const lines = fullText.split("\n");
+  const anchorCount = new Map();
+  let owner = "";
   let i = 0;
   while (i < lines.length) {
+    // 记录当前所属角色区块（玩家角色 N：xxx / NPC N：xxx）
+    const ownerMatch = lines[i].match(/^#{2,4}\s*((?:玩家角色|NPC)\s*\d+\s*[:：].*)$/);
+    if (ownerMatch) owner = ownerMatch[1].trim();
     const hl = lines[i].match(/^(#{1,4})\s+(.*时间线[^\n]*)$/);
     if (hl) {
       const anchor = lines[i];
@@ -64,7 +72,9 @@ function extractTimelineSections(fullText) {
           body.push(lines[i]);
           i++;
         }
-        sections.push({ anchor, content: body.join("\n").trim() });
+        const ord = (anchorCount.get(anchor) || 0) + 1;
+        anchorCount.set(anchor, ord);
+        sections.push({ anchor, content: body.join("\n").trim(), owner, ordinal: ord });
         continue;
       }
     }
@@ -75,12 +85,22 @@ function extractTimelineSections(fullText) {
 
 /**
  * 用锚标题替换原文中对应章节的正文（标题行保留，替换到下一个标题为止）
+ * @param {string} fullText
+ * @param {string} anchorTitle 锚标题（如 "### 二、你的时间线（…）"）
+ * @param {string} newContent 新正文
+ * @param {number} [ordinal=1] 该标题在全文中的第几次出现（1-based）——
+ *   多个角色共用同一时间线标题时必须指定，否则修订会全部落到第一个角色
  * @returns {string|null} 替换后的全文；锚点不存在返回 null
  */
-function replaceSection(fullText, anchorTitle, newContent) {
+function replaceSection(fullText, anchorTitle, newContent, ordinal = 1) {
   if (!anchorTitle) return null;
-  const idx = fullText.indexOf(anchorTitle);
-  if (idx < 0) return null;
+  let idx = -1;
+  let from = 0;
+  for (let n = 0; n < Math.max(1, ordinal); n++) {
+    idx = fullText.indexOf(anchorTitle, from);
+    if (idx < 0) return null;
+    from = idx + anchorTitle.length;
+  }
   const start = fullText.indexOf("\n", idx);
   if (start < 0) return null;
   const rest = fullText.slice(start + 1);
@@ -176,7 +196,9 @@ async function fixTimeline(fullText, onProgress) {
   const anchors = sections.map(s => s.anchor);
 
   const baselineText = baseline.map(b => `${b.time} | ${b.event}`).join("\n");
-  const sectionsText = sections.map((s, i) => `【章节 ${i + 1}】${s.anchor}\n${s.content.substring(0, 1800)}`).join("\n\n");
+  const sectionsText = sections.map((s, i) =>
+    `【章节 ${i + 1}】${s.owner ? "（角色：" + s.owner + "）" : ""}${s.anchor}\n${s.content.substring(0, 1800)}`
+  ).join("\n\n");
 
   /** 应用 revisions：兼容多种字段命名（index/id/no/chapter、newContent/content/text）、0/1-based、anchor 标题 */
   function applyRevisions(out, revisions) {
@@ -190,19 +212,28 @@ async function fixTimeline(fullText, onProgress) {
         continue;
       }
       let exact = null;
+      let ordinal = 1;
       const idx = Number(rev.index ?? rev.id ?? rev.no ?? rev.chapter);
       if (Number.isFinite(idx)) {
         // 兼容 1-based / 0-based / 略偏一位
         const cand = sections[idx - 1] || sections[idx] || sections[idx + 1];
-        if (cand) exact = cand.anchor;
+        if (cand) { exact = cand.anchor; ordinal = cand.ordinal; }
       }
-      if (!exact) exact = matchAnchor(rev.anchor || rev.title || rev.section, anchors);
+      if (!exact) {
+        exact = matchAnchor(rev.anchor || rev.title || rev.section, anchors);
+        if (exact) {
+          // 匹配到标题后，用 owner（角色区块）或出现序号确定是哪一章
+          const cand = sections.find(s => s.anchor === exact && s.ordinal === 1);
+          const byOwner = rev.owner ? sections.find(s => s.anchor === exact && s.owner && s.owner.includes(String(rev.owner))) : null;
+          ordinal = (byOwner || cand || { ordinal: 1 }).ordinal;
+        }
+      }
       if (!exact) {
         console.warn("[timeline] 章节定位失败:", JSON.stringify(rev).slice(0, 220));
         skipped++;
         continue;
       }
-      const replaced = replaceSection(out, exact, content);
+      const replaced = replaceSection(out, exact, content, ordinal);
       if (replaced && replaced !== out) { out = replaced; applied++; } else { skipped++; }
     }
     return { out, applied, skipped };

@@ -858,6 +858,49 @@ h1, h2, h3, h4, h5 { font-family: var(--font); }
   margin-bottom: 4px;
 }
 
+/* 线索按地点分组（折叠下拉栏） */
+.clue-group {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.clue-group summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gold);
+  background: linear-gradient(135deg, rgba(212, 175, 55, 0.08), transparent);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  user-select: none;
+}
+.clue-group summary::-webkit-details-marker { display: none; }
+.clue-group summary::before {
+  content: "▶";
+  font-size: 9px;
+  color: var(--text-dim);
+  transition: transform var(--duration-fast) var(--ease-out);
+  display: inline-block;
+}
+.clue-group[open] summary::before { transform: rotate(90deg); }
+.clue-group[open] summary { border-bottom: 1px solid var(--border); margin-bottom: 0; }
+.clue-group .clue-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 8px;
+  line-height: 18px;
+}
+.clue-group .clue-grid { padding: 8px 10px 10px; }
+
 /* Script detail in sidebar */
 .script-detail {
   margin-bottom: 6px;
@@ -1057,6 +1100,20 @@ h1, h2, h3, h4, h5 { font-family: var(--font); }
   transition: all var(--duration) var(--ease-out);
 }
 .chat-input-row button:hover { box-shadow: 0 4px 12px rgba(201, 169, 110, 0.3); }
+
+/* ===================== 合并轮次（搜证+讨论） ===================== */
+.combined-round {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 16px;
+  align-items: start;
+}
+.combined-clues { min-width: 0; }
+.combined-chat { min-width: 0; }
+.combined-chat .chat-box { height: 380px; }
+@media (max-width: 900px) {
+  .combined-round { grid-template-columns: 1fr; }
+}
 
 /* ===================== Voting ===================== */
 .vote-grid {

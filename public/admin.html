@@ -12,6 +12,7 @@
     <div class="nav-tabs">
       <button class="nav-tab active" onclick="switchPage('scripts')">剧本管理</button>
       <button class="nav-tab" onclick="switchPage('stats')">仪表盘</button>
+      <button class="nav-tab" onclick="switchPage('models')">模型管理</button>
       <button class="nav-tab" onclick="switchPage('users')">用户管理</button>
       <button class="nav-tab" onclick="switchPage('rooms')">房间管理</button>
     </div>
@@ -30,11 +31,13 @@
           <div class="pipe-arrow">→</div>
           <div class="pipe-step" id="ps2"><span class="pipe-num">2</span> 提示词优化</div>
           <div class="pipe-arrow">→</div>
-          <div class="pipe-step" id="ps3"><span class="pipe-num">3</span> 生成剧本</div>
+          <div class="pipe-step" id="ps3"><span class="pipe-num">3</span> 剧本大纲</div>
           <div class="pipe-arrow">→</div>
-          <div class="pipe-step" id="ps4"><span class="pipe-num">4</span> 评测</div>
+          <div class="pipe-step" id="ps4"><span class="pipe-num">4</span> 生成剧本</div>
           <div class="pipe-arrow">→</div>
-          <div class="pipe-step" id="ps5"><span class="pipe-num">5</span> 切分完成</div>
+          <div class="pipe-step" id="ps5"><span class="pipe-num">5</span> 评测</div>
+          <div class="pipe-arrow">→</div>
+          <div class="pipe-step" id="ps6"><span class="pipe-num">6</span> 切分完成</div>
         </div>
         <div id="pipelineContent"></div>
       </div>
@@ -81,6 +84,15 @@
           <thead><tr><th>用户名</th><th>角色</th><th>注册时间</th><th>操作</th></tr></thead>
           <tbody><tr><td colspan="4"><div class="state-loading">加载中...</div></td></tr></tbody>
         </table>
+      </div>
+    </div>
+
+    <!-- ===== 模型管理 ===== -->
+    <div id="page-models" class="page">
+      <div class="panel">
+        <h3>模型管理</h3>
+        <p class="text-sm text-dim">配置剧本生成使用的大模型。<b>生成通道</b>（主生成）与<b>推理通道</b>（AI玩家/NPC/审讯）可分别选择生效模型，切换即时生效，无需重启。</p>
+        <div id="modelsRoot"><div class="state-loading">加载中...</div></div>
       </div>
     </div>
 

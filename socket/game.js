@@ -139,10 +139,17 @@ function setupGameSocket(io) {
         const myPlayer = allPlayers.find(p => p.playerId === socket.id);
         const myCharacter = parsed.characters?.find(c => c.name === myPlayer?.characterName);
         const allCluesRaw = await getClues(roomCode);
-        const myClues = (allCluesRaw || []).filter(c => c.foundBy && c.foundBy.length > 0).map(c => {
+        // 只下发"已被发现"的线索；未发现的线索绝不出网关（防止 devtools 看到全部谜底）
+        const foundClues = (allCluesRaw || []).filter(c => c.foundBy && c.foundBy.length > 0).map(c => {
           const finder = allPlayers.find(p => p.playerId === c.foundBy[0]);
           return { ...c, foundByName: finder?.characterName || finder?.playerName || "未知" };
         });
+        // 本人发现的线索（私有视角）
+        const myClues = foundClues.filter(c => c.foundBy && c.foundBy.includes(socket.id));
+        // 角色摘要白名单：绝不下发 script/secret/isMurderer（否则玩家在控制台即可看到凶手与全部秘密）
+        const publicCharacters = (parsed.characters || []).map(c => ({
+          name: c.name, occupation: c.occupation || "", roleType: c.roleType || "player", gender: c.gender || "",
+        }));
 
         // 检查是否可以开始游戏（AI 会补满剩余角色，真人≥1 且都选好角色即可）
         const totalPlayerSlots = (parsed.characters || []).filter(c => c.roleType !== "npc").length;
@@ -155,10 +162,11 @@ function setupGameSocket(io) {
           phase: room.phase,
           playerId: socket.id,
           players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isAI: p.isAI || false, isOwner: p.playerId === updatedRoom.ownerId })),
-          myCharacter, myClues, allClues: allCluesRaw, chatMessages: await getChatMessages(roomCode, 50),
+          myCharacter: myCharacter ? { name: myCharacter.name, occupation: myCharacter.occupation || "", roleType: myCharacter.roleType || "player" } : null,
+          myClues, allClues: foundClues, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), narrative: room.aiNarrative || "",
           scriptSummary: { title: parsed.title, setting: parsed.setting, victim: parsed.victim, layoutDescription: parsed.layoutDescription || "" },
-          allCharacters: parsed.characters || [],
+          allCharacters: publicCharacters,
           introData: await getIntroductions(roomCode),
           canStart: allReady, totalSlots: totalPlayerSlots,
         });
@@ -224,6 +232,10 @@ function setupGameSocket(io) {
         // 只有房主可以开始游戏
         if (room.ownerId && room.ownerId !== socket.id) {
           return socket.emit("error", { code: "NOT_OWNER", message: "只有房主可以开始游戏" });
+        }
+        // 阶段守卫：仅大厅阶段可开局（防止重复/重放事件把进行中的游戏倒回 reading、重复补位）
+        if (room.phase !== "lobby") {
+          return socket.emit("error", { code: "WRONG_PHASE", message: "游戏已经开始，无法重复开局" });
         }
         const curPlayers = await getPlayers(roomCode);
         const humanPlayers = curPlayers.filter(p => !p.isNPC);
@@ -432,13 +444,15 @@ function setupGameSocket(io) {
           title: parsed.title,
           setting: parsed.setting,
           victim: parsed.victim,
+          gameMode: parsed.setting?.gameMode || "",
         };
+        const npcForAgent = { ...npcChar, roleMode: parsed.setting?.gameMode || "" };
 
         // 先广播玩家的问题
         const qMsg = await addChatMessage(roomCode, socket.id, "NPC:" + npcName, askerName, `🔍 审问 ${npcName}：${question}`, room.phase);
         io.to(roomCode).emit("chat_message", qMsg);
 
-        const response = await generateNpcResponse(npcChar, question, scriptSummary, chatHistory);
+        const response = await generateNpcResponse(npcForAgent, question, scriptSummary, chatHistory);
 
         // NPC回复以聊天消息形式广播
         const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `${response}`, room.phase);
@@ -458,14 +472,17 @@ function setupGameSocket(io) {
         // 检查投票目标是否存在（真人角色 + AI 补位角色 + 审讯NPC角色）
         const humanPlayers = allPlayers.filter(p => !p.isNPC);
         const parsed = JSON.parse(room.parsedScript || "{}");
-        const npcNames = (parsed.characters || []).filter(c => c.roleType === "npc").map(c => c.name);
+        const gameMode = (parsed.setting?.gameMode || "").toUpperCase();
+        const npcInVote = gameMode !== "PVP"; // PVP 下 NPC 是目击者/关系人，不进投票
+        const npcNames = npcInVote ? (parsed.characters || []).filter(c => c.roleType === "npc").map(c => c.name) : [];
         const aiNames = allPlayers.filter(p => p.isAI && p.characterName).map(p => p.characterName);
         const allCharNames = [...new Set([...humanPlayers.map(p => p.characterName).filter(Boolean), ...aiNames, ...npcNames])];
         if (!allCharNames.includes(targetCharacterName)) return socket.emit("error", { code: "INVALID_TARGET", message: "投票目标不存在" });
         await recordVote(roomCode, socket.id, targetCharacterName);
         socket.emit("vote_recorded", { target: targetCharacterName });
         const votes = await getVotes(roomCode);
-        io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length, total: humanPlayers.length });
+        const aiCount = allPlayers.filter(p => p.isAI && p.characterName).length;
+        io.to(roomCode).emit("vote_update", { count: Object.keys(votes).length, total: humanPlayers.length + aiCount });
       } catch (e) { socket.emit("error", { code: "VOTE_FAILED", message: e.message }); }
     });
 
@@ -485,7 +502,9 @@ function setupGameSocket(io) {
         if (await r.exists(countdownKey)) return;
 
         const readyKey = `game:${roomCode}:ready`;
-        await r.sadd(readyKey, socket.id);
+        // 用稳定的玩家标识（playerName）而非 socket.id 作为成员：
+        // 重连会换 socket.id，旧成员残留会让 readyCount 提前达标
+        await r.sadd(readyKey, player.playerName || socket.id);
         const readyCount = await r.scard(readyKey);
 
         const allPlayers = await getPlayers(roomCode);
@@ -531,7 +550,9 @@ function setupGameSocket(io) {
         // 所有人就绪：取消计时器，立即倒计时推进
         if (readyCount >= humanCount) {
           if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
-          await r.setex(countdownKey, 30, "1"); // 互斥锁防重复触发
+          // 原子抢锁：SET NX EX 只有一个调用者能成功，避免并发 ready 导致双推进（round1 直接跳 voting）
+          const gotLock = await r.set(countdownKey, "1", "EX", 30, "NX");
+          if (!gotLock) return;
           await r.del(readyKey);
           io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 5 });
 
@@ -553,34 +574,37 @@ function setupGameSocket(io) {
 
     socket.on("disconnect", async () => {
       delete rateLimits[socket.id]; // 即时清理，不等定时器
-      const { getRedis } = require("../modules/game-manager");
-      const codes = await (await getRedis()).smembers("rooms:open");
-      for (const code of codes) {
-        try { await updatePlayer(code, socket.id, { connected: false }); } catch (e) { /* skip */ }
-        // 5分钟后未重连则自动离开房间
-        const timerKey = code + ":" + socket.id;
-        if (disconnectTimers[timerKey]) clearTimeout(disconnectTimers[timerKey]);
-        disconnectTimers[timerKey] = setTimeout(async () => {
-          try {
-            const players = await getPlayers(code);
-            const me = players.find(p => p.playerId === socket.id);
-            if (me && !me.connected) {
-              await removePlayer(code, socket.id);
-              const remaining = await getPlayers(code);
-              const humanRemaining = remaining.filter(p => !p.isNPC);
-              if (humanRemaining.length === 0) {
-                aiPlayer.cancelRoom(code);
-                const r = await getRedis();
-                await r.srem("rooms:open", code);
-                await deleteGameRoom(code);
-              } else {
-                io.to(code).emit("room_updated", { players: remaining, ownerId: (await getRoom(code)).ownerId });
+      try {
+        // 用 socket.io 自身的房间集合定位（不能依赖 rooms:open——开局时房间已被 srem，
+        // 历史 bug：开局后断线处理器对所有房间空转，connected 永不落库、幽灵玩家不清理）
+        const joined = [...socket.rooms].filter(c => c !== socket.id);
+        for (const code of joined) {
+          try { await updatePlayer(code, socket.id, { connected: false }); } catch (e) { /* skip */ }
+          // 5分钟后未重连则自动离开房间
+          const timerKey = code + ":" + socket.id;
+          if (disconnectTimers[timerKey]) clearTimeout(disconnectTimers[timerKey]);
+          disconnectTimers[timerKey] = setTimeout(async () => {
+            try {
+              const players = await getPlayers(code);
+              const me = players.find(p => p.playerId === socket.id);
+              if (me && !me.connected) {
+                await removePlayer(code, socket.id);
+                const remaining = await getPlayers(code);
+                const humanRemaining = remaining.filter(p => !p.isNPC);
+                if (humanRemaining.length === 0) {
+                  aiPlayer.cancelRoom(code);
+                  const r = await getRedis();
+                  await r.srem("rooms:open", code);
+                  await deleteGameRoom(code);
+                } else {
+                  io.to(code).emit("room_updated", { players: remaining, ownerId: (await getRoom(code)).ownerId });
+                }
               }
-            }
-          } catch (e) { /* skip */ }
-          delete disconnectTimers[timerKey];
-        }, 5 * 60 * 1000); // 5分钟
-      }
+            } catch (e) { /* skip */ }
+            delete disconnectTimers[timerKey];
+          }, 5 * 60 * 1000); // 5分钟
+        }
+      } catch (e) { console.warn("[socket] disconnect 处理异常:", e.message); }
     });
 
   });

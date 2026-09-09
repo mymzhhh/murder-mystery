@@ -5,12 +5,42 @@ const { createSession, getSession, addMessage, listSessions, deleteSession } = r
 const { parseScript } = require("../modules/script-parser");
 const { listUsers, setRole, deleteUser } = require("../modules/auth");
 const { writeScript } = require("../modules/script-writer");
-const { reviewScript, reviewAndRevise } = require("../modules/script-reviewer");
+const { reviewScript } = require("../modules/script-reviewer");
 const { splitScript, getSplitData } = require("../modules/script-splitter");
 const { optimizePrompt } = require("../modules/prompt-agent");
 const { createGameRoom } = require("../modules/game-room-creator");
 const { getRoom, getPlayers, deleteRoom: deleteGameRoom } = require("../modules/game-manager");
-const { applyPatchesAndReSplit } = require("../modules/script-patch-applier");
+
+// 判断出站目标是否为内网/环回/链路本地地址（SSRF 防护）
+async function isUnsafeOutboundHost(hostname) {
+  const h = String(hostname || "").toLowerCase();
+  if (!h) return true;
+  if (h === "localhost" || h.endsWith(".localhost") || h.endsWith(".internal") || h.endsWith(".local")) return true;
+  // 字面量 IP 直接判断
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return isPrivateIp(h);
+  if (h.includes(":")) return true; // IPv6 一律拒绝（含 ::1）
+  // 域名 → 解析后检查（防 DNS 指向内网）
+  try {
+    const dns = require("dns").promises;
+    const addrs = await dns.lookup(h, { all: true });
+    return addrs.some(a => isPrivateIp(a.address));
+  } catch (e) {
+    return true; // 解析失败 → 拒绝
+  }
+}
+
+function isPrivateIp(ip) {
+  const p = String(ip).split(".").map(Number);
+  if (p.length !== 4 || p.some(n => !Number.isFinite(n) || n < 0 || n > 255)) return true;
+  const [a, b] = p;
+  if (a === 127 || a === 0 || a === 10) return true;
+  if (a === 169 && b === 254) return true;              // 链路本地
+  if (a === 172 && b >= 16 && b <= 31) return true;     // 私有
+  if (a === 192 && b === 168) return true;              // 私有
+  if (a === 100 && b >= 64 && b <= 127) return true;    // CGNAT
+  if (a >= 224) return true;                            // 组播/保留
+  return false;
+}
 
 // SSE 辅助：带超时保护 + AbortController 的 SSE 连接
 // - 总时长 2 小时兜底（仅防异常泄漏；生成步骤是确定序列总会结束）
@@ -46,8 +76,13 @@ function sseResponse(req, res, timeoutMs = 120 * 60 * 1000, idleMs = 10 * 60 * 1
   armIdle();
 
   // SSE 心跳：维持连接活跃（注释行，不触发前端事件）
+  // 关键：心跳也会重置 idle 计时器——LLM 单次生成可能耗时 3-5 分钟甚至更长，
+  // 期间没有"真实事件"只有心跳；若不重置 idle，任何等待超过 10 分钟的生成都会被误杀。
   const heartbeat = setInterval(() => {
-    if (!closed) { try { res.write(": keep-alive\n\n"); } catch (_) { closed = true; } }
+    if (!closed) {
+      armIdle();
+      try { res.write(": keep-alive\n\n"); } catch (_) { closed = true; }
+    }
   }, 15000);
 
   req.on("close", () => {
@@ -223,6 +258,7 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       const { input } = req.body;
       if (!input?.trim()) return res.status(400).json({ error: "请输入剧本需求" });
       const result = await optimizePrompt(input);
+      if (!result.ok) return res.status(422).json({ error: result.error || "需求解析失败" });
       res.json(result.data);
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
@@ -237,31 +273,44 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
 
     try {
       currentSessionId = require("uuid").v4();
-      sse.send("phase", { phase: "write", message: "正在生成剧本...", sessionId: currentSessionId });
+      sse.send("phase", { phase: "outline", message: "正在生成剧本大纲（锁定诡计、人物、关系网与时间线）...", sessionId: currentSessionId });
 
-      const writeResult = await writeScript(input, (stage, msg) => sse.send("progress", { stage, message: msg }), config);
+      // writeScript 阶段：拦截 outine_done 进度 → 转成独立的 SSE "outline" 事件（供前端可视化）
+      const writeResult = await writeScript(input, (stage, msg) => {
+        if (stage === "outline_done") {
+          try {
+            sse.send("outline", JSON.parse(msg));
+            sse.send("phase", { phase: "write", message: "大纲已锁定，正在生成完整剧本..." });
+          } catch (e) { console.warn("[admin] outline 事件转发失败:", e.message); }
+          return;
+        }
+        sse.send("progress", { stage, message: msg });
+      }, config);
       if (sse.isClosed()) return;
 
       if (!writeResult.ok) { sse.send("error", { message: writeResult.error, phase: "write", sessionId: currentSessionId }); return sse.end(); }
       currentSessionId = writeResult.sessionId;
-      sse.send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
+      if (writeResult.summary) sse.send("phase", { phase: "write_done", sessionId: currentSessionId, summary: writeResult.summary });
 
-      sse.send("phase", { phase: "review", message: "正在评测剧本..." });
-      const reviewResult = await reviewAndRevise(currentSessionId, (stage, msg) => {
+      // 评测：AI 扮演挑剔玩家输出纯文本漏洞报告（不做多轮重写）
+      sse.send("phase", { phase: "review", message: "正在评测剧本（查找逻辑漏洞）..." });
+      const reviewResult = await reviewScript(currentSessionId, (stage, msg) => {
         sse.send("progress", { stage: "review_" + stage, message: msg });
       });
       if (sse.isClosed()) return;
 
       if (!reviewResult.ok) { sse.send("error", { message: reviewResult.error, phase: "review" }); return sse.end(); }
-      sse.send("phase", { phase: "review_done", passed: reviewResult.passed, score: reviewResult.finalScore, rounds: reviewResult.totalRounds });
+      sse.send("phase", { phase: "review_done", message: "评测完成，正在切分剧本..." });
 
-      if (!reviewResult.passed) {
-        sse.send("complete", { status: "review_failed", message: `${reviewResult.totalRounds}轮评测后仍未通过（${reviewResult.finalScore}分）` });
-        return sse.end();
-      }
+      // 自动切分（评测报告仅作参考，不阻塞入库）
+      sse.send("phase", { phase: "split", message: "正在切分剧本..." });
+      const splitResult = await splitScript(currentSessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
+      if (sse.isClosed()) return;
+      if (!splitResult.ok) { sse.send("error", { message: splitResult.error, phase: "split", sessionId: currentSessionId }); return sse.end(); }
 
-      sse.send("phase", { phase: "split", message: "剧本已评测通过并完成切分！" });
-      sse.send("complete", { status: "done", sessionId: reviewResult.sessionId });
+      await deleteSession(currentSessionId);
+      sse.send("phase", { phase: "split_done", message: "剧本已切分完成！" });
+      sse.send("complete", { status: "done", sessionId: currentSessionId });
 
     } catch (e) { if (!sse.isClosed()) sse.send("error", { message: e.message }); }
     sse.end();
@@ -278,25 +327,22 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
-  // 应用评测建议的局部修改
-  app.post("/api/admin/scripts/:id/apply-patches", authMiddleware, adminMiddleware, async (req, res) => {
-    try {
-      const { patches } = req.body;
-      if (!patches || !patches.length) return res.status(400).json({ error: "无修改项" });
-      const result = await applyPatchesAndReSplit(req.params.id, patches);
-      if (!result.ok) return res.status(400).json({ error: result.error });
-      res.json(result);
-    } catch (e) { res.status(500).json({ error: e.message }); }
-  });
-
-  // 评测+重新生成循环（SSE，最多3轮）
-  app.post("/api/admin/scripts/:id/review-revise", authMiddleware, adminMiddleware, async (req, res) => {
+  // 评测剧本并自动切分（SSE）— 单轮评测 + 切分，无多轮重写
+  app.post("/api/admin/scripts/:id/review-split", authMiddleware, adminMiddleware, async (req, res) => {
     const sse = sseResponse(req, res);
     try {
       const s = await ensureSession(req.params.id);
       if (!s) { sse.send("error", { message: "剧本不存在" }); return sse.end(); }
-      const result = await reviewAndRevise(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
-      if (!sse.isClosed()) sse.send("complete", result);
+      sse.send("phase", { phase: "review", message: "正在评测剧本（查找逻辑漏洞）..." });
+      const reviewResult = await reviewScript(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
+      if (sse.isClosed()) return;
+      if (!reviewResult.ok) { sse.send("error", { message: reviewResult.error, phase: "review" }); return sse.end(); }
+      sse.send("phase", { phase: "split", message: "评测完成，正在切分剧本..." });
+      const splitResult = await splitScript(s.sessionId, (stage, msg) => sse.send("progress", { stage, message: msg }));
+      if (sse.isClosed()) return;
+      if (!splitResult.ok) { sse.send("error", { message: splitResult.error, phase: "split" }); return sse.end(); }
+      await deleteSession(s.sessionId);
+      sse.send("complete", { status: "done", sessionId: s.sessionId });
     } catch (e) { if (!sse.isClosed()) sse.send("error", { message: e.message }); }
     sse.end();
   });
@@ -644,7 +690,12 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       for (const key of keys) {
         const type = await r.type(key);
         if (type === "string") redisData[key] = { type, val: await r.get(key) };
-        else if (type === "hash") redisData[key] = { type, val: await r.hgetall(key) };
+        else if (type === "hash") {
+          const h = await r.hgetall(key);
+          // 用户数据脱敏：绝不导出密码哈希
+          if (key.startsWith("user:") && h && h.password !== undefined) delete h.password;
+          redisData[key] = { type, val: h };
+        }
         else if (type === "set") redisData[key] = { type, val: await r.smembers(key) };
         else if (type === "zset") { const items = await r.zrange(key, 0, -1, "WITHSCORES"); redisData[key] = { type, val: items }; }
         else if (type === "list") redisData[key] = { type, val: await r.lrange(key, 0, -1) };
@@ -735,6 +786,108 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       }
     }
     res.json({ rooms });
+  });
+
+  // ============ 模型管理（生成大模型切换） ============
+  const { listModels, upsertModel, removeModel, setActive, getAllModels } = require("../modules/model-manager");
+
+  // 列出全部通道模型（含环境默认项）
+  app.get("/api/admin/models", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      res.json(await getAllModels());
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // 添加/更新模型
+  app.post("/api/admin/models/:channel", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { channel } = req.params;
+      const { name, apiKey, baseUrl, model, note } = req.body || {};
+      const result = await upsertModel(channel, name, { apiKey, baseUrl, model, note });
+      res.json(result);
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // 删除模型
+  app.delete("/api/admin/models/:channel/:name", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { channel, name } = req.params;
+      res.json(await removeModel(channel, decodeURIComponent(name)));
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // 设置当前生效模型（name = "env" 表示环境默认）
+  app.post("/api/admin/models/:channel/active", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { channel } = req.params;
+      const { name } = req.body || {};
+      res.json(await setActive(channel, name));
+    } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+
+  // 测试模型连通（对指定模型发一条最小请求，报告可用性）
+  // 安全：仅接受 POST（凭据不进 URL/日志），并校验 baseUrl 目标（禁内网/环回，防 SSRF）
+  app.post("/api/admin/models/:channel/test", authMiddleware, adminMiddleware, async (req, res) => {
+    const sse = sseResponse(req, res, 60 * 1000, 55 * 1000);
+    try {
+      const { channel } = req.params;
+      const b = req.body || {};
+      const name = String(b.name || "");
+      const apiKey = String(b.apiKey || "");
+      const baseUrl = String(b.baseUrl || "");
+      const model = String(b.model || "");
+      const https = require("https");
+      const http = require("http");
+      const base = (baseUrl || (channel === "reasoning" ? (process.env.AGNES_BASE_URL || "https://apihub.agnes-ai.com/v1") : (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com"))).replace(/\/+$/, "");
+      const key = apiKey || (channel === "reasoning" ? process.env.AGNES_API_KEY : process.env.DEEPSEEK_API_KEY);
+      const mdl = model || (channel === "reasoning" ? (process.env.AGNES_MODEL || "agnes-2.5-flash") : (process.env.DEFAULT_MODEL || "deepseek-v4-flash"));
+
+      // SSRF 防护：只允许 http/https 且目标主机解析后不得是内网/环回/链路本地地址
+      let u;
+      try { u = new URL(base + "/chat/completions"); } catch (e) {
+        sse.send("error", { message: "Base URL 格式非法" }); return sse.end();
+      }
+      if (!["http:", "https:"].includes(u.protocol)) {
+        sse.send("error", { message: "仅支持 http/https 地址" }); return sse.end();
+      }
+      const unsafe = await isUnsafeOutboundHost(u.hostname);
+      if (unsafe) {
+        sse.send("error", { message: "出于安全考虑，禁止测试内网/环回地址" }); return sse.end();
+      }
+      const mod = u.protocol === "http:" ? http : https;
+      const body = JSON.stringify({ model: mdl, messages: [{ role: "user", content: "回复OK两个字母" }], max_tokens: 50 });
+      const result = await new Promise((resolve) => {
+        const req2 = mod.request({
+          hostname: u.hostname, port: u.port || (u.protocol === "http:" ? 80 : 443),
+          path: u.pathname + u.search, method: "POST",
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "Authorization": "Bearer " + (key || "") },
+          timeout: 45000, agent: new mod.Agent({ keepAlive: false }),
+        }, res2 => {
+          const chunks = [];
+          res2.on("data", c => chunks.push(c));
+          res2.on("end", () => resolve({ status: res2.statusCode, body: Buffer.concat(chunks).toString("utf8") }));
+        });
+        req2.on("error", err => resolve({ status: 0, error: err.message }));
+        req2.on("timeout", () => { req2.destroy(); resolve({ status: 0, error: "timeout" }); });
+        req2.write(body);
+        req2.end();
+      });
+      if (!result || result.status === 0) {
+        sse.send("error", { message: "连接失败: " + (result && result.error || "未知错误") });
+        return sse.end();
+      }
+      if (result.status !== 200) {
+        sse.send("error", { message: "HTTP " + result.status + ": " + String(result.body || "").substring(0, 200) });
+        return sse.end();
+      }
+      let content = "";
+      try { content = JSON.parse(result.body)?.choices?.[0]?.message?.content || ""; } catch (e) {}
+      sse.send("complete", { status: "ok", httpStatus: result.status, model: mdl, reply: String(content || "").substring(0, 100) });
+      return sse.end();
+    } catch (e) {
+      if (!res.headersSent) res.status(500).json({ error: e.message });
+      else { try { res.write("event: error\ndata: " + JSON.stringify({ message: e.message }) + "\n\n"); } catch (_) {} try { res.end(); } catch (_) {} }
+    }
   });
 }
 module.exports = { setupAdminRoutes };
