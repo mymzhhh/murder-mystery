@@ -16,9 +16,12 @@ RUN addgroup -g 1001 -S appgroup && adduser -u 1001 -S appuser -G appgroup
 
 WORKDIR /app
 
+# 生产环境（Express 在 NODE_ENV=production 下关闭调试栈与详细错误）
+ENV NODE_ENV=production
+
 # 分层缓存：先装依赖
 COPY package.json package-lock.json ./
-RUN npm ci --production --ignore-scripts && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # 复制源码
 COPY server.js ./

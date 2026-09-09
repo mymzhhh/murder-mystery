@@ -3,7 +3,8 @@ services:
     image: redis:7-alpine
     container_name: murder-redis
     ports:
-      - "6380:6379"
+      # 仅绑定本机回环，避免 Redis 暴露到局域网（如需远程访问请改用内网地址或隧道）
+      - "127.0.0.1:6380:6379"
     restart: unless-stopped
     volumes:
       - redis-data:/data
@@ -31,7 +32,8 @@ services:
     image: postgres:16-alpine
     container_name: murder-pg
     ports:
-      - "5433:5432"
+      # 仅绑定本机回环；生产环境请在 .env 设置强口令 POSTGRES_PASSWORD
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-murder}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-murder123}

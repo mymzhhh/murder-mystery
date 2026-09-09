@@ -181,6 +181,12 @@ function setupGameSocket(io) {
         const me = players.find(p => p.playerId === socket.id);
         if (me) await removePlayer(roomCode, socket.id);
         socket.leave(roomCode);
+        // 清理该玩家的 ready/投票残留（否则继续干扰阶段推进计数）
+        try {
+          const rr = await getRedis();
+          await rr.srem(`game:${roomCode}:ready`, me?.playerName || socket.id);
+          await rr.hdel(`game:${roomCode}:votes`, socket.id);
+        } catch (e) { /* ignore */ }
         const remaining = await getPlayers(roomCode);
         const humanRemaining = remaining.filter(p => !p.isNPC);
 
@@ -198,8 +204,12 @@ function setupGameSocket(io) {
           await r2.srem("rooms:open", roomCode);
           await deleteGameRoom(roomCode);
         } else {
+          // 游戏中离场：该角色由 AI 接管（否则角色槽位悬空：线索仍指向他、投票候选消失）
+          if (room.phase && room.phase !== "lobby") {
+            try { await syncAiFillers(roomCode); } catch (e) { console.warn("[leave_room] AI 接管失败:", e.message); }
+          }
           const updatedRoom = await getRoom(roomCode);
-          io.to(roomCode).emit("room_updated", { players: remaining, ownerId: updatedRoom.ownerId });
+          io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: updatedRoom.ownerId });
         }
         socket.emit("left_room", {});
       } catch (e) { socket.emit("error", { code: "LEAVE_FAILED", message: e.message }); }
@@ -314,23 +324,35 @@ function setupGameSocket(io) {
         if (available.length === 0) return socket.emit("error", { code: "NO_CLUES", message: "本轮线索已全部获取，等待进入下一阶段" });
 
         // 自然语言搜证 vs 随机发放
-        var searchResult;
-        if (query && query.trim()) {
-          searchResult = searchClues(query, available);
-        } else {
-          searchResult = { clue: pickRandomClue(available), matchLevel: "random", message: "" };
+        // 并发安全：用 SET NX 抢占线索，避免两人同时搜证拿到同一条
+        // （此前"读时过滤 + SADD"在并发下会重复发放同一条线索）
+        const r2 = await getRedis();
+        let clue = null;
+        let dmMessage = "";
+        let pool = available.slice();
+        for (let i = 0; i < 6 && pool.length; i++) {
+          let cand = null;
+          if (query && query.trim()) {
+            const sr = searchClues(query, pool);
+            cand = sr.clue;
+            if (sr.message) dmMessage = sr.message;
+          } else {
+            cand = pickRandomClue(pool);
+          }
+          if (!cand) break;
+          const claimed = await r2.set(`game:${roomCode}:claim:${cand.id}`, socket.id, "EX", 3600, "NX");
+          if (claimed) { clue = cand; break; }
+          pool = pool.filter(c => c.id !== cand.id); // 已被抢走，换下一条
         }
-
-        const clue = searchResult.clue;
-        if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "未找到合适的线索，请稍后再试" });
+        if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "线索已被其他玩家取走，请稍后再试" });
         await assignClue(roomCode, clue.id, socket.id);
         const finder = players.find(p => p.playerId === socket.id);
 
         // 有 DM 叙事消息时先发 narrative，再发线索
-        if (searchResult.message) {
+        if (dmMessage) {
           io.to(roomCode).emit("chat_message", {
             playerId: "dm", playerName: "DM", characterName: "AI DM",
-            content: searchResult.message, timestamp: Date.now(),
+            content: dmMessage, timestamp: Date.now(),
           });
         }
         io.to(roomCode).emit("clue_received", { clue, foundBy: finder?.characterName || finder?.playerName || "未知" });

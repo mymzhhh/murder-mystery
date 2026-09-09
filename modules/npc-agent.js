@@ -98,9 +98,18 @@ async function generateNpcResponse(npc, question, scriptSummary, chatHistory) {
   const systemPrompt = buildNpcSystemPrompt(npc, scriptSummary);
 
   // 历史放宽到最近 12 条，降低"审问一长就失忆"的问题
+  // 角色判定：chat 消息结构为 {characterName, playerName, content}（无 role 字段），
+  // 必须按说话者身份判断，否则会把玩家的提问误标成"你回答"，
+  // 导致 NPC 把自己没说过的话当成已说过（前后矛盾/改口）
+  const speakerOf = (m) => {
+    if (!m) return "玩家问";
+    if (m.characterName && npc && npc.name && m.characterName === npc.name) return "你回答";
+    if (m.role === "assistant") return "你回答";
+    return "玩家问";
+  };
   const historyContext = chatHistory && chatHistory.length > 0
     ? "\n\n## 最近的对话记录（你要保持说法一致，尤其是关于你时间线的说法）\n" + chatHistory.slice(-12).map(m =>
-        `${m.role === 'user' ? '玩家问' : '你回答'}: ${m.content}`
+        `${speakerOf(m)}: ${m.content || m.text || ""}`
       ).join("\n")
     : "";
 

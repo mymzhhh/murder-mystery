@@ -108,10 +108,10 @@
       }).then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
         .then(function(r) {
           if (!r.ok) { showError(r.data.error); setLoading("loginBtn", false); return; }
-          localStorage.setItem("token", r.data.token);
-          localStorage.setItem("username", r.data.username);
-          localStorage.setItem("role", r.data.role);
-          location.href = r.data.role === "admin" ? "/admin.html" : "/player.html";
+          // 新旧前端共用同一登录态键（murder_token），登录后统一进入 React 版
+          localStorage.setItem("murder_token", r.data.token);
+          localStorage.setItem("murder_user", JSON.stringify({ username: r.data.username, role: r.data.role }));
+          location.href = r.data.role === "admin" ? "/admin" : "/player";
         })
         .catch(function() { showError("网络错误，请重试"); setLoading("loginBtn", false); });
       return false;
@@ -134,18 +134,19 @@
       }).then(function(res) { return res.json().then(function(data) { return { ok: res.ok, data: data }; }); })
         .then(function(r) {
           if (!r.ok) { showError(r.data.error); setLoading("registerBtn", false); return; }
-          localStorage.setItem("token", r.data.token);
-          localStorage.setItem("username", r.data.username);
-          localStorage.setItem("role", r.data.role);
-          location.href = "/player.html";
+          localStorage.setItem("murder_token", r.data.token);
+          localStorage.setItem("murder_user", JSON.stringify({ username: r.data.username, role: r.data.role }));
+          location.href = r.data.role === "admin" ? "/admin" : "/player";
         })
         .catch(function() { showError("网络错误，请重试"); setLoading("registerBtn", false); });
       return false;
     }
 
-    // 页面加载时清除旧的认证态（确保不会携带过期token）
-    if (localStorage.getItem("token") && !location.search.includes("stay")) {
-      // 不做自动跳转，用户可能需要重新登录
+    // 已登录则直接进入对应界面（新旧共用 murder_token 键）
+    if (localStorage.getItem("murder_token") && !location.search.includes("stay")) {
+      var u = null;
+      try { u = JSON.parse(localStorage.getItem("murder_user") || "null"); } catch (e) { u = null; }
+      location.href = (u && u.role === "admin") ? "/admin" : "/player";
     }
   </script>
 </body>
