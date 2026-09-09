@@ -1336,6 +1336,30 @@ function fwSection(fw, kw) {
   return out.join("\n").trim();
 }
 
+/**
+ * 删除文本中标题匹配 keyword 的整段（含其下正文，直到下一个同级/更高级标题）。
+ * 用于消除成稿中的重复章节（如 DM 手册内重复的"完整时间线"）。
+ */
+function stripSectionByKeyword(text, keywordRe) {
+  if (!text) return text;
+  const lines = String(text).split("\n");
+  const out = [];
+  let skipLevel = 0;
+  for (const line of lines) {
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      const level = h[1].length;
+      if (skipLevel && level > skipLevel) continue;      // 被删章节的子标题一并跳过
+      if (skipLevel && level <= skipLevel) skipLevel = 0; // 遇到同级/更高级标题，结束跳过
+      if (!skipLevel && keywordRe.test(h[2])) { skipLevel = level; continue; }
+    } else if (skipLevel) {
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n").trim();
+}
+
 function assembleScript(report, userInput) {
   const parts = [];
   const chars = report.characters || [];
@@ -1516,8 +1540,15 @@ function assembleScript(report, userInput) {
   }
 
   // DM 手册正文
-  parts.push(`## 四、DM 手册正文\n`);
-  parts.push(report.dmGuide || "");
+  // ① 剥掉模型自带的顶级标题（如 "# 《书名》DM主持人手册"）——否则会与上方的
+  //    "# 第四部分：DM 手册" 形成"两个 DM 手册标题"的视觉混淆。
+  // ② 剥掉 DM 手册内的"完整时间线"章节——它已作为 dmTimeline 合并到上方
+  //    "## 三、完整时间线"，否则同一份时间线会出现两次。
+  let dmBody = String(report.dmGuide || "").trim();
+  dmBody = dmBody.replace(/^#\s+[^\n]*(DM|主持人|手册)[^\n]*\n+/, "");
+  dmBody = stripSectionByKeyword(dmBody, /完整时间线/);
+  parts.push(`## 四、主持流程与复盘\n`);
+  parts.push(dmBody || report.dmGuide || "");
   parts.push(`\n---\n`);
 
   parts.push(`\n# 剧本统计\n`);
