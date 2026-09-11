@@ -14,7 +14,7 @@ const STAGE_COLORS = {
   crosscheck: "var(--mystic-light)",
 };
 
-export default function PipelinePage() {
+export default function PipelinePage({ onNavigate }) {
   const [step, setStep] = useState(1);
   const [input, setInput] = useState("");
   const [stage, setStage] = useState("idle"); // idle | optimize | optimized | generating | done | error
@@ -24,6 +24,7 @@ export default function PipelinePage() {
   const [outline, setOutline] = useState(null);
   const [error, setError] = useState("");
   const [sessionId, setSessionId] = useState("");
+  const [copied, setCopied] = useState(false);
   const abortRef = useRef(null);
   const logsRef = useRef([]);
 
@@ -37,6 +38,7 @@ export default function PipelinePage() {
     setOutline(null);
     setError("");
     setSessionId("");
+    setCopied(false);
     if (abortRef.current) { abortRef.current.abort(); abortRef.current = null; }
   }
 
@@ -109,7 +111,6 @@ export default function PipelinePage() {
           else if (ph === "write") setStep(4);
           else if (ph === "review") setStep(5);
           else if (ph === "split") setStep(6);
-          if (ph === "write_done" && window.__lastSid) setSessionId(window.__lastSid);
         },
         onOutline: (d) => {
           setOutline(d);
@@ -235,6 +236,35 @@ export default function PipelinePage() {
             </div>
           </div>
         </React.Fragment>
+      )}
+
+      {/* 生成结果：展示剧本 ID + 后续入口。
+          原先 sessionId 只被 setState、界面上从不渲染，而玩家端开房正需要这个 ID，
+          端到端"生成 → 开局"的交接是断的。 */}
+      {stage === "done" && sessionId && (
+        <div className="panel" style={{ padding: 16, marginTop: 12, borderLeft: "3px solid var(--success)" }}>
+          <strong style={{ color: "var(--success)" }}>✓ 剧本已就绪，可以开局了</strong>
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <span className="text-sm text-dim">剧本 ID</span>
+            <code style={{ background: "rgba(255,255,255,.08)", padding: "4px 10px", borderRadius: 6, fontSize: 13 }}>{sessionId}</code>
+            <button
+              className="btn btn-outline btn-xs"
+              onClick={async () => {
+                try { await navigator.clipboard.writeText(sessionId); setCopied(true); }
+                catch (e) { setCopied(false); }
+              }}
+            >
+              {copied ? "已复制" : "复制"}
+            </button>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            {onNavigate && <button className="btn btn-outline btn-sm" onClick={() => onNavigate("scripts")}>去剧本管理</button>}
+            {onNavigate && <button className="btn btn-success btn-sm" onClick={() => onNavigate("rooms")}>去房间管理开房</button>}
+          </div>
+          <div className="text-xs text-dim" style={{ marginTop: 8 }}>
+            玩家也可以直接在玩家端「可选剧本」里对同一剧本点「创建房间」。
+          </div>
+        </div>
       )}
     </div>
   );

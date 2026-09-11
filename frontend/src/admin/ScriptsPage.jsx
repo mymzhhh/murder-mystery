@@ -9,6 +9,7 @@ export default function ScriptsPage() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState(null); // { title, markdown }
   const [splitView, setSplitView] = useState(null);
+  const [job, setJob] = useState(null);   // { label, logs, running, done, error }
 
   async function load() {
     setLoading(true);
@@ -42,40 +43,48 @@ export default function ScriptsPage() {
     } catch (e) { alert(e.message); }
   }
 
-  // 评测+切分（SSE 进度）
-  function doReviewSplit(id) {
-    openProgress(`/api/admin/scripts/${id}/review-split`, id, "评测并切分");
-  }
-  function doSplit(id) {
-    openProgress(`/api/admin/scripts/${id}/split`, id, "切分");
+  // 评测+切分（SSE 进度）——原先用 window.open 弹小窗承载进度，
+  // 被浏览器拦截时任务照跑但界面上毫无反馈，且完成后不刷新列表。
+  function doReviewSplit(id) { runJob(`/api/admin/scripts/${id}/review-split`, "评测并切分"); }
+  function doSplit(id) { runJob(`/api/admin/scripts/${id}/split`, "切分"); }
+
+  function pushLog(text) {
+    setJob((j) => (j ? { ...j, logs: [...j.logs, text] } : j));
   }
 
-  function openProgress(url, id, label) {
-    const win = window.open("", "_blank", "width=520,height=480");
-    if (win) {
-      win.document.write(`<html><body style="font-family:monospace;font-size:12px;background:#1a1a2e;color:#eee;padding:12px"><h4>${label}中...</h4><div id="log"></div></body></html>`);
-      runJob(url, (msg) => {
-        if (win && !win.closed) win.document.getElementById("log").innerHTML += `<div>${String(msg).replace(/</g, "&lt;")}</div>`;
-      }).then(() => { if (win && !win.closed) { win.document.getElementById("log").innerHTML += "<div style='color:#4ade80'>✓ 完成</div>"; setTimeout(() => win.close(), 2000); } });
-    }
+  function runJob(url, label) {
+    if (job?.running) return;
+    setJob({ label, logs: [], running: true, done: false, error: "" });
+    (async () => {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() },
+          body: "{}",
+        });
+        if (!res.ok) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.error || `失败 ${res.status}`);
+        }
+        await readSSE(res, {
+          onProgress: (st, msg) => pushLog(`${st}: ${msg}`),
+          onPhase: (ph, msg) => pushLog(msg),
+          onComplete: (d) => pushLog(d.status === "done" ? "✓ 完成" : JSON.stringify(d).substring(0, 120)),
+          onError: (msg) => {
+            pushLog("❌ " + msg);
+            setJob((j) => (j ? { ...j, error: msg } : j));
+          },
+        });
+        setJob((j) => (j ? { ...j, running: false, done: true } : j));
+        load(); // 完成后刷新列表，让状态可见
+      } catch (e) {
+        pushLog("❌ " + e.message);
+        setJob((j) => (j ? { ...j, running: false, error: e.message } : j));
+      }
+    })();
   }
 
-  async function runJob(url, onLog) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() },
-        body: "{}",
-      });
-      if (!res.ok) { const d = await res.json().catch(() => ({})); throw new Error(d.error || `失败 ${res.status}`); }
-      await readSSE(res, {
-        onProgress: (st, msg) => onLog(`${st}: ${msg}`),
-        onPhase: (ph, msg) => onLog(msg),
-        onComplete: (d) => onLog(d.status === "done" ? "完成" : JSON.stringify(d).substring(0, 100)),
-        onError: (msg) => onLog("❌ " + msg),
-      });
-    } catch (e) { onLog("❌ " + e.message); }
-  }
+  const busy = !!job?.running;
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto" }}>
@@ -84,6 +93,24 @@ export default function ScriptsPage() {
         <button className="btn btn-outline btn-sm" onClick={load}>刷新</button>
       </div>
 
+      {/* 任务进度（页内展示，不依赖弹窗） */}
+      {job && (
+        <div className="panel" style={{ padding: 14, marginBottom: 12, borderLeft: `3px solid ${job.error ? "var(--danger)" : job.running ? "var(--gold)" : "var(--success)"}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 10 }}>
+            <strong style={{ color: job.error ? "var(--danger)" : job.done ? "var(--success)" : "var(--gold)" }}>
+              {job.label} {job.running ? "进行中…" : job.error ? "失败" : "已完成"}
+            </strong>
+            {job.running
+              ? <span className="text-xs text-dim">请勿关闭页面</span>
+              : <button className="btn btn-outline btn-xs" onClick={() => setJob(null)}>关闭</button>}
+          </div>
+          <div style={{ maxHeight: 220, overflowY: "auto", fontSize: 12, fontFamily: "monospace" }}>
+            {job.logs.map((l, i) => <div key={i} style={{ padding: "2px 0" }}>{l}</div>)}
+            {job.logs.length === 0 && <div className="text-dim">等待开始...</div>}
+          </div>
+        </div>
+      )}
+
       <div className="panel" style={{ padding: 16 }}>
         {loading && <div className="state-loading">加载中...</div>}
         {!loading && scripts.length === 0 && <div className="state-empty">暂无剧本</div>}
@@ -91,15 +118,16 @@ export default function ScriptsPage() {
           <div key={s.sessionId || s.id} className="card card-static" style={{ marginBottom: 8, padding: "10px 14px" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
-                <strong>{s.topic || s.title || "未命名"}</strong>
-                {s.playerCount && <span className="tag" style={{ marginLeft: 8 }}>{s.playerCount}玩家{s.npcCount ? "+" + s.npcCount + "NPC" : ""}</span>}
+                <strong>{s.title || s.topic || "未命名"}</strong>
+                {/* 后端 /api/admin/scripts 返回的是 characterCount，不是 playerCount */}
+                {s.characterCount ? <span className="tag" style={{ marginLeft: 8 }}>{s.characterCount}玩家角色</span> : null}
                 <span className="text-xs text-dim" style={{ marginLeft: 8 }}>{new Date(s.createdAt || Date.now()).toLocaleString()}</span>
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button className="btn btn-outline btn-xs" onClick={() => doView(s.sessionId || s.id)}>查看</button>
                 <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>切分预览</button>
-                <button className="btn btn-success btn-xs" onClick={() => doReviewSplit(s.sessionId || s.id)}>评测并切分</button>
-                <button className="btn btn-outline btn-xs" onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
+                <button className="btn btn-success btn-xs" disabled={busy} onClick={() => doReviewSplit(s.sessionId || s.id)}>评测并切分</button>
+                <button className="btn btn-outline btn-xs" disabled={busy} onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
                 <button className="btn btn-danger btn-xs" onClick={() => doDelete(s.sessionId || s.id)}>删除</button>
               </div>
             </div>

@@ -13,7 +13,10 @@ function setupPlayerRoutes(app, authMiddleware) {
         const pgList = await listScripts();
         pgList.forEach(s => scripts.push({
           sessionId: s.id, title: s.title, topic: s.title,
-          characterCount: Number(s.real_player_count) || Number(s.player_count) || 0, textType: "murder-mystery",
+          characterCount: Number(s.real_player_count) || Number(s.player_count) || 0,
+          npcCount: Number(s.real_npc_count) || Number(s.npc_count) || 0,
+          era: s.era || "", location: s.location || "",
+          textType: "murder-mystery",
           createdAt: s.split_at || s.created_at, messageCount: s.clue_count || 0,
         }));
       } catch (e) { /* PG不可用 */ }

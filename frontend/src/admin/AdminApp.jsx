@@ -53,7 +53,7 @@ export default function AdminApp() {
           {/* keep-alive：已访问的页面保持挂载（display 切换），生成进度等状态不会因切页丢失 */}
           {TABS.filter((t) => mounted.has(t.key)).map((t) => (
             <div key={t.key} style={{ display: tab === t.key ? "block" : "none" }}>
-              <t.comp />
+              <t.comp onNavigate={switchTab} />
             </div>
           ))}
         </Suspense>
