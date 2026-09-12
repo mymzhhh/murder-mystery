@@ -230,6 +230,21 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
     if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   }
 
+  /** 远端音轨是异步到达的，那一刻多半没有用户手势，play() 会被自动播放策略拒绝。
+   *  只在"收听"按钮里补 play() 不够——玩家可能先开收听、之后才有人加入。
+   *  这里挂一个文档级监听：页面上任意一次点击都顺手把所有被拦下的播放器解开。 */
+  function unlockPlayback() {
+    if (closed || !listenOn) return;
+    for (const p of peers.values()) p.audio.play().catch(() => {});
+  }
+  if (typeof document !== "undefined") {
+    document.addEventListener("click", unlockPlayback, true);
+  }
+
+  function detachUnlock() {
+    if (typeof document !== "undefined") document.removeEventListener("click", unlockPlayback, true);
+  }
+
   function leave() {
     if (!joined) return;
     joined = false;
@@ -271,6 +286,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
 
   function detach() {
     Object.entries(handlers).forEach(([ev, fn]) => socket.off(ev, fn));
+    detachUnlock();
     destroy();
   }
 
