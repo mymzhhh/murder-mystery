@@ -213,11 +213,12 @@ async function fixTimeline(fullText, onProgress) {
       }
       let exact = null;
       let ordinal = 1;
+      let origin = null; // 命中的原章节，供下方长度护栏使用
       const idx = Number(rev.index ?? rev.id ?? rev.no ?? rev.chapter);
       if (Number.isFinite(idx)) {
         // 兼容 1-based / 0-based / 略偏一位
         const cand = sections[idx - 1] || sections[idx] || sections[idx + 1];
-        if (cand) { exact = cand.anchor; ordinal = cand.ordinal; }
+        if (cand) { exact = cand.anchor; ordinal = cand.ordinal; origin = cand; }
       }
       if (!exact) {
         exact = matchAnchor(rev.anchor || rev.title || rev.section, anchors);
@@ -225,11 +226,22 @@ async function fixTimeline(fullText, onProgress) {
           // 匹配到标题后，用 owner（角色区块）或出现序号确定是哪一章
           const cand = sections.find(s => s.anchor === exact && s.ordinal === 1);
           const byOwner = rev.owner ? sections.find(s => s.anchor === exact && s.owner && s.owner.includes(String(rev.owner))) : null;
-          ordinal = (byOwner || cand || { ordinal: 1 }).ordinal;
+          origin = byOwner || cand || null;
+          ordinal = (origin || { ordinal: 1 }).ordinal;
         }
       }
       if (!exact) {
         console.warn("[timeline] 章节定位失败:", JSON.stringify(rev).slice(0, 220));
+        skipped++;
+        continue;
+      }
+      // 长度护栏：修订正文若显著短于原章节，判为 LLM 偷懒/截断，拒绝替换。
+      // 历史缺陷：此处原本无任何校验，任何非空字符串都会整段覆盖原章节，
+      // 导致完整时间线被一句话静默销毁且不留痕迹（实测出现 82 字/1 条的时间线）。
+      const origLen = origin ? origin.content.length : 0;
+      const newLen = content.trim().length;
+      if (origLen >= 400 && newLen < origLen * 0.5) {
+        console.warn(`[timeline] 拒绝过短修订（${exact.slice(0, 30)}）：原 ${origLen} 字 → 新 ${newLen} 字，疑似截断`);
         skipped++;
         continue;
       }

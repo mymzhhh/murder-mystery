@@ -45,6 +45,73 @@ async function runStage(stageName, fn, onProgress) {
   throw lastErr;
 }
 
+// ==================== 生成后校验：角色剧本时间线完整性 ====================
+
+/** 时间线最少时间点数（与 templates/murder-mystery/character.js 玩家模板的"至少 8 个时间点"一致） */
+const MIN_TIMELINE_POINTS = 8;
+
+/** 统计时间线正文的时间点数（HH:MM、中文时辰/时段都算，去重） */
+function countTimelinePoints(body) {
+  // 注意：古代设定剧本用"戌时二刻"这类时辰表述，必须一并识别，
+  // 否则会被误判为"时间线不完整"而触发无谓的补写。
+  const re = /(\d{1,2}\s*[:：]\s*\d{2})|([一二三四五六七八九十百]+点(半|整)?)|([子丑寅卯辰巳午未申酉戌亥]时([初正]|[一二三四]刻)?)|((凌晨|清晨|拂晓|上午|中午|午后|下午|傍晚|黄昏|晚上|夜里|深夜)\s*\d{1,2}\s*[点时刻])/g;
+  const set = new Set();
+  let m;
+  while ((m = re.exec(String(body || "")))) set.add(m[0].replace(/\s+/g, "").replace(/：/g, ":"));
+  return set.size;
+}
+
+/** 抽取角色剧本中「时间线」章节正文；无该章节返回 null（排除基准类章节） */
+function extractCharacterTimeline(text) {
+  const lines = String(text || "").split("\n");
+  const EXCLUDE = /(故事时间线|表面时间线|真实时间线|完整时间线)/;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^#{1,4}\s+.*时间线/.test(lines[i])) continue;
+    if (EXCLUDE.test(lines[i])) continue;
+    const body = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^#{1,4}\s+/.test(lines[j])) break;
+      body.push(lines[j]);
+    }
+    return body.join("\n").trim();
+  }
+  return null;
+}
+
+/**
+ * 生成后校验：角色剧本必须含「时间线」章节且时间点不少于 MIN_TIMELINE_POINTS。
+ * 实测缺陷：模型会把时间线压成一两条（出现 82 字/1 条、74 字/1 条），
+ * 或把完整行动轨迹塞进「凶手确认」而让时间线只剩抵达一条。
+ * 不达标时带明确纠正指令补写一次；补写仍不达标则保留时间点更多的一份。
+ */
+async function ensureTimelineComplete(charName, content, retryFn, onProgress) {
+  const body = extractCharacterTimeline(content);
+  const points = body === null ? 0 : countTimelinePoints(body);
+  if (body !== null && points >= MIN_TIMELINE_POINTS) return content;
+
+  const problem = body === null
+    ? "完全没有「二、你的时间线」章节"
+    : `「二、你的时间线」只有 ${points} 个时间点（要求至少 ${MIN_TIMELINE_POINTS} 个）`;
+  const note = `\n\n## ⚠️ 上一次输出不合格，必须重写\n上一次的问题：${problem}。\n请重新输出**完整**角色剧本（保留上一版背景故事与任务的要点，不要压缩它们），并严格遵守格式约束：\n- 必须包含 "### 一、你的背景故事" / "### 二、你的时间线" / "### 三、你的任务" 三个三级标题，顺序不可变。\n- 「二、你的时间线」必须独立成章、**至少 ${MIN_TIMELINE_POINTS} 个时间点**，覆盖案发前一日晚间到案发后，格式 "- **日期 时间**：地点 — 事件"。\n- 不得把行动轨迹写进背景故事或其它章节。`;
+
+  if (onProgress) onProgress("player_script", `${charName} 时间线不达标（${problem}），正在补写...`);
+  console.warn(`[builder] ${charName} 时间线不达标：${problem}，触发补写`);
+
+  try {
+    const retried = await retryFn(note);
+    const rBody = extractCharacterTimeline(retried);
+    const rPoints = rBody === null ? 0 : countTimelinePoints(rBody);
+    if (rBody !== null && rPoints > points) {
+      console.warn(`[builder] ${charName} 补写后时间点：${rPoints} 个`);
+      return retried;
+    }
+    console.warn(`[builder] ${charName} 补写仍未达标（${rPoints} 个时间点），保留原稿`);
+  } catch (e) {
+    console.warn(`[builder] ${charName} 时间线补写失败，保留原稿:`, e.message);
+  }
+  return content;
+}
+
 /**
  * 布局兜底：framework/大纲都没有布局时，
  * ① 从线索"发现地点"归纳核心场所清单（剥子位置/人名/尸体）
@@ -403,7 +470,13 @@ async function buildMurderMystery(userInput, onProgress, config) {
         + stageDirective(cfg.advancedMode, "character");
       const systemPrompt = buildCharacterSystemPrompt(ch, cfg.isPVE);
       const result = await runStage(`玩家剧本(${ch.name})`, () => generate(systemPrompt, prompt, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 }), onProgress);
-      characterResults[ch.name] = result.content;
+      // PVP 玩家剧本必须有完整时间线；PVE（玩家是侦探）按模板不写时间线，跳过校验
+      characterResults[ch.name] = cfg.isPVE
+        ? result.content
+        : await ensureTimelineComplete(ch.name, result.content, async (note) => {
+            const r = await runStage(`玩家剧本补写(${ch.name})`, () => generate(systemPrompt, prompt + note, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 }), onProgress);
+            return r.content;
+          }, onProgress);
     }
   }
 
@@ -489,7 +562,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // ========== 阶段 4.5：模块交叉校验（对照设定集，检查各模块间的逻辑一致性） ==========
   onProgress("crosscheck", "正在交叉校验各模块（人物/时间线/线索/DM手册）...");
   try {
-    const xcheck = await runModuleCrossCheck(report, frameworkSummary, fullScript);
+    const xcheck = await runModuleCrossCheck(report, frameworkSummary, fullScript, onProgress);
     report.crossCheck = xcheck;
     if (xcheck && xcheck.issues && xcheck.issues.length) {
       console.warn(`[builder] 交叉校验发现 ${xcheck.issues.length} 个问题：`, xcheck.issues.slice(0, 3).join("；"));
@@ -721,11 +794,49 @@ ${outline.relations.map(r => `- ${r.a} ↔ ${r.b}：表面 ${r.link || ""}；纠
 }
 
 /**
+ * 交叉校验送检内容：原实现只送 fullScript 前 14000 字（完整剧本约 43000 字），
+ * 后 2/3 角色的时间线从未被检查。改为"全部角色时间线章节 + 基准时间线"的结构化送检，
+ * 在同样的 token 预算内让每一节都被核对到。
+ */
+function buildCrossCheckDigest(fullScript, maxChars = 16000) {
+  const text = String(fullScript || "");
+  const lines = text.split("\n");
+  const EXCLUDE = /(故事时间线|表面时间线|真实时间线|完整时间线)/;
+  const targets = [], bases = [];
+  let owner = "";
+  for (let i = 0; i < lines.length; i++) {
+    const om = lines[i].match(/^#{2,4}\s*((?:玩家角色|NPC)\s*\d+\s*[:：].*)$/);
+    if (om) owner = om[1].trim();
+    if (!/^#{1,4}\s+.*时间线/.test(lines[i])) continue;
+    const body = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^#{1,4}\s+/.test(lines[j])) break;
+      body.push(lines[j]);
+    }
+    const content = body.join("\n").trim();
+    if (!content) continue;
+    const item = { owner: owner || "未知", anchor: lines[i].trim(), content };
+    (EXCLUDE.test(lines[i]) ? bases : targets).push(item);
+  }
+  if (!targets.length) {
+    return `${text.substring(0, maxChars)}\n\n（注：未能提取角色时间线章节，以上为剧本开头片段）`;
+  }
+  const per = Math.max(600, Math.floor((maxChars - 2500) / targets.length));
+  const L = ["## 各角色时间线（逐节送检，必须逐节与基准核对）"];
+  for (const s of targets) L.push(`\n### ${s.owner} ｜ ${s.anchor}\n${s.content.substring(0, per)}`);
+  if (bases.length) {
+    L.push("\n## 基准时间线（DM 权威，用于比对）");
+    for (const s of bases) L.push(`\n### ${s.anchor}\n${s.content.substring(0, 2500)}`);
+  }
+  return L.join("\n");
+}
+
+/**
  * 阶段 4.5：模块交叉校验
  * 生成完成后，让 LLM 以"挑剔硬核玩家"身份对照设定集，交叉检查各模块（人物剧本/时间线/线索/DM手册）
  * 之间的逻辑一致性，输出 issue 列表。只报告，不自动改写——具体修正交给 reviewer/人工。
  */
-async function runModuleCrossCheck(report, frameworkSummary, fullScript) {
+async function runModuleCrossCheck(report, frameworkSummary, fullScript, onProgress) {
   const system = `你是一位极度挑剔的硬核剧本杀玩家。给你一份已生成的剧本和它的设定集（蓝图），
 请你找出各模块之间所有的逻辑漏洞。重点核对：
 1. 人物剧本中的时间线 vs 设定集时间线骨架 vs DM手册时间线 是否互相矛盾（同一时刻不同角色说法是否冲突）
@@ -735,20 +846,25 @@ async function runModuleCrossCheck(report, frameworkSummary, fullScript) {
 5. 关键破绽/动机 vs 设定集凶手设定是否吻合
 只输出 JSON：{"ok": true, "issues": ["问题1（引用具体时间/人名/段落）", "问题2", ...]}，issues 为空数组表示无问题。`;
 
+  const digest = buildCrossCheckDigest(fullScript, 16000);
   const user = `## 设定集（权威蓝图）
 ${report.outline ? outlineToText(report.outline) : frameworkSummary.substring(0, 3000)}
 
-## 完整剧本（各部分）
-${fullScript.substring(0, 14000)}
+## 待检剧本内容（已含全部角色时间线，仅逐节截断；请对每一节都做核对）
+${digest}
 
 请逐项交叉核对，找出所有逻辑漏洞并输出 JSON：`;
 
   const result = await runStage("交叉校验", () => generate(system, user, { maxTokens: TOKENS_LIGHT, temperature: 0.2 }));
   const data = extractJsonStrict(result.content) || {};
-  return {
-    issues: Array.isArray(data.issues) ? data.issues : [],
-    ok: data.ok !== false,
-  };
+  const issues = Array.isArray(data.issues) ? data.issues : [];
+  // 让结论可见：原实现仅 console.warn，issues 无任何消费方，管理员在界面上完全看不到
+  if (onProgress) {
+    onProgress("crosscheck", issues.length
+      ? `交叉校验发现 ${issues.length} 个问题：${issues.slice(0, 3).join("；")}`
+      : "交叉校验未发现问题");
+  }
+  return { issues, ok: data.ok !== false };
 }
 
 /** 从大纲直接取角色列表（人数已被大纲锁定，不再让 LLM 自创） */
@@ -903,7 +1019,7 @@ function buildCharacterPrompt(ch, framework, index, total, isPVE, outline) {
     instructions = instructions
       .replace("{investigateTask}", `你想查明${victimName}之死的真相——结合线索与时间线推理，找出真凶`)
       .replace("{isMurdererExtra}", ch.isMurderer
-        ? `\n4. **你是凶手**：请尽可能隐藏自己的凶手身份，误导他人，直到投票结束。\n\n### 四、凶手确认（仅你可见）\n⚠️ 你就是凶手。用100-200字简要陈述你的作案经过（手法、时间地点）与对外口径。这段内容融入上方"背景故事"与"时间线"，让玩家靠线索推理而非直接读出。`
+        ? `\n4. **你是凶手**：请尽可能隐藏自己的凶手身份，误导他人，直到投票结束。\n\n### 四、凶手确认（仅你可见）\n⚠️ 你就是凶手。用 150-300 字陈述你的**真实**作案经过（手法、真实时间、地点、凶器去向）与你的对外口径。这段内容融入上方"背景故事"与"时间线"，让玩家靠线索推理而非直接读出。\n\n    **重要澄清（覆盖上一句）**：上一句只要求"真相别写成大白话"，**不是**让你把时间线写空。「二、你的时间线」必须写**对外口径（伪装时间线）**：同样完整、至少 8 个时间点，覆盖从到场到案发后的全部时段；把你离厅行凶那段时间写成对外声称的去处（例如"一直在客厅与某人争吵"），并刻意留出可被其他角色证词推翻的细节破绽。真实经过只放在「四、凶手确认」供 DM 核对，**绝不要写进时间线**。`
         : "");
   } else {
     // PVE：玩家不是凶手（凶手在NPC中），无需凶手注入，移除占位符
@@ -1565,4 +1681,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField };
+module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest };
