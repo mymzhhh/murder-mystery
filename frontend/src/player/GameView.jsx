@@ -587,7 +587,14 @@ function PhaseBar({ readyInfo, iAmReady, onReady }) {
 // ===== 阅读剧本（分页） =====
 function ReadingView({ script, char, iAmReady, onReady }) {
   const [page, setPage] = useState(0);
-  const text = script || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
+  // 兜底：剧本正文必须是字符串。服务端曾经把角色 script 对象直接返回，
+  // 拼进模板串就成了满屏 "[object Object]"——这里再挡一道，宁可显示提示也不要显示乱码。
+  const safeScript = typeof script === "string"
+    ? script
+    : (script && typeof script === "object"
+      ? (script.fullScript || script.story || script.playerScript || "")
+      : "");
+  const text = safeScript || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
   const pages = useMemo(() => {
     const arr = [];
     for (let i = 0; i < text.length; i += 360) arr.push(text.slice(i, i + 360));

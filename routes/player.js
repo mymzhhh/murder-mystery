@@ -2,6 +2,7 @@
 
 const { getRoom, getPlayers, getClues, getVotes, getChatMessages } = require("../modules/game-manager");
 const { getRedis } = require("../modules/redis-client");
+const { normalizeCharacterScript } = require("../modules/script-parser");
 
 function setupPlayerRoutes(app, authMiddleware) {
   // 可用剧本列表（从 PG 读取）
@@ -69,11 +70,16 @@ const { createGameRoom } = require("../modules/game-room-creator");
       const parsed = JSON.parse(room.parsedScript || "{}");
       const char = (parsed.characters || []).find(c => c.name === me.characterName);
       if (!char) return res.status(404).json({ error: "角色不存在" });
+      // 角色的 script 是对象（{story, secret, fullScript, ...}）而不是字符串。
+      // 历史上这里直接写 `char.script || ...`，于是返回了对象 → 前端拼字符串得到
+      // "[object Object]"，整页剧本都变成这个；同时秘密也没带出来
+      // （split 路径下秘密在 char.script.secret，char.secret 是 undefined）。
+      const { script, secret } = normalizeCharacterScript(char);
       res.json({
         characterName: char.name,
         occupation: char.occupation || "",
-        script: char.script || char.playerScript || "",
-        secret: char.secret || "",
+        script,
+        secret,
         isMurderer: !!char.isMurderer,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }

@@ -434,4 +434,37 @@ function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-module.exports = { parseScript };
+/**
+ * 把角色的 script 字段归一化成纯文本 + 秘密。
+ *
+ * 为什么需要这个函数：角色的 script 在不同来源下形态不一致，历史上踩过坑——
+ *   1) parseScript() 产出的是对象：{ story, secret, personalTimeline, fullScript, ... }
+ *   2) game-room-creator 的 split 路径产出的是对象：{ story: <playerScript>, secret }
+ *   3) 也存在直接用字符串的写法（旧数据 / 手工构造）
+ * 调用方若写 `script: char.script || ""`，第 1、2 种会拿到对象，拼进字符串就变成
+ * "[object Object]"（玩家端"阅读剧本"整页都是这个）。同一处还会漏掉秘密，
+ * 因为 split 路径下秘密在 char.script.secret，而 char.secret 是 undefined。
+ *
+ * 取正文时优先 fullScript 再 story，与 script-splitter 保存剧本时的口径保持一致，
+ * 否则同一个角色在"保存时"和"阅读时"看到的正文范围会不一样。
+ *
+ * @param {object} char 解析出的角色对象
+ * @returns {{script: string, secret: string}}
+ */
+function normalizeCharacterScript(char) {
+  if (!char) return { script: "", secret: "" };
+  const raw = char.script;
+  let text = "";
+  let secret = "";
+  if (typeof raw === "string") {
+    text = raw;
+  } else if (raw && typeof raw === "object") {
+    text = raw.fullScript || raw.story || raw.playerScript || "";
+    secret = raw.secret || "";
+  }
+  if (!text && typeof char.playerScript === "string") text = char.playerScript;
+  if (!secret && typeof char.secret === "string") secret = char.secret;
+  return { script: String(text || ""), secret: String(secret || "") };
+}
+
+module.exports = { parseScript, normalizeCharacterScript };
