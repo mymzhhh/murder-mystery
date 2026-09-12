@@ -71,11 +71,28 @@
     <div id="toneAsk"></div>
   </div>
 
+  <div class="panel critical">
+    <h2>③-B 绕过默认路由：逐个输出设备试播</h2>
+    <div class="hint" style="margin-bottom:8px">
+      如果 ③ 显示"在播放"但你听不到，说明 Chrome 把声音送进了空设备而不是音箱。
+      这里用 <code>setSinkId()</code> <b>强制指定</b>每一个输出设备逐个试，绕开默认路由。
+      <b>只要有一个设备能出声，就说明音频栈是好的，问题只是默认设备选错了。</b>
+    </div>
+    <div id="sinkList"></div>
+    <div id="sinkOut"></div>
+  </div>
+
   <div class="panel">
     <h2>② 麦克风采集</h2>
     <button id="btnMic">申请麦克风权限并采集 6 秒</button>
     <div id="micOut"></div>
     <div class="hint">点完后请在 6 秒内<b>持续对着麦克风说话</b>，音量条应有明显起伏。</div>
+    <div class="hint" style="margin-top:10px">
+      <b>逐个输入设备试采</b>：如果上面峰值是 0，说明当前默认麦克风没有送出信号。
+      这里强制指定每个输入设备单独采 4 秒，找出真正能用的那一个。
+    </div>
+    <div id="micList"></div>
+    <div id="micTryOut"></div>
   </div>
 
   <div class="panel">
@@ -208,6 +225,149 @@ async function refreshDevices() {
 }
 $('btnDev').onclick = refreshDevices;
 refreshDevices();
+
+// ---------- ③-B 逐个输出设备试播（setSinkId 绕过默认路由）----------
+// 为什么需要这一步：报告里出现过 "currentTime 在推进、paused=false、volume=1，但完全没有声音"。
+// 这说明 Chrome 的播放管线在正常工作，只是音频被送进了错误的（或空的）输出设备。
+// setSinkId 可以强制指定具体设备，从而绕开默认路由，逐个确认哪个设备真的能出声。
+let outDevices = [];
+const sinkTried = {};   // deviceId → true/false
+
+async function renderSinks() {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    outDevices = all.filter(d => d.kind === 'audiooutput');
+  } catch (e) { outDevices = []; }
+  if (!outDevices.length) {
+    $('sinkList').innerHTML = '<div class="hint bad">没有枚举到任何音频输出设备。</div>';
+    return;
+  }
+  $('sinkList').innerHTML = outDevices.map((d, i) =>
+    '<button onclick="playVia(' + i + ')">▶ ' + (d.label || ('输出设备 ' + (i + 1))).replace(/</g, '&lt;') + '</button>'
+  ).join('') + '<div class="hint">点每个按钮各试一次，然后告诉我哪个出声了。</div>';
+}
+window.playVia = async (i) => {
+  const d = outDevices[i];
+  const out = $('sinkOut');
+  const url = URL.createObjectURL(makeBeepBlob(523.25, 1.8, 44100));
+  const el = new Audio(url);
+  try {
+    if (typeof el.setSinkId === 'function') {
+      await el.setSinkId(d.deviceId);
+    } else {
+      out.innerHTML = row('setSinkId', '此浏览器不支持指定输出设备，只能走默认路由', 'warn');
+    }
+    el.volume = 1;
+    await el.play();
+    await new Promise(r => setTimeout(r, 700));
+    out.innerHTML =
+      row('正在试播', (d.label || ('输出设备 ' + (i + 1))) + '　[deviceId=' + String(d.deviceId).slice(0, 10) + '…]') +
+      row('currentTime', el.currentTime.toFixed(2) + 's', el.currentTime > 0.2 ? 'ok' : 'bad') +
+      row('setSinkId 结果', String(el.sinkId || '默认').slice(0, 24), '') +
+      '<div class="ask">这个设备出声了吗？' +
+      '<button class="good" onclick="markSink(' + i + ',true)">听到了</button>' +
+      '<button class="bad" onclick="markSink(' + i + ',false)">没听到</button></div>';
+    note('sink[' + (d.label || i) + ']: currentTime=' + el.currentTime.toFixed(2) + ' sinkId=' + el.sinkId);
+  } catch (e) {
+    out.innerHTML = row('正在试播', d.label || ('输出设备 ' + (i + 1))) +
+                    row('失败', (e && e.name ? e.name + '：' : '') + (e && e.message || e), 'bad');
+    note('sink[' + (d.label || i) + ']: 失败 ' + (e && e.name) + ' ' + (e && e.message));
+  }
+  setTimeout(() => URL.revokeObjectURL(url), 6000);
+};
+window.markSink = (i, ok) => {
+  const d = outDevices[i];
+  const key = d.label || d.deviceId;
+  sinkTried[key] = ok;
+  note('sink确认[' + key + ']: ' + (ok ? '听到了' : '没听到'));
+  const worked = Object.keys(sinkTried).filter(k => sinkTried[k]);
+  const allTried = Object.keys(sinkTried).length === outDevices.length;
+  let extra = '';
+  if (worked.length) {
+    extra = '<div class="hint ok">有设备能出声：<b>' + worked.join('、') + '</b>。' +
+      '说明 Chrome 音频栈是好的，只是<b>默认输出设备选错了</b>。' +
+      '在 Windows「设置 → 系统 → 声音」里把默认输出设备改成它，语音就能听到。</div>';
+    results['扬声器播放'] = true;
+  } else if (allTried) {
+    extra = '<div class="hint bad">所有输出设备逐个试过都没声音。问题在 Windows 音频层，不在网页。' +
+      '按顺序检查：<ul>' +
+      '<li>Realtek Audio Console / Nahimic / Sonic Studio / Waves MaxxAudio 这类音效软件里，' +
+      '<b>是不是把浏览器单独静音了</b>（这类软件按应用分别控制音量，是这台机器最可能的原因）。</li>' +
+      '<li>Windows「设置 → 系统 → 声音 → 音量合成器」：确认 Chrome/Edge 这一项没被拉到 0 或静音。</li>' +
+      '<li>Windows 声音设置里的<b>「单声道音频」「音频增强」</b>开关，试着切换一下。</li>' +
+      '<li>把默认输出设备在「扬声器」和「通讯 - 扬声器」之间切换试试。</li>' +
+      '<li>重启 Windows 音频服务（任务管理器 → 服务 → Audiosrv / AudioEndpointBuilder → 重新启动）。</li>' +
+      '<li>完全退出 Chrome 再重开（音频服务进程可能已经坏了）。</li>' +
+      '</ul></div>';
+  }
+  $('sinkOut').insertAdjacentHTML('beforeend', '<div class="hint">已记录：' + key + ' → ' +
+    (ok ? '听到了' : '没听到') + '</div>' + extra);
+  summary();
+};
+renderSinks();
+
+// ---------- ②-B 逐个输入设备试采 ----------
+let inDevices = [];
+async function renderMics() {
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    inDevices = all.filter(d => d.kind === 'audioinput');
+  } catch (e) { inDevices = []; }
+  if (!inDevices.length) {
+    $('micList').innerHTML = '<div class="hint bad">没有枚举到任何音频输入设备。</div>';
+    return;
+  }
+  $('micList').innerHTML = inDevices.map((d, i) =>
+    '<button onclick="tryMic(' + i + ')">🎤 ' + (d.label || ('输入设备 ' + (i + 1))).replace(/</g, '&lt;') + '</button>'
+  ).join('') + '<div class="hint">每个按钮会采 4 秒，请在采集期间持续说话。</div>';
+}
+window.tryMic = async (i) => {
+  const d = inDevices[i];
+  const out = $('micTryOut');
+  const ctx = makeCtx();
+  out.innerHTML = row('正在试采', d.label || ('输入设备 ' + (i + 1))) + '<div class="hint" id="tryPrompt"><b>请现在持续说话…</b></div>';
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: d.deviceId } } });
+  } catch (e) {
+    out.innerHTML = row('正在试采', d.label || ('输入设备 ' + (i + 1))) +
+                    row('失败', (e && e.name ? e.name + '：' : '') + (e && e.message || e), 'bad');
+    note('mic[' + (d.label || i) + ']: getUserMedia 失败 ' + (e && e.name));
+    if (ctx) ctx.close().catch(() => {});
+    return;
+  }
+  const track = stream.getAudioTracks()[0];
+  const st = await ensureRunning(ctx);
+  // 设备信息要在 stop() 之前取，停掉之后可能拿不到
+  const settings = (track.getSettings && track.getSettings()) || {};
+  let peak = 0, tick = null;
+  if (ctx && st === 'running') {
+    try {
+      const an = ctx.createAnalyser(); an.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      tick = setInterval(() => { peak = Math.max(peak, rmsOf(an, buf)); }, 80);
+    } catch (e) { /* ignore */ }
+  }
+  let left = 4;
+  const cd = setInterval(() => {
+    left--;
+    const el = $('tryPrompt');
+    if (el && left > 0) el.innerHTML = '<b>请现在持续说话… 还剩 ' + left + ' 秒</b>';
+  }, 1000);
+  setTimeout(() => {
+    clearInterval(tick); clearInterval(cd);
+    stream.getTracks().forEach(x => x.stop());
+    if (ctx) ctx.close().catch(() => {});
+    const ok = peak > 0.02;
+    out.innerHTML = row('试采设备', (d.label || ('输入设备 ' + (i + 1))) + '　[deviceId=' + String(d.deviceId).slice(0, 10) + '…]') +
+      row('音轨信息', 'readyState=' + track.readyState + ' muted=' + track.muted + ' 设置=' + JSON.stringify(settings)) +
+      row('峰值音量', peak.toFixed(4), ok ? 'ok' : 'bad') +
+      (ok ? '<div class="hint ok">这个麦克风能用！在 Windows「设置 → 系统 → 声音 → 输入」里把它设为默认输入设备。</div>'
+          : '<div class="hint bad">这个设备也采不到声音。</div>');
+    note('mic[' + (d.label || i) + ']: peak=' + peak.toFixed(4) + ' readyState=' + track.readyState + ' muted=' + track.muted);
+  }, 4000);
+};
 
 // ---------- ③ 扬声器（两条路径 + 人工确认）----------
 // 说明：旧版本这里只要 play() 没抛异常就记"通过"，从不验证用户是否真的听到，
@@ -427,8 +587,10 @@ $('btnMic').onclick = async () => {
     else if (!ok) out.insertAdjacentHTML('beforeend', '<div class="hint bad">音轨正常但 6 秒内几乎没采到声音。检查系统输入设备、麦克风物理静音开关、Windows 隐私设置，以及你是否真的说话了。</div>');
     summary();
     refreshDevices();  // 授权后再枚举一次，这时能看到设备名
+    renderMics();      // 并列出可逐个试采的输入设备
   }, 6000);
 };
+renderMics();
 
 // ---------- ④ WebRTC 回环 ----------
 let loopStream = null;
