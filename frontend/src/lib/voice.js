@@ -27,6 +27,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   let speakTimer = null;
   let audioCtx = null;
   let micFallbackToRaw = false; // 是否因数字静音退回了原始采集（诊断用）
+  let micSilent = false;        // 麦克风在系统层就采不到声音（诊断用）
 
   const notify = (msg) => { if (onError) onError(msg); };
   const emitPeers = () => { if (onPeers) onPeers(listPeerStates()); };
@@ -160,11 +161,17 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   }
 
   // ---------- 对外 API ----------
-  /** 判断一条采集流是不是"数字静音"：整段窗口里采样值恒为 0。
-   *  真实的房间总有底噪，精确的 0 说明音频管线根本没送出数据
-   *  （Intel 智音一类声卡配上 Chrome 的音频处理时有这个已知问题）。
-   *  注意：音频上下文没跑起来时分析器恒读 0，那种情况必须返回 false，否则会误判。 */
+  /** 判断一条采集流是不是"系统层没送数据"。
+   *  必须同时满足两个条件：
+   *    1) track.muted === true —— 浏览器明确表示这个源当前没有数据；
+   *    2) 整段窗口采样值恒为 0 —— 拿到的是精确的数字静音。
+   *  只用第 2 条会误报：安静的房间里、说话之前，头一两秒本来就可能是精确的 0，
+   *  那会把"你还没开口"错判成"你的麦克风坏了"，弹出吓人的错误提示。
+   *  track.muted 是权威信号，先查它可以把这类误报挡掉（正常麦克风未说话时 muted 为 false）。
+   *  另外，音频上下文没跑起来时分析器恒读 0，那种情况直接返回 false。 */
   async function isDigitallySilent(stream, ms) {
+    const track = stream.getAudioTracks()[0];
+    if (!track || track.muted !== true) return false;
     const ctx = ensureAudioCtx();
     if (!ctx || ctx.state !== "running") return false;
     let an;
@@ -183,24 +190,35 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
     return true;
   }
 
-  /** 采集麦克风。先用带音频处理的参数（语音聊天需要回声消除），
-   *  如果是数字静音则自动退回不做处理的原始采集 —— 否则表现为"麦克风已开但谁都说听不到你"。 */
+  /** 采集麦克风。先用带音频处理的参数（语音聊天需要回声消除）。
+   *  如果检测到"数字静音"，会试一次不带处理的原始采集，但**只有在原始采集确实能收到声音时才采用**——
+   *  实测（Intel 智音那台机器）四组参数全部 muted=true，关掉音频处理并不能解决，
+   *  说明那种情况是系统层没送数据，不是处理参数的问题。此时必须保留原流并给出准确提示，
+   *  而不是换成一样静音的原始流、还告诉用户"已自动修复"。 */
   async function acquireMic() {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
-    if (await isDigitallySilent(stream, 1200)) {
-      try {
-        const alt = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-        });
-        stream.getTracks().forEach(t => t.stop());
-        micFallbackToRaw = true;
-        notify("检测到麦克风采不到声音（声卡与浏览器音频处理不兼容），已自动改用原始采集方式");
-        return alt;
-      } catch (e) { /* 退回失败就继续用原流 */ }
+    if (!(await isDigitallySilent(stream, 1200))) return stream;
+
+    try {
+      const alt = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      if (await isDigitallySilent(alt, 1200)) {
+        // 原始采集同样是静音 → 与音频处理无关，是系统层问题。保留原流，不要误导用户。
+        alt.getTracks().forEach(t => t.stop());
+        micSilent = true;
+        notify("麦克风采不到任何声音：系统没有向浏览器送出音频数据（不是浏览器设置问题）。请检查系统麦克风隐私开关、输入设备是否被静音、以及麦克风是否真的接上了");
+        return stream;
+      }
+      stream.getTracks().forEach(t => t.stop());
+      micFallbackToRaw = true;
+      notify("检测到带音频处理时采不到声音，已自动改用原始采集方式");
+      return alt;
+    } catch (e) {
+      return stream;
     }
-    return stream;
   }
 
   async function setMic(on) {
@@ -344,6 +362,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
       localTracks: localTracks.map(t => ({ label: t.label || "(未授权时无标签)", enabled: t.enabled, muted: t.muted, readyState: t.readyState })),
       audioCtx: audioCtx ? audioCtx.state : "未创建",
       micFallbackToRaw,
+      micSilent,
       peers: [...peers.values()].map(p => {
         const stream = p.audio.srcObject;
         const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
