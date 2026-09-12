@@ -39,7 +39,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>语音功能自检 <span style="font-size:12px;color:#ef6c00;border:1px solid #7a4a00;border-radius:4px;padding:1px 6px">v4</span></h1>
+  <h1>语音功能自检 <span style="font-size:12px;color:#ef6c00;border:1px solid #7a4a00;border-radius:4px;padding:1px 6px">v5</span></h1>
   <div class="sub">
     每一步只判定自己那一项，互不依赖。<b>顺序很重要</b>：③ 是基础，
     听不到测试音的话，后面都不用看了 —— 声音根本出不来。
@@ -93,6 +93,14 @@
     </div>
     <div id="micList"></div>
     <div id="micTryOut"></div>
+    <div class="hint" style="margin-top:10px">
+      <b>约束组合测试（重要）</b>：Intel 智音这类声卡上，Chrome 的音频处理
+      （回声消除 / 降噪 / 自动增益）会导致麦克风采到<b>纯静音</b>，是已知问题。
+      这里用同一台设备跑 4 组不同约束，共约 12 秒，<b>请全程持续说话</b>，
+      看是哪一组能采到声音。
+    </div>
+    <button id="btnPresets">▶ 开始约束组合测试（4 组 × 3 秒）</button>
+    <div id="presetOut"></div>
   </div>
 
   <div class="panel">
@@ -338,8 +346,6 @@ window.tryMic = async (i) => {
   }
   const track = stream.getAudioTracks()[0];
   const st = await ensureRunning(ctx);
-  // 设备信息要在 stop() 之前取，停掉之后可能拿不到
-  const settings = (track.getSettings && track.getSettings()) || {};
   let peak = 0, tick = null;
   if (ctx && st === 'running') {
     try {
@@ -357,16 +363,117 @@ window.tryMic = async (i) => {
   }, 1000);
   setTimeout(() => {
     clearInterval(tick); clearInterval(cd);
+    // ⚠️ 这些必须在 stop() 之前读。之前写在 stop() 之后，拿到的是必然的
+    // readyState=ended / muted=true，毫无诊断价值，反而会误导排查方向。
+    const settings = (track.getSettings && track.getSettings()) || {};
+    const readyState = track.readyState;
+    const muted = track.muted;
     stream.getTracks().forEach(x => x.stop());
     if (ctx) ctx.close().catch(() => {});
     const ok = peak > 0.02;
     out.innerHTML = row('试采设备', (d.label || ('输入设备 ' + (i + 1))) + '　[deviceId=' + String(d.deviceId).slice(0, 10) + '…]') +
-      row('音轨信息', 'readyState=' + track.readyState + ' muted=' + track.muted + ' 设置=' + JSON.stringify(settings)) +
+      row('采集中的音轨状态', 'readyState=' + readyState + ' muted=' + muted, muted ? 'bad' : 'ok') +
+      row('采集中的实际参数', JSON.stringify(settings)) +
       row('峰值音量', peak.toFixed(4), ok ? 'ok' : 'bad') +
       (ok ? '<div class="hint ok">这个麦克风能用！在 Windows「设置 → 系统 → 声音 → 输入」里把它设为默认输入设备。</div>'
-          : '<div class="hint bad">这个设备也采不到声音。</div>');
-    note('mic[' + (d.label || i) + ']: peak=' + peak.toFixed(4) + ' readyState=' + track.readyState + ' muted=' + track.muted);
+          : '<div class="hint bad">这个设备采不到声音（' + (muted ? '音轨处于 muted 状态，说明系统层没在送数据' : '音轨正常但无信号') + '）。</div>');
+    note('mic[' + (d.label || i) + ']: peak=' + peak.toFixed(4) + ' readyState=' + readyState + ' muted=' + muted + ' settings=' + JSON.stringify(settings));
   }, 4000);
+};
+
+// ---------- ②-C 约束组合测试 ----------
+// 针对 Intel 智音 + Chrome 音频处理导致纯静音的已知问题：
+// 同一台设备用不同约束各采一次，看哪一组能拿到信号。
+const MIC_PRESETS = [
+  { name: '不加任何约束', c: true },
+  { name: '关闭音频处理（echoCancellation/noiseSuppression/autoGainControl 全 false）',
+    c: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } },
+  { name: '游戏内当前使用的设置（三项全开）',
+    c: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
+  { name: '强制 48000Hz 单声道',
+    c: { sampleRate: 48000, channelCount: 1 } },
+];
+
+async function measureMic(constraints, seconds) {
+  const ctx = makeCtx();
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+  } catch (e) {
+    if (ctx) ctx.close().catch(() => {});
+    return { error: (e && e.name ? e.name + '：' : '') + (e && e.message || e) };
+  }
+  const track = stream.getAudioTracks()[0];
+  const st = await ensureRunning(ctx);
+  let peak = 0, tick = null;
+  if (ctx && st === 'running') {
+    try {
+      const an = ctx.createAnalyser(); an.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      tick = setInterval(() => { peak = Math.max(peak, rmsOf(an, buf)); }, 80);
+    } catch (e) { /* ignore */ }
+  }
+  await new Promise(r => setTimeout(r, seconds * 1000));
+  // 同样必须在 stop() 之前取值
+  const settings = (track.getSettings && track.getSettings()) || {};
+  const readyState = track.readyState;
+  const muted = track.muted;
+  clearInterval(tick);
+  stream.getTracks().forEach(x => x.stop());
+  if (ctx) ctx.close().catch(() => {});
+  return { peak, settings, readyState, muted };
+}
+
+$('btnPresets').onclick = async () => {
+  const out = $('presetOut');
+  $('btnPresets').disabled = true;
+  out.innerHTML = '<div class="hint" id="presetPrompt"><b>开始，请全程对着麦克风持续说话…</b></div>';
+  const rows = [];
+  let anyWorked = false, gameWorked = null;
+  for (let i = 0; i < MIC_PRESETS.length; i++) {
+    const p = MIC_PRESETS[i];
+    const el = $('presetPrompt');
+    if (el) el.innerHTML = '<b>第 ' + (i + 1) + '/' + MIC_PRESETS.length + ' 组：' + p.name + '　请持续说话…</b>';
+    const r = await measureMic(p.c, 3);
+    if (r.error) {
+      rows.push(row('第 ' + (i + 1) + ' 组：' + p.name, '失败 ' + r.error, 'bad'));
+      note('preset[' + i + '] ' + p.name + ': 失败 ' + r.error);
+    } else {
+      const ok = r.peak > 0.02;
+      if (ok) anyWorked = true;
+      if (i === 2) gameWorked = ok;
+      rows.push(row('第 ' + (i + 1) + ' 组：' + p.name,
+        '峰值=' + r.peak.toFixed(4) + '　readyState=' + r.readyState + '　muted=' + r.muted +
+        '　实际参数=' + JSON.stringify(r.settings), ok ? 'ok' : 'bad'));
+      note('preset[' + i + '] ' + p.name + ': peak=' + r.peak.toFixed(4) + ' muted=' + r.muted + ' settings=' + JSON.stringify(r.settings));
+    }
+    out.innerHTML = rows.join('');
+    await new Promise(r2 => setTimeout(r2, 300));
+  }
+
+  // 结论：直接指向该改代码还是改系统设置
+  let verdict;
+  if (!anyWorked) {
+    verdict = '<div class="hint bad">四组全部采不到声音 —— 说明不是音频处理参数的问题，' +
+      '而是系统层根本没把麦克风信号交给 Chrome。请先用 Windows 自带工具验证：' +
+      '<b>设置 → 系统 → 声音 → 输入</b>，对着麦克风说话看音量条动不动；' +
+      '或用 Windows「录音机」录一段。<b>那边也无声 → 是 Windows/驱动/硬件静音问题</b>；' +
+      '那边正常 → 完全退出 Chrome（任务管理器里结束所有 chrome.exe）再重开。</div>';
+  } else if (gameWorked === false) {
+    verdict = '<div class="hint warn"><b>找到了：关闭音频处理后能采到声音，但游戏当前使用的设置采不到。</b>' +
+      '这是 Intel 智音一类声卡上的已知问题。我把游戏内的采集参数改成关闭音频处理后即可解决 —— ' +
+      '请把这份报告发给我确认。</div>';
+  } else {
+    verdict = '<div class="hint ok">游戏当前使用的设置本身就能采到声音。' +
+      '那么麦克风问题是间歇性的（可能被其他程序占用，或 Chrome 输入流卡住），' +
+      '建议完全退出 Chrome 后重开再试。</div>';
+  }
+  out.innerHTML = rows.join('') + verdict;
+  const el = $('presetPrompt'); if (el) el.remove();
+  $('btnPresets').disabled = false;
+  $('btnPresets').textContent = '重新跑一遍约束组合测试';
+  summary();
 };
 
 // ---------- ③ 扬声器（两条路径 + 人工确认）----------
@@ -686,9 +793,9 @@ $('btnLoop').onclick = async () => {
 // ---------- 诊断报告 ----------
 $('btnCopy').onclick = async () => {
   const lines = [
-    '=== 语音自检报告 v4 ===',
+    '=== 语音自检报告 v5 ===',
     '时间: ' + new Date().toISOString(),
-    '页面版本: v4',
+    '页面版本: v5',
     'UA: ' + navigator.userAgent,
     '--- 明细 ---',
     ...log,

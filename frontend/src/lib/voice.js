@@ -26,6 +26,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   let closed = false;
   let speakTimer = null;
   let audioCtx = null;
+  let micFallbackToRaw = false; // 是否因数字静音退回了原始采集（诊断用）
 
   const notify = (msg) => { if (onError) onError(msg); };
   const emitPeers = () => { if (onPeers) onPeers(listPeerStates()); };
@@ -159,6 +160,49 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   }
 
   // ---------- 对外 API ----------
+  /** 判断一条采集流是不是"数字静音"：整段窗口里采样值恒为 0。
+   *  真实的房间总有底噪，精确的 0 说明音频管线根本没送出数据
+   *  （Intel 智音一类声卡配上 Chrome 的音频处理时有这个已知问题）。
+   *  注意：音频上下文没跑起来时分析器恒读 0，那种情况必须返回 false，否则会误判。 */
+  async function isDigitallySilent(stream, ms) {
+    const ctx = ensureAudioCtx();
+    if (!ctx || ctx.state !== "running") return false;
+    let an;
+    try {
+      an = ctx.createAnalyser();
+      an.fftSize = 512;
+      ctx.createMediaStreamSource(stream).connect(an);
+    } catch (e) { return false; }
+    const buf = new Uint8Array(an.fftSize);
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline) {
+      an.getByteTimeDomainData(buf);
+      for (let i = 0; i < buf.length; i++) if (buf[i] !== 128) return false; // 有任何波动就不算静音
+      await new Promise(r => setTimeout(r, 60));
+    }
+    return true;
+  }
+
+  /** 采集麦克风。先用带音频处理的参数（语音聊天需要回声消除），
+   *  如果是数字静音则自动退回不做处理的原始采集 —— 否则表现为"麦克风已开但谁都说听不到你"。 */
+  async function acquireMic() {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    if (await isDigitallySilent(stream, 1200)) {
+      try {
+        const alt = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        stream.getTracks().forEach(t => t.stop());
+        micFallbackToRaw = true;
+        notify("检测到麦克风采不到声音（声卡与浏览器音频处理不兼容），已自动改用原始采集方式");
+        return alt;
+      } catch (e) { /* 退回失败就继续用原流 */ }
+    }
+    return stream;
+  }
+
   async function setMic(on) {
     if (closed) return;
     if (on) {
@@ -173,11 +217,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
         return micOn;
       }
       try {
-        if (!localStream) {
-          localStream = await navigator.mediaDevices.getUserMedia({
-            audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-          });
-        }
+        if (!localStream) localStream = await acquireMic();
         const track = localStream.getAudioTracks()[0];
         // 关麦时把 track.enabled 置了 false，重开必须显式恢复，否则"麦克风已开"但实际是静音的
         if (track) track.enabled = true;
@@ -303,6 +343,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
       localStream: !!localStream,
       localTracks: localTracks.map(t => ({ label: t.label || "(未授权时无标签)", enabled: t.enabled, muted: t.muted, readyState: t.readyState })),
       audioCtx: audioCtx ? audioCtx.state : "未创建",
+      micFallbackToRaw,
       peers: [...peers.values()].map(p => {
         const stream = p.audio.srcObject;
         const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
