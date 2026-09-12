@@ -561,8 +561,15 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // framework 初稿的角色名/凶手/时间体系可能与大纲锁定后的最终设定不一致（历史发生了
   // "柳寒山vs陈风""素心vs小翠"污染）；因此 framework 只用于组装成稿，绝不再注入生成 prompt，
   // 彻底杜绝旧设定污染下游剧本。
+  // 权威时间轴：统一所有角色的时间基准。历史缺陷：各角色各自推算且大半不标注，
+  // 同一个数字在不同角色嘴里代表不同真实时刻，核心破绽因此无法被读懂。
+  // ⚠️ 必须放在 blueprintCtx 的**最前面**：下游 buildCharacterPrompt 用
+  // substring(0,8000)、buildNpcPrompt 用 substring(0,6000) 截断，而 blueprintCtx
+  // （outlineToText + buildStructuredSummary，后者又重复包含一次 outlineToText）
+  // 远超该上限——追加在末尾会被整段截掉。
+  const timeAxis = buildTimeAxis(report.outline);
   let blueprintCtx = report.outline
-    ? outlineToText(report.outline) + "\n\n" + buildStructuredSummary(report)
+    ? (timeAxis ? timeAxis + "\n\n" : "") + outlineToText(report.outline) + "\n\n" + buildStructuredSummary(report)
     : report.framework;
   // 布局方位描述（若已生成）注入所有角色剧本——让角色时间线带空间视角
   // （"我站在苏婉房间门口，能看见柳惊鸿从他房间出来"），与场景布局互相印证
@@ -632,6 +639,12 @@ async function buildMurderMystery(userInput, onProgress, config) {
     let cluesPrompt = stages.clues.replace("{frameworkSummary}", frameworkSummary.substring(0, 6000));
     cluesPrompt = cluesPrompt.replace("{layoutPlaces}", layoutLine);
     cluesPrompt += stageDirective(cfg.advancedMode, "clues");
+    // 时间类诡计：强制要求"可被玩家实际获取"的锚点线索。
+    // 实测反例《钟楼诡影》：全案只有一口被拨快的座钟，花园那口是停摆的（停摆钟不能作基准），
+    // 唯一能测出时差的怀表没有任何线索卡 → 核心诡计在物证上不可观测。
+    if (buildTimeAxis(report.outline)) {
+      cluesPrompt += `\n\n## ⚠️ 时间类诡计的硬性线索要求（本剧本核心诡计涉及公共时钟，**必须满足**）\n- 必须设计 **至少 1 条能独立锚定"真实时间"的线索**（如：某人的怀表/手表读数、有客观时间戳的记录、法医对死亡时间的判定），并给出**具体读数或区间**。\n- **禁止用"停摆的钟"单独充当时间基准**——停摆的钟只能说明它停在哪一刻，不能证明公共时钟快/慢。\n- 必须设计 **至少 1 条直接描述公共时钟本身异常的线索**（如：机芯有近期拨动痕迹、钟面与可靠时间源对不上、有人提及"钟好像不太准"）。\n- 以上线索一律客观描述读数与痕迹，禁止出现"这证明座钟被拨快"这类结论句。`;
+    }
     const cluesResult = await runStage("clues", () => generate(getCluesSystemPrompt(), cluesPrompt, { maxTokens: TOKENS_LIGHT }), onProgress);
     // 校验：物理线索发现地点归一化到布局真实地点
     const norm = normalizeClueLocations(cluesResult.content, layoutPlaces);
@@ -639,6 +652,20 @@ async function buildMurderMystery(userInput, onProgress, config) {
       console.warn(`[builder] 线索地点校验：归一 ${norm.fixed} 条 / 豁免 ${norm.skipped} 条`);
     }
     report.clues = norm.text;
+    // 诡计可观测性校验：时间类诡计必须留下可被玩家实际获取的锚点
+    const obs = checkTrickObservability(report, report.outline);
+    if (obs.needed) {
+      const miss = [
+        !obs.hasIndependent && "缺少独立时间源（怀表/手表读数、死亡时间判定、时间戳）",
+        !obs.hasClockAnomaly && "缺少公共时钟本身的异常线索",
+      ].filter(Boolean);
+      if (miss.length) {
+        console.warn(`[builder] 诡计可观测性不足：${miss.join("；")}`);
+        onProgress("clues", `⚠️ 诡计可观测性不足：${miss.join("；")}——玩家将无法证明时钟被动过手脚`);
+      } else {
+        onProgress("clues", "诡计可观测性校验通过（含独立时间源 + 时钟异常线索）");
+      }
+    }
   } catch (e) {
     console.error("[clues] 生成失败:", e.message, e.name, e.status);
     throw new Error("线索系统生成失败: " + (e.message || "未知错误"));
@@ -919,6 +946,96 @@ ${outline.relations.map(r => `- ${r.a} ↔ ${r.b}：表面 ${r.link || ""}；纠
   return L.join("\n");
 }
 
+// ==================== 权威时间轴（时间基准统一） ====================
+
+/**
+ * 从核心诡计说明书解析公共时钟相对真实时间的偏移（分钟）。
+ * @returns {{offsetMin:number, slow:boolean}|null}
+ */
+function parseTimeOffset(outline) {
+  const ts = (outline && outline.trickSpec) || {};
+  const text = [ts.trick, ts.type, ts.mechanism, ts.conceal, outline && outline.coreTrick].filter(Boolean).join(" ");
+  if (!text) return null;
+  const m = text.match(/(拨快|调快|拨慢|调慢|提前|延后|快|慢)[^。；，,\n]{0,12}?(\d{1,3})\s*分钟/)
+    || text.match(/(\d{1,3})\s*分钟[^。；，,\n]{0,12}?(拨快|调快|拨慢|调慢|提前|延后|快|慢)/);
+  if (m) {
+    // 方向必须取自"紧邻数字的那个词"，不能扫全文——
+    // 实测大纲里 type 写"钟表调慢"而 mechanism 写"调快约15分钟"，扫全文会把方向判反。
+    const kw = m[1] || m[2] || "";
+    const slow = /(慢|延后)/.test(kw);
+    const n = parseInt(m[2], 10);
+    if (Number.isFinite(n) && n > 0 && n <= 12 * 60) return { offsetMin: n, slow };
+  }
+  const m2 = text.match(/(\d{1,3})\s*分钟(?:的)?(?:时差|时间差)/);
+  if (m2) {
+    const n = parseInt(m2[1], 10);
+    // 仅有"时差"未指明方向时：无"快"且有"慢"才判为慢，否则默认快
+    if (Number.isFinite(n) && n > 0 && n <= 12 * 60) return { offsetMin: n, slow: !/快/.test(text) && /慢/.test(text) };
+  }
+  return null;
+}
+
+/** 把 "HH:MM" 或 "HH:MM-HH:MM" 按偏移量平移；无法解析返回 null */
+function shiftClock(timeStr, deltaMin) {
+  const one = (s) => {
+    const m = String(s).trim().match(/^(\d{1,2})\s*[:：]\s*(\d{2})$/);
+    if (!m) return null;
+    let total = (parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + deltaMin) % (24 * 60);
+    if (total < 0) total += 24 * 60;
+    return String(Math.floor(total / 60)).padStart(2, "0") + ":" + String(total % 60).padStart(2, "0");
+  };
+  const parts = String(timeStr).split(/\s*[-–—~至]\s*/);
+  if (parts.length === 2) {
+    const a = one(parts[0]), b = one(parts[1]);
+    if (a && b) return `${a}-${b}`;
+  }
+  return one(String(timeStr)) || null;
+}
+
+/**
+ * 权威时间轴：把大纲的时间线骨架（真实时间）按诡计偏移展开成「真实 ↔ 座钟」对照表。
+ * 历史缺陷：各角色各自推算、且大半不标注基准，同一个数字在不同角色嘴里代表不同真实时刻，
+ * 导致核心破绽（某人以真实时间为准的目击 vs 凶手以座钟时间为准的说辞）无法被读懂。
+ * 该文本注入所有角色 prompt，保证所有角色取同一张表的值。
+ */
+function buildTimeAxis(outline) {
+  const off = parseTimeOffset(outline);
+  if (!off) return "";
+  const delta = off.slow ? -off.offsetMin : off.offsetMin;
+  const L = [];
+  L.push("## 权威时间轴（最高优先级 — 所有角色的时间线必须严格以此为准，禁止自行推算或改动）");
+  L.push(`- 案发当日，公共时钟（大厅座钟）比真实时间${off.slow ? "慢" : "快"} ${off.offsetMin} 分钟：**座钟时间 = 真实时间${delta > 0 ? " + " : " − "}${off.offsetMin} 分钟**。`);
+  L.push("- **每条时间线条目都必须标注时间来源**，格式：`【座钟】21:30` 或 `【真实】21:15`；两者都清楚时写 `【真实】21:15（座钟21:30）`。禁止写不带来源的裸时间。");
+  L.push("- 角色只能引用自己**当时实际可能看到的时间源**：普通人只看到座钟（写【座钟】）；持有怀表/手表者可看到真实时间（写【真实】）；凶手两者都知道。");
+  L.push("- 下方对照表为 DM 权威，角色剧本中的同一事件必须与之吻合；若你扮演的角色当时不可能知道该换算，就只写自己看到的那一侧。");
+  const rows = (outline.timeline || []).map(t => {
+    const clock = shiftClock(t.time, delta) || "—";
+    return `| ${t.time} | ${clock} | ${String(t.desc || "").replace(/\|/g, "/").slice(0, 60)} |`;
+  });
+  if (rows.length) {
+    L.push("");
+    L.push("| 真实时间 | 座钟显示 | 事件（DM 权威） |");
+    L.push("|---|---|---|");
+    L.push(...rows);
+  }
+  return L.join("\n");
+}
+
+/**
+ * 诡计可观测性校验：时间类诡计必须留下「可被玩家实际获取」的锚点，否则无人能证明
+ * 公共时钟是错的（实测《钟楼诡影》：全案只有一口被拨快的座钟，花园那口是停摆的，
+ * 唯一能测出时差的怀表没有线索卡 → 核心诡计在物证上不可观测，只能靠猜人）。
+ */
+function checkTrickObservability(report, outline, fullScript) {
+  const axis = buildTimeAxis(outline);
+  if (!axis) return { needed: false, ok: true };
+  const clues = String((report && report.clues) || "");
+  const text = clues + "\n" + String(fullScript || "");
+  const hasIndependent = /怀表|手表|腕表|秒表|死亡时间|尸温|尸僵|时间戳|报时|邮戳|电报/.test(text);
+  const hasClockAnomaly = /(座钟|时钟|挂钟|铜钟)[^。\n]{0,40}(拨|调|快|慢|不准|走时|机芯|痕迹|齿轮|对不上|不一致)/.test(text);
+  return { needed: true, hasIndependent, hasClockAnomaly, ok: hasIndependent && hasClockAnomaly };
+}
+
 /**
  * 交叉校验送检内容：原实现只送 fullScript 前 14000 字（完整剧本约 43000 字），
  * 后 2/3 角色的时间线从未被检查。改为"全部角色时间线章节 + 基准时间线"的结构化送检，
@@ -1157,7 +1274,9 @@ function buildCharacterPrompt(ch, framework, index, total, isPVE, outline) {
   if (outline) {
     const allNames = [...(outline.players || []).map(p => p.name), ...(outline.npcs || []).map(n => n.name)]
       .filter(Boolean).join("、");
-    constr = `\n\n## ⚠️ 设定集硬约束（最高优先级）
+    // 权威时间轴属于最高优先级硬约束（不能混在"仅供参考"的背景里）
+    const axis = buildTimeAxis(outline);
+    constr = `${axis ? axis + "\n\n" : ""}\n\n## ⚠️ 设定集硬约束（最高优先级）
 - 本剧本唯一有效角色名单：${allNames}（死者：${outline.victim?.name || ""}）。严禁出现名单之外的角色名（framework 初稿中不在名单内的旧角色一律作废）。
 - 你的名字：「${ch.name}」，身份「${ch.occupation || outline.players?.find(p => p.name === ch.name)?.identity || ""}」。
 - 若你是侦探（PVE），本案真凶在其中一名NPC中（${outline.murderer?.name || "见设定集"}）；你掌握的信息见你的剧本，不要直接读出真凶名字。`;
@@ -1257,8 +1376,9 @@ function buildNpcPrompt(ch, framework, index, total, isPVE, npcCount, outline) {
 此节仅供DM掌握真相，不会被玩家直接看到。`
       : "");
 
+  const npcAxis = buildTimeAxis(outline);
   const hardConstraint = outline
-    ? `\n\n## ⚠️ 最终名单硬约束（最高优先级，必须严格遵守）
+    ? `${npcAxis ? npcAxis + "\n\n" : ""}\n\n## ⚠️ 最终名单硬约束（最高优先级，必须严格遵守）
 - 本剧本的唯一有效角色名单为：${allNames}（死者：${outline.victim?.name || ""}）。**严禁出现名单外的名字**（framework 初稿中的角色名如与名单不符一律作废，不得使用）。
 - 你的名字是「${ch.name}」。全剧本（人物关系/时间线/秘密）**只能以你自己的视角和行动为主语**撰写，不要写其他角色的详细时间线。
 - 真凶是「${murdererName || "见设定集"}」，与设定集一致。若你不是真凶，请在"时间线/秘密"中体现你的可疑与清白并存；若你是真凶（见第五节），时间线必须还原你的作案过程。`
@@ -1807,4 +1927,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt };
+module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability };
