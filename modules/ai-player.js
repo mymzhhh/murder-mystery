@@ -230,7 +230,8 @@ async function actIntro(io, roomCode, ai) {
 
   const who = ai.characterName || "AI";
   await addIntroduction(roomCode, who, text);
-  io.to(roomCode).emit("intro_statement", { characterName: who, content: text });
+  // 与真人玩家同一条路径：只发聊天消息（会被持久化），不再额外 emit intro_statement，
+  // 否则前端两条都渲染，自我介绍会显示两遍。
   const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + who, who, `📣【自我介绍】${text}`, room.phase);
   io.to(roomCode).emit("chat_message", msg);
   console.log(`[ai-player] ${who} 开场介绍完成`);

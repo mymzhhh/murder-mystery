@@ -109,13 +109,13 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       }),
       onSocket("vote_update", (d) => setVoteState((v) => ({ ...v, count: d.count, total: d.total }))),
       onSocket("vote_recorded", (d) => setVoteState((v) => ({ ...v, recordedTarget: d.target }))),
-      onSocket("ai_answer", (d) => {
-        setChats((c) => [...c, { from: d.from || "AI", content: d.answer || "", ts: Date.now(), ai: true }]);
-      }),
+      // 注意：这里刻意不监听 ai_answer。
+      // 服务端已经把 AI 的回答写成了持久化的 chat_message，若此处再追加一次，
+      // 同一个回答会显示两遍（和 intro_statement 是同一类重复）。
       onSocket("truth_revealed", (d) => setNarrative(d.text || JSON.stringify(d).substring(0, 500))),
-      onSocket("intro_statement", (d) => {
-        setChats((c) => [...c, { from: d.characterName || "?", content: d.content || "", ts: Date.now() }]);
-      }),
+      // 注意：这里刻意不监听 intro_statement。
+      // 服务端已经为自我介绍写入了一条持久化的 chat_message（带 📣 前缀），
+      // 若此处再把它追加进聊天列表，同一次发言会显示两遍。
       onSocket("error", (d) => { if (d && d.message) setNotice(d.message); }),
       onSocket("voice_state", (d) => {
         if (!d || !d.playerId) return;

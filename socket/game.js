@@ -401,8 +401,11 @@ function setupGameSocket(io) {
         const me = players.find(p => p.playerId === socket.id);
         const who = me?.characterName || me?.playerName || "未知";
         await addIntroduction(roomCode, who, text);
-        io.to(roomCode).emit("intro_statement", { characterName: who, content: text });
-        // 同步进聊天流（右侧边栏可见）
+        // 只发一条"会被渲染成聊天记录"的事件。
+        // 历史 bug：这里另外还 emit 了 intro_statement，前端把它和下面这条 chat_message
+        // 双双追加进聊天列表，于是同一次自我介绍显示两遍（一条带 📣 前缀、一条不带）。
+        // 自我介绍统一以聊天消息为准：它会被持久化，重连/刷新后仍能从 chatMessages 恢复。
+        // addIntroduction 保留，结构化数据仍通过 room_state.introData 下发。
         const msg = await addChatMessage(roomCode, socket.id, me?.playerName || "", who, `📣【自我介绍】${text}`, room.phase);
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "INTRO_FAILED", message: e.message }); }
@@ -441,12 +444,13 @@ function setupGameSocket(io) {
         }
 
         // 问题与回答广播（全员可见，辅助集体推理）
+        // 只发聊天消息：它会持久化，重连/刷新后仍能从 chatMessages 恢复。
+        // 历史 bug：这里另外还 emit 了 ai_answer，而前端把它也追加进聊天列表，
+        // 于是同一个回答显示两遍（与自我介绍重复显示是同一类问题）。
         const qMsg = await addChatMessage(roomCode, socket.id, asker?.playerName || "", askerName, `🎤 向 ${ai.characterName || "AI"}（AI玩家）提问：${q}`, room.phase);
         io.to(roomCode).emit("chat_message", qMsg);
         const aMsg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", answer, room.phase);
         io.to(roomCode).emit("chat_message", aMsg);
-        // 弹窗事件（提问者与全房间都能收到，前端按提问目标过滤）
-        io.to(roomCode).emit("ai_answer", { from: ai.characterName || "AI", question: q, asker: askerName, answer });
       } catch (e) { socket.emit("error", { code: "ASK_AI_FAILED", message: e.message }); }
     });
 
