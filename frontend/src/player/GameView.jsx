@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
 import { createVoice } from "../lib/voice.js";
@@ -209,9 +209,13 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     if (!v.micOn && !v.listenOn) v.leave();
   }
 
+  // useCallback 保持引用稳定：VoiceDiagPanel 的轮询 useEffect 依赖它，
+  // 每次渲染都换新函数会导致定时器被反复重建，诊断面板永远刷不出中间状态。
+  const getVoiceDiag = useCallback(
+    () => (voiceRef.current ? voiceRef.current.diagnostics() : null), []);
+
   // ===== 动作 =====
   const emit = (ev, data) => socket.emit(ev, { roomCode: room.roomCode, ...data });
-
   function selectChar(name) { emit("select_character", { characterName: name }); }
   function startGame() { emit("start_game", {}); }
   function sendChat(content) {
@@ -242,7 +246,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           <h1>房间 {room.roomCode}</h1>
           {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} />
+            <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} />
             <span className="user-info">{user.username || ""}</span>
             <button className="btn btn-outline btn-sm" onClick={onLeave}>离开房间</button>
           </div>
@@ -321,7 +325,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         <h1 style={{ fontSize: 18 }}>{room.roomCode} · {phaseLabel(phase)}</h1>
         {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
         <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
-          <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} />
+          <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} />
           {myChar && <span className="tag" style={{ color: "var(--gold)" }}>{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
           <button className="btn btn-outline btn-sm" onClick={onLeave}>退出</button>
         </div>
@@ -405,30 +409,103 @@ export function micSupported() {
     && (typeof window === "undefined" || window.isSecureContext !== false);
 }
 
-/** 两个按钮：左=是否向其他人说话，右=是否接收其他人说话 */
-function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen }) {
+/** 两个按钮：左=是否向其他人说话，右=是否接收其他人说话。
+ *  "语音 N 人"可点开诊断面板：真机上"没声音"的原因很多（没授权 / 没收到远端音轨 /
+ *  ICE 没连通 / 播放被浏览器拦），只靠现象分不清，这里直接把每步状态摊开。 */
+function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen, getDiag }) {
   const supported = micSupported();
+  const [showDiag, setShowDiag] = useState(false);
+  const [diag, setDiag] = useState(null);
+
+  useEffect(() => {
+    if (!showDiag) return;
+    const tick = () => setDiag(getDiag ? getDiag() : null);
+    tick();
+    const t = setInterval(tick, 800);
+    return () => clearInterval(t);
+  }, [showDiag, getDiag]);
+
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-      <button
-        className={`btn btn-sm ${micOn ? "btn-success" : "btn-outline"}`}
-        onClick={onMic}
-        disabled={!supported}
-        title={supported
-          ? "向其他人说话：关闭后其他人听不到你"
-          : "当前页面不是安全上下文，浏览器禁止使用麦克风（详见下方提示）"}
-      >
-        {micOn ? "🎤 说话中" : "🎤 说话：关"}
-      </button>
-      <button
-        className={`btn btn-sm ${listenOn ? "btn-success" : "btn-outline"}`}
-        onClick={onListen}
-        title="接收其他人说话：关闭后你听不到别人"
-      >
-        {listenOn ? "🔊 收听中" : "🔇 收听：关"}
-      </button>
-      {peerCount > 0 && <span className="text-xs text-dim">语音 {peerCount} 人</span>}
-      {!supported && <span className="text-xs text-dim">（此页面无法用麦克风）</span>}
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+        <button
+          className={`btn btn-sm ${micOn ? "btn-success" : "btn-outline"}`}
+          onClick={onMic}
+          disabled={!supported}
+          title={supported
+            ? "向其他人说话：关闭后其他人听不到你"
+            : "当前页面不是安全上下文，浏览器禁止使用麦克风（详见下方提示）"}
+        >
+          {micOn ? "🎤 说话中" : "🎤 说话：关"}
+        </button>
+        <button
+          className={`btn btn-sm ${listenOn ? "btn-success" : "btn-outline"}`}
+          onClick={onListen}
+          title="接收其他人说话：关闭后你听不到别人"
+        >
+          {listenOn ? "🔊 收听中" : "🔇 收听：关"}
+        </button>
+        <button
+          className="btn btn-outline btn-xs"
+          onClick={() => setShowDiag((v) => !v)}
+          title="查看语音连接诊断信息（排查听不到声音时用）"
+        >
+          🔧 语音 {peerCount} 人
+        </button>
+        {!supported && <span className="text-xs text-dim">（此页面无法用麦克风）</span>}
+      </div>
+      {showDiag && <VoiceDiagPanel diag={diag} />}
+    </div>
+  );
+}
+
+/** 诊断明细：直接展示每一步的真实状态，用于区分"没在通话"和"在通话但没声音" */
+function VoiceDiagPanel({ diag }) {
+  const box = { fontSize: 11, lineHeight: 1.7, background: "rgba(0,0,0,.25)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 6, padding: "8px 10px", maxWidth: 640 };
+  const mono = { fontFamily: "ui-monospace, Consolas, monospace" };
+  const yn = (b) => (b ? "是" : "否");
+  if (!diag) return <div style={box}>诊断信息读取中…</div>;
+  return (
+    <div style={box}>
+      <div style={{ marginBottom: 4 }}>
+        <a href="/voice-check.html" target="_blank" rel="noreferrer" style={{ color: "var(--gold)" }}>
+          打开语音自检页
+        </a>
+        <span className="text-xs text-dim">（测麦克风、扬声器、WebRTC 通路是否可用）</span>
+      </div>
+      <div style={mono}>
+        本机：已加入={yn(diag.joined)} 麦克风={yn(diag.micOn)} 收听={yn(diag.listenOn)}
+        {" | "}采集流={yn(diag.localStream)}
+        {diag.localTracks.length > 0 && diag.localTracks.map((t, i) => ` [轨${i}: ${t.readyState} enabled=${yn(t.enabled)} muted=${yn(t.muted)}]`).join("")}
+        {" | "}音频上下文={diag.audioCtx}
+      </div>
+      {diag.peers.length === 0
+        ? <div style={{ marginTop: 4 }}>还没有其他玩家加入语音。</div>
+        : diag.peers.map((p) => {
+            // 判定这条连接是否"应该能听到声音"
+            const healthy = p.connectionState === "connected" && p.gotRemoteTrack && !p.playbackMuted && !p.playbackPaused;
+            return (
+              <div key={p.playerId} style={{ marginTop: 4 }}>
+                <span style={{ color: healthy ? "#4caf50" : "#ffb300" }}>{healthy ? "●" : "○"}</span>{" "}
+                <b>{p.playerName}</b>{" "}
+                <span style={mono}>
+                  连接={p.connectionState} ICE={p.iceConnectionState} 信令={p.signalingState}
+                  {" | "}收到远端音轨={yn(p.gotRemoteTrack)}
+                  {p.gotRemoteTrack && ` (muted=${p.remoteTrackMuted} ${p.remoteTrackState})`}
+                  {" | "}播放静音={yn(p.playbackMuted)} 暂停={yn(p.playbackPaused)}
+                  {p.pendingIce > 0 && ` | 待处理候选=${p.pendingIce}`}
+                </span>
+                {!healthy && (
+                  <div className="text-xs text-dim" style={{ paddingLeft: 14 }}>
+                    {p.connectionState !== "connected" && "→ 连接没建立：等几秒，或让对方也点一次语音按钮重新协商。 "}
+                    {p.connectionState === "connected" && !p.gotRemoteTrack && "→ 连上了但没收到音轨：对方可能还没开麦克风。 "}
+                    {p.gotRemoteTrack && p.playbackMuted && "→ 你已经收到对方的音轨，但本地播放被自己关掉了（检查「收听」开关）。 "}
+                    {p.gotRemoteTrack && p.playbackPaused && "→ 浏览器拦截了自动播放：点一下页面任意位置即可解锁。 "}
+                  </div>
+                )}
+              </div>
+            );
+          })}
     </div>
   );
 }
@@ -449,6 +526,10 @@ function InsecureVoiceNotice() {
         解决办法：① 在本机用 <code>http://localhost:3000</code> 打开（同一台电脑开多个窗口可正常语音）；
         ② 或让服务端启用 HTTPS 后再用局域网地址访问。
         听别人说话不受影响。
+        {" "}
+        <a href="/voice-check.html" target="_blank" rel="noreferrer" style={{ color: "inherit", textDecoration: "underline" }}>
+          打开语音自检页
+        </a>
       </span>
       <button className="btn btn-outline btn-xs" onClick={() => setDismissed(true)}>知道了</button>
     </div>

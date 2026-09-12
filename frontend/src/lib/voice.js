@@ -252,8 +252,41 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
     destroy();
   }
 
+  // ---------- 诊断 ----------
+  // 真机上"没声音"的可能原因很多（没授权 / 未收到远端音轨 / ICE 没连通 / 播放被浏览器拦），
+  // 只靠现象无法区分，这里把每一步的真实状态暴露出来供自检面板显示。
+  function diagnostics() {
+    const localTracks = localStream ? localStream.getAudioTracks() : [];
+    return {
+      joined,
+      closed,
+      micOn,
+      listenOn,
+      localStream: !!localStream,
+      localTracks: localTracks.map(t => ({ label: t.label || "(未授权时无标签)", enabled: t.enabled, muted: t.muted, readyState: t.readyState })),
+      audioCtx: audioCtx ? audioCtx.state : "未创建",
+      peers: [...peers.values()].map(p => {
+        const stream = p.audio.srcObject;
+        const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
+        return {
+          playerId: p.id,
+          playerName: p.name,
+          connectionState: p.pc.connectionState,
+          iceConnectionState: p.pc.iceConnectionState,
+          signalingState: p.pc.signalingState,
+          pendingIce: p.pendingIce.length,
+          gotRemoteTrack: tracks.length > 0,
+          remoteTrackMuted: tracks.length ? tracks.map(t => t.muted).join(",") : "-",
+          remoteTrackState: tracks.length ? tracks.map(t => t.readyState).join(",") : "-",
+          playbackMuted: p.audio.muted,
+          playbackPaused: p.audio.paused,
+        };
+      }),
+    };
+  }
+
   return {
-    join, leave, detach, setMic, setListen,
+    join, leave, detach, setMic, setListen, diagnostics,
     get micOn() { return micOn; },
     get listenOn() { return listenOn; },
     get peerCount() { return peers.size; },
