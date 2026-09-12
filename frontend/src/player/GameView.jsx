@@ -260,6 +260,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
               <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
             </div>
           )}
+          <InsecureVoiceNotice />
           <div className="panel" style={{ padding: 16 }}>
             <div className="text-center" style={{ margin: "10px 0 20px" }}>
               <h3 style={{ margin: 0 }}>{parsed.title || "剧本杀"}</h3>
@@ -339,6 +340,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
           </div>
         )}
+        <InsecureVoiceNotice />
 
         {/* 阶段推进条：原先只有 ReadingView 有"准备就绪"按钮，
             intro/round1/round2 完全没有推进入口，只能干等 10 分钟超时 */}
@@ -395,14 +397,26 @@ export default function GameView({ game, socket, user, onLeave, online = true })
 }
 
 // ===== 语音聊天控件 =====
+/** 浏览器只在"安全上下文"里允许用麦克风：http://localhost 可以，
+ *  但 http://192.168.x.x 这种局域网 IP 不行。提前告知，别等玩家点了按钮才发现。 */
+export function micSupported() {
+  return typeof navigator !== "undefined"
+    && !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)
+    && (typeof window === "undefined" || window.isSecureContext !== false);
+}
+
 /** 两个按钮：左=是否向其他人说话，右=是否接收其他人说话 */
 function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen }) {
+  const supported = micSupported();
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
       <button
         className={`btn btn-sm ${micOn ? "btn-success" : "btn-outline"}`}
         onClick={onMic}
-        title="向其他人说话：关闭后其他人听不到你"
+        disabled={!supported}
+        title={supported
+          ? "向其他人说话：关闭后其他人听不到你"
+          : "当前页面不是安全上下文，浏览器禁止使用麦克风（详见下方提示）"}
       >
         {micOn ? "🎤 说话中" : "🎤 说话：关"}
       </button>
@@ -414,6 +428,29 @@ function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen }) {
         {listenOn ? "🔊 收听中" : "🔇 收听：关"}
       </button>
       {peerCount > 0 && <span className="text-xs text-dim">语音 {peerCount} 人</span>}
+      {!supported && <span className="text-xs text-dim">（此页面无法用麦克风）</span>}
+    </div>
+  );
+}
+
+/** 非安全上下文提示条。
+ *  浏览器只在安全上下文（https / localhost）里提供 navigator.mediaDevices，
+ *  而局域网访问用的是 http://192.168.x.x —— 这时麦克风按钮会失效，
+ *  必须明确告诉玩家"为什么"以及"怎么办"，否则只会以为功能坏了。 */
+function InsecureVoiceNotice() {
+  const [dismissed, setDismissed] = React.useState(false);
+  if (dismissed || micSupported()) return null;
+  return (
+    <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+      <span className="text-xs" style={{ lineHeight: 1.6 }}>
+        <b>当前页面无法使用麦克风。</b>
+        浏览器只允许在安全页面（HTTPS 或 <code>http://localhost</code>）申请麦克风权限，
+        而你现在是通过 <code>{typeof window !== "undefined" ? window.location.origin : ""}</code> 访问的，属于非安全页面。
+        解决办法：① 在本机用 <code>http://localhost:3000</code> 打开（同一台电脑开多个窗口可正常语音）；
+        ② 或让服务端启用 HTTPS 后再用局域网地址访问。
+        听别人说话不受影响。
+      </span>
+      <button className="btn btn-outline btn-xs" onClick={() => setDismissed(true)}>知道了</button>
     </div>
   );
 }
