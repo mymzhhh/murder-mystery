@@ -8,6 +8,9 @@ const {
   extractCharacterTimeline,
   ensureTimelineComplete,
   buildCrossCheckDigest,
+  applyPatches,
+  buildSectionDigest,
+  reviseByCrossCheck,
 } = require("../modules/murder-mystery-builder");
 
 // ==================== 夹具 ====================
@@ -180,4 +183,80 @@ test("buildCrossCheckDigest：基准章节被单独标注而非混入待审", ()
 `;
   const digest = buildCrossCheckDigest(full, 8000);
   assert.ok(digest.includes("基准时间线"), "基准章节应单独成块");
+});
+
+// ==================== applyPatches（交叉校验定向修订） ====================
+
+test("applyPatches：精确匹配替换", () => {
+  const src = "设定：凶手用黄铜地球仪击打。出处：书房。";
+  const { text, applied, skipped } = applyPatches(src, [{ oldText: "凶手用黄铜地球仪击打", newText: "凶手用青铜镇纸击打" }]);
+  assert.strictEqual(applied, 1);
+  assert.strictEqual(skipped, 0);
+  assert.ok(text.includes("青铜镇纸"));
+  assert.ok(!text.includes("黄铜地球仪"));
+});
+
+test("applyPatches：空白天差异时走归一化兜底", () => {
+  const src = "第一段。\n\n  主钟比标准时间快了约 15 分钟，而客钟慢了 10 分钟。\n第三段。";
+  // oldText 故意去掉换行与多余空格
+  const { text, applied } = applyPatches(src, [{
+    oldText: "主钟比标准时间快了约15分钟，而客钟慢了10分钟。",
+    newText: "主钟比标准时间快了约5分钟。",
+  }]);
+  assert.strictEqual(applied, 1);
+  assert.ok(text.includes("快了约5分钟"));
+  assert.ok(text.includes("第一段"), "替换不应破坏其它段落");
+});
+
+test("applyPatches：定位失败计入 skipped，不改动原文", () => {
+  const src = "原文内容。";
+  const { text, applied, skipped } = applyPatches(src, [{ oldText: "这段文字在原文里根本不存在呢", newText: "替换" }]);
+  assert.strictEqual(applied, 0);
+  assert.strictEqual(skipped, 1);
+  assert.strictEqual(text, src);
+});
+
+test("applyPatches：过短/缺字段/非对象的补丁被跳过", () => {
+  const src = "一段足够长的原文内容用于测试。";
+  const { applied, skipped } = applyPatches(src, [
+    { oldText: "短", newText: "x" },              // 过短
+    { oldText: "一段足够长的原文内容用于测试。", newText: "" }, // newText 为空
+    { newText: "只有新文本" },                     // 缺 oldText
+    null,
+  ]);
+  assert.strictEqual(applied, 0);
+  assert.strictEqual(skipped, 4);
+});
+
+test("applyPatches：多补丁按顺序应用", () => {
+  const src = "AAA 第一处描述需要被修正掉 BBB 第二处描述也需要被修正掉 CCC";
+  const { text, applied } = applyPatches(src, [
+    { oldText: "第一处描述需要被修正掉", newText: "第一处描述已修正" },
+    { oldText: "第二处描述也需要被修正掉", newText: "第二处描述已修正" },
+  ]);
+  assert.strictEqual(applied, 2);
+  assert.ok(text.includes("第一处描述已修正") && text.includes("第二处描述已修正"));
+});
+
+// ==================== buildSectionDigest ====================
+
+test("buildSectionDigest：覆盖全部标题段（超长剧本的退路）", () => {
+  const full = [
+    "# 剧本",
+    "### 玩家角色 1：林伟",
+    "背景".repeat(3000),
+    "### 玩家角色 6：王浩",
+    "背景".repeat(3000),
+  ].join("\n");
+  const digest = buildSectionDigest(full, 2000);
+  assert.ok(digest.includes("玩家角色 1：林伟"));
+  assert.ok(digest.includes("玩家角色 6：王浩"), "每一段都应在摘要中占位");
+});
+
+// ==================== reviseByCrossCheck ====================
+
+test("reviseByCrossCheck：无问题时原样返回且不调用 LLM", async () => {
+  const src = "剧本内容";
+  assert.strictEqual(await reviseByCrossCheck(src, [], null), src);
+  assert.strictEqual(await reviseByCrossCheck(src, ["   ", null], null), src);
 });

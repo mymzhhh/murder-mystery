@@ -112,6 +112,122 @@ async function ensureTimelineComplete(charName, content, retryFn, onProgress) {
   return content;
 }
 
+// ==================== 交叉校验问题定向修订 ====================
+
+/** 按标题切段的结构化摘要（仅在剧本过长、无法整篇送检时使用） */
+function buildSectionDigest(fullScript, maxChars = 24000) {
+  const lines = String(fullScript || "").split("\n");
+  const secs = [];
+  let cur = null;
+  for (const l of lines) {
+    if (/^#{1,4}\s+/.test(l)) { cur = { head: l.trim(), body: [] }; secs.push(cur); }
+    else if (cur) cur.body.push(l);
+    else { cur = { head: "(前言)", body: [l] }; secs.push(cur); }
+  }
+  if (!secs.length) return String(fullScript || "").substring(0, maxChars);
+  const per = Math.max(300, Math.floor(maxChars / secs.length));
+  return secs.map(s => `${s.head}\n${s.body.join("\n").trim().substring(0, per)}`).join("\n\n");
+}
+
+/**
+ * 应用定向修订补丁 [{oldText, newText}]。
+ * 定位策略：先精确匹配；失败则按"忽略所有空白"归一化后再匹配（容忍换行/全角空格差异）。
+ * 返回 { text, applied, skipped }
+ */
+function applyPatches(text, patches) {
+  let out = String(text || "");
+  let applied = 0, skipped = 0;
+  for (const p of (Array.isArray(patches) ? patches : [])) {
+    if (!p || typeof p !== "object") { skipped++; continue; }
+    const oldText = p.oldText || p.old || p.find || p.anchor;
+    const newText = p.newText || p.new || p.replace || p.replacement;
+    if (typeof oldText !== "string" || oldText.trim().length < 8 || typeof newText !== "string" || !newText.trim()) {
+      skipped++;
+      continue;
+    }
+    const idx = out.indexOf(oldText);
+    if (idx >= 0) {
+      out = out.slice(0, idx) + newText + out.slice(idx + oldText.length);
+      applied++;
+      continue;
+    }
+    // 归一化兜底：忽略空白差异后重新定位，再映射回原始下标
+    const norm = (s) => s.replace(/\s+/g, "");
+    const nOld = norm(oldText);
+    if (nOld.length < 8) { skipped++; continue; }
+    const pos = norm(out).indexOf(nOld);
+    if (pos < 0) { skipped++; continue; }
+    let oi = 0, start = -1, end = -1;
+    for (let i = 0; i < out.length; i++) {
+      if (/\s/.test(out[i])) continue;
+      if (oi === pos && start < 0) start = i;
+      if (oi === pos + nOld.length - 1) { end = i + 1; break; }
+      oi++;
+    }
+    if (start < 0 || end < 0) { skipped++; continue; }
+    out = out.slice(0, start) + newText + out.slice(end);
+    applied++;
+  }
+  return { text: out, applied, skipped };
+}
+
+const REVISE_SYSTEM = `你是剧本杀剧本修订编辑。你会收到一份剧本的若干逻辑漏洞清单，以及剧本原文。
+请只输出 JSON（不要解释）：
+{"patches":[{"oldText":"原文中要被替换的一段连续文字","newText":"替换后的文字"}]}
+
+硬性要求：
+- oldText 必须是**剧本原文的逐字片段**（长度 20-150 字，可被直接搜到，且在全文唯一），
+  严禁改写、严禁加省略号、严禁跨段落拼接。
+- 只修正清单中列出的漏洞；不要顺手改写其它内容；严禁改动角色姓名/人数/时代/凶手。
+- 每条 patch 尽量最小（只覆盖出错的那一两句），newText 篇幅不得明显短于 oldText，禁止删减信息。
+- 无法在原文中定位的问题就**不要输出 patch**，不要编造。
+- 若清单中的问题无需修改，输出 {"patches":[]}。`;
+
+/**
+ * 把交叉校验发现的问题回灌成定向修订补丁并应用到成稿。
+ * 背景：交叉校验原先只报警不修复（report.crossCheck 无任何消费方），
+ * 检测出的问题（虚构人物、地点/楼层矛盾、诡计参数冲突等）全部被丢弃。
+ * @returns {Promise<string>} 修订后的全文（任何失败都原样返回，不阻塞生成）
+ */
+async function reviseByCrossCheck(fullScript, issues, onProgress, maxRounds = 2) {
+  const list = (Array.isArray(issues) ? issues : []).filter(x => typeof x === "string" && x.trim());
+  if (!list.length) return fullScript;
+  let text = String(fullScript || "");
+  let appliedTotal = 0;
+
+  for (let round = 1; round <= maxRounds; round++) {
+    if (onProgress) onProgress("revise", `第 ${round} 轮定向修订：处理 ${list.length} 个交叉校验问题...`);
+    // 尽量整篇送检，保证 oldText 能逐字摘录；超长时退化为按标题切段的摘要
+    const body = text.length <= 60000 ? text : buildSectionDigest(text, 24000);
+    const user = `## 待修订的漏洞清单\n${list.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n## 剧本原文\n${body}\n\n请输出定向修订 JSON：`;
+
+    let patches = [];
+    try {
+      const r = await runStage(`交叉校验修订(第${round}轮)`, () => generate(REVISE_SYSTEM, user, { maxTokens: 8000, temperature: 0.1 }), onProgress);
+      const data = extractJsonStrict(r.content) || {};
+      patches = Array.isArray(data.patches) ? data.patches : [];
+    } catch (e) {
+      console.warn(`[builder] 交叉校验修订第 ${round} 轮调用失败:`, e.message);
+      break;
+    }
+    if (!patches.length) {
+      if (onProgress) onProgress("revise", `第 ${round} 轮未产出可用补丁`);
+      break;
+    }
+    const res = applyPatches(text, patches);
+    if (!res.applied) {
+      console.warn(`[builder] 交叉校验修订第 ${round} 轮补丁均无法定位（跳过 ${res.skipped} 条）`);
+      if (onProgress) onProgress("revise", "修订补丁无法在原文定位，已跳过");
+      break;
+    }
+    text = res.text;
+    appliedTotal += res.applied;
+    if (onProgress) onProgress("revise", `第 ${round} 轮应用修订 ${res.applied}/${patches.length} 条`);
+  }
+  if (appliedTotal && onProgress) onProgress("revise", `交叉校验定向修订完成：共应用 ${appliedTotal} 条`);
+  return text;
+}
+
 /**
  * 布局兜底：framework/大纲都没有布局时，
  * ① 从线索"发现地点"归纳核心场所清单（剥子位置/人名/尸体）
@@ -571,7 +687,17 @@ async function buildMurderMystery(userInput, onProgress, config) {
     console.warn("[builder] 交叉校验跳过:", e.message);
   }
 
-  // ========== 时间线一致性后处理（长期校准；失败静默保留原文） ==========
+  // ========== 阶段 4.6：交叉校验问题定向修订 ==========
+  // 交叉校验此前只报警不修复（report.crossCheck 无任何消费方），检测出的
+  // 虚构人物/地点矛盾/诡计参数冲突等问题全部被丢弃。这里回灌成补丁作用到成稿。
+  try {
+    fullScript = await reviseByCrossCheck(fullScript, report.crossCheck && report.crossCheck.issues, onProgress, 2);
+  } catch (e) {
+    console.warn("[builder] 交叉校验定向修订跳过:", e.message);
+  }
+
+  // ========== 阶段 4.7：时间线一致性后处理（长期校准；失败静默保留原文） ==========
+  // 放在定向修订之后，让时间线校准对时间线有最终话语权
   try {
     const { fixTimeline } = require("./timeline-consistency");
     fullScript = await fixTimeline(fullScript, (m) => onProgress("timeline", m));
@@ -1681,4 +1807,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest };
+module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck };
