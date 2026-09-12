@@ -1145,7 +1145,7 @@ function buildCharacterPrompt(ch, framework, index, total, isPVE, outline) {
     instructions = instructions
       .replace("{investigateTask}", `你想查明${victimName}之死的真相——结合线索与时间线推理，找出真凶`)
       .replace("{isMurdererExtra}", ch.isMurderer
-        ? `\n4. **你是凶手**：请尽可能隐藏自己的凶手身份，误导他人，直到投票结束。\n\n### 四、凶手确认（仅你可见）\n⚠️ 你就是凶手。用 150-300 字陈述你的**真实**作案经过（手法、真实时间、地点、凶器去向）与你的对外口径。这段内容融入上方"背景故事"与"时间线"，让玩家靠线索推理而非直接读出。\n\n    **重要澄清（覆盖上一句）**：上一句只要求"真相别写成大白话"，**不是**让你把时间线写空。「二、你的时间线」必须写**对外口径（伪装时间线）**：同样完整、至少 8 个时间点，覆盖从到场到案发后的全部时段；把你离厅行凶那段时间写成对外声称的去处（例如"一直在客厅与某人争吵"），并刻意留出可被其他角色证词推翻的细节破绽。真实经过只放在「四、凶手确认」供 DM 核对，**绝不要写进时间线**。`
+        ? `\n4. **你是凶手**：请尽可能隐藏自己的凶手身份，误导他人，直到投票结束。\n\n    **【核心】你的「二、你的时间线」写的是真实发生的经过**——与其他角色一样是客观流水账，但必须完整覆盖你的作案过程，让读到它的人能顺着物品与目击线索反推出你的手法：\n    - 你何时、以什么借口离席，走的哪条路线，进入了哪个房间；\n    - 你**接触了哪些具体物品**（如某人的药箱、某个容器、擦拭用的手帕），并对它做了什么；\n    - 你途中**看到谁、被谁看到、听到什么**——这是别人能反过来对质你的锚点，不可省略；\n    - 你如何返回、以及回到公共区域的确切时间。\n    作案窗口那一段必须写出**与旁人同等密度的具体观察**，禁止只写“我上楼了”“我进房了”这类空泛交代。\n\n    **你的对外说辞（统一口径）**：在「三、你的任务」里另起一条写明你在案发时段对外声称的行踪（例如“散席后头晕，径直回房休息，未再外出”）。该说辞必须与你时间线里的真实动线**存在明确冲突**——这个冲突点就是你留给玩家的破绽。被追问时按说辞应对，不要主动坦白。\n\n### 四、凶手确认（仅你可见）\n⚠️ 本节只写 150-300 字的**手法要点确认**（毒物/凶器、下药或行凶的方式与位置、关键物证的来源与去向），供 DM 与系统解析核对，必须与「二、你的时间线」完全自洽。**它不是真相的唯一存放处**——详细真实经过以时间线为准，禁止在此处马后炮式地补充时间线里没有的作案细节。`
         : "");
   } else {
     // PVE：玩家不是凶手（凶手在NPC中），无需凶手注入，移除占位符
@@ -1807,4 +1807,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck };
+module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt };
