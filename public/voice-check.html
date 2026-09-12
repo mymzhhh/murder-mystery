@@ -9,13 +9,13 @@
   * { box-sizing: border-box; }
   body { margin:0; padding:20px; background:#14161a; color:#e8e8e8;
          font-family: system-ui, "Microsoft YaHei", sans-serif; line-height:1.7; }
-  .wrap { max-width: 860px; margin: 0 auto; }
+  .wrap { max-width: 880px; margin: 0 auto; }
   h1 { font-size: 20px; margin: 0 0 4px; }
   .sub { color: var(--dim); font-size: 13px; margin-bottom: 18px; }
   .panel { background:#1c1f25; border:1px solid #2b2f38; border-radius:8px; padding:14px 16px; margin-bottom:12px; }
   .panel h2 { font-size: 15px; margin: 0 0 8px; }
   .row { display:flex; gap:10px; align-items:baseline; padding:4px 0; font-size:13px; }
-  .row .k { flex:0 0 210px; color:var(--dim); }
+  .row .k { flex:0 0 220px; color:var(--dim); }
   .row .v { font-family: ui-monospace, Consolas, monospace; word-break: break-all; }
   .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
   button { background:#2f6feb; color:#fff; border:0; border-radius:6px; padding:8px 16px;
@@ -26,17 +26,17 @@
   .bar > i { display:block; height:100%; width:0%; background:#2e7d32; transition:width .08s linear; }
   code { background:#2b2f38; padding:1px 5px; border-radius:4px; font-size:12px; }
   .hint { font-size:12px; color:var(--dim); margin-top:6px; }
-  table { width:100%; border-collapse:collapse; font-size:12px; font-family: ui-monospace, Consolas, monospace; }
-  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid #2b2f38; }
-  th { color:var(--dim); font-weight:normal; }
   .final { font-size:15px; font-weight:600; padding:12px 16px; border-radius:8px; margin-top:6px; }
+  textarea { width:100%; height:150px; background:#0f1115; color:#cfd6e0; border:1px solid #2b2f38;
+             border-radius:6px; padding:8px; font-family: ui-monospace, Consolas, monospace; font-size:11px; margin-top:8px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>语音功能自检</h1>
   <div class="sub">
-    按顺序点按钮。全部通过说明这台设备的浏览器具备语音通话条件；<b>任意一步失败，后面的语音功能一定不可用</b>。
+    ② 只测麦克风，③ 只测扬声器，④ 只测 WebRTC 通路，三项互不依赖——
+    <b>某一步失败只代表那一项有问题</b>，不要把它当成同一个故障。
   </div>
 
   <div class="panel">
@@ -46,9 +46,9 @@
 
   <div class="panel">
     <h2>② 麦克风采集</h2>
-    <button id="btnMic">申请麦克风权限并采集 5 秒</button>
+    <button id="btnMic">申请麦克风权限并采集 6 秒</button>
     <div id="micOut"></div>
-    <div class="hint">对着麦克风说话，音量条应该有明显起伏。没有起伏＝系统输入设备选错或麦克风静音。</div>
+    <div class="hint">点完后请在 6 秒内<b>持续对着麦克风说话</b>，音量条应有明显起伏。</div>
   </div>
 
   <div class="panel">
@@ -63,26 +63,31 @@
     <button id="btnLoop">开始回环测试</button>
     <div id="loopOut"></div>
     <div class="hint">
-      在同一个页面内建立一对 RTCPeerConnection，把你自己的声音发出去再收回来，
-      用音量表判断"收到的远端音轨里到底有没有声音"。<b>不回放</b>，所以不会有啸叫。
-      这一步通过＝游戏里的点对点语音通路可用。
+      在同一个页面内建立一对 RTCPeerConnection，把你的声音发出去再收回来。
+      这一项<b>只判断 WebRTC 通路是否可用</b>（ICE 是否连通、是否收到远端音轨），
+      不把"有没有声音"算进来——那是麦克风的问题，已由 ② 单独判定。
+      <b>不回放</b>，所以不会有啸叫。
     </div>
   </div>
 
   <div class="panel">
     <h2>⑤ 结果</h2>
     <div id="final" class="hint">尚未开始。</div>
+    <button id="btnCopy" style="margin-top:10px">复制诊断报告</button>
+    <textarea id="report" readonly placeholder="点上面的按钮生成可复制的诊断报告"></textarea>
   </div>
 </div>
 
 <script>
-// 自检页自身也是纯前端，不依赖登录态，方便出问题时先排除"账号/房间"因素。
+// 自检页不依赖登录态，方便出问题时先排除"账号/房间"因素。
 const $ = (id) => document.getElementById(id);
 const results = {};   // 步骤名 → true/false
+const log = [];       // 诊断报告用
 
 function row(k, v, cls) {
   return '<div class="row"><span class="k">' + k + '</span><span class="v ' + (cls || '') + '">' + v + '</span></div>';
 }
+function note(line) { log.push(line); }
 
 function summary() {
   const done = Object.keys(results);
@@ -100,25 +105,49 @@ function summary() {
   }
 }
 
+/** 关键工具：必须在点击手势内同步创建并 resume AudioContext。
+ *  踩过的坑：把 new AudioContext() 放在 await getUserMedia() 之后，
+ *  权限弹窗会消耗掉用户手势 → 上下文停在 suspended → 分析器永远读回静音（全 128）
+ *  → 音量恒为 0 → 麦克风明明是好的却被判定失败。 */
+function makeCtx() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    if (ctx.state === 'suspended' && ctx.resume) ctx.resume().catch(() => {});
+    return ctx;
+  } catch (e) { return null; }
+}
+
+async function ensureRunning(ctx) {
+  if (!ctx) return 'no-ctx';
+  if (ctx.state === 'suspended' && ctx.resume) { try { await ctx.resume(); } catch (e) {} }
+  return ctx.state;
+}
+
+/** 把一串时域数据算成 RMS */
+function rmsOf(analyser, buf) {
+  analyser.getByteTimeDomainData(buf);
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+  return Math.sqrt(sum / buf.length);
+}
+
 // ---------- ① 环境 ----------
 (function () {
   const secure = window.isSecureContext;
   const hasMD = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
   const hasRTC = typeof RTCPeerConnection === 'function';
-  const localhost = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
   let html = '';
   html += row('访问来源', location.origin);
-  html += row('安全上下文', secure ? '是' : '否',
-    secure ? 'ok' : 'bad');
+  html += row('安全上下文', secure ? '是' : '否', secure ? 'ok' : 'bad');
   html += row('navigator.mediaDevices', hasMD ? '可用' : '不存在', hasMD ? 'ok' : 'bad');
   html += row('RTCPeerConnection', hasRTC ? '可用' : '不存在', hasRTC ? 'ok' : 'bad');
-  if (!secure && !localhost) {
-    html += '<div class="hint bad">浏览器只在安全页面提供麦克风 API。用 http://' + location.hostname +
-            ' 访问时该 API 不存在，<b>麦克风一定用不了</b>（听别人说话不受影响）。' +
-            '请改用 <code>http://localhost:3000</code>，或让服务端启用 HTTPS。</div>';
+  html += row('浏览器', navigator.userAgent);
+  if (!secure) {
+    html += '<div class="hint bad">浏览器只在安全页面提供麦克风 API。请改用 <code>http://localhost:3000</code> 访问，或让服务端启用 HTTPS。</div>';
   }
   $('env').innerHTML = html;
   results['运行环境'] = secure && hasMD && hasRTC;
+  note('origin=' + location.origin + ' secureContext=' + secure + ' mediaDevices=' + hasMD + ' RTCPeerConnection=' + hasRTC);
   summary();
 })();
 
@@ -126,64 +155,105 @@ function summary() {
 $('btnMic').onclick = async () => {
   const out = $('micOut');
   $('btnMic').disabled = true;
-  out.innerHTML = '<div class="hint">等待授权…</div>';
+
+  // ① 先在手势内建好音频上下文
+  const ctx = makeCtx();
+
+  out.innerHTML = '<div class="hint">等待麦克风授权…（浏览器弹窗请选择"允许"）</div>';
+  let stream = null;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const track = stream.getAudioTracks()[0];
-    const s = track.getSettings ? track.getSettings() : {};
-    out.innerHTML =
-      row('已获取音轨', track.label || '(无标签)', 'ok') +
-      row('readyState', track.readyState, track.readyState === 'live' ? 'ok' : 'bad') +
-      row('采样率 / 声道', (s.sampleRate || '?') + ' Hz / ' + (s.channelCount || '?'), '') +
-      row('实时音量', '<span class="bar"><i id="lvl"></i></span>',
-          '');
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const src = ctx.createMediaStreamSource(stream);
-    const an = ctx.createAnalyser(); an.fftSize = 512;
-    src.connect(an);
-    const buf = new Uint8Array(an.fftSize);
-    let peak = 0;
-    const t = setInterval(() => {
-      an.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
-      const rms = Math.sqrt(sum / buf.length);
-      peak = Math.max(peak, rms);
-      const el = $('lvl'); if (el) el.style.width = Math.min(100, rms * 400) + '%';
-    }, 80);
-    setTimeout(() => {
-      clearInterval(t);
-      stream.getTracks().forEach(x => x.stop());
-      ctx.close().catch(() => {});
-      $('btnMic').disabled = false;
-      $('btnMic').textContent = '重新测试麦克风';
-      const okMic = peak > 0.02;
-      results['麦克风采集'] = okMic;
-      out.insertAdjacentHTML('beforeend',
-        row('峰值音量', peak.toFixed(4), okMic ? 'ok' : 'bad') +
-        (okMic ? '' : '<div class="hint bad">5 秒内几乎没采到声音。检查：系统输入设备是否正确、麦克风是否被静音、Windows 麦克风隐私设置是否允许浏览器访问。</div>'));
-      summary();
-    }, 5000);
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (e) {
     const name = e && e.name;
     let why;
     if (name === 'NotAllowedError') why = '权限被拒绝。点地址栏左侧的图标 → 允许麦克风，然后刷新重试。';
-    else if (name === 'NotFoundError') why = '系统里没有可用的录音设备。';
-    else if (name === 'NotReadableError') why = '设备被其他程序独占（例如正在开会议软件）。';
-    else why = e.message || String(e);
-    out.innerHTML = row('失败', name + '：' + why, 'bad');
+    else if (name === 'NotFoundError') why = '系统里没有可用的录音设备（或驱动未安装）。';
+    else if (name === 'NotReadableError') why = '设备被其他程序独占（例如正在开会议软件、或另一个标签页在用）。';
+    else if (name === 'OverconstrainedError') why = '指定的音频约束无法满足。';
+    else why = (e && e.message) || String(e);
+    out.innerHTML = row('采集音轨', '失败', 'bad') + row('原因', name + '：' + why, 'bad');
     results['麦克风采集'] = false;
+    note('getUserMedia 失败: ' + name + ' - ' + why);
+    if (ctx) ctx.close().catch(() => {});
     $('btnMic').disabled = false;
     summary();
+    return;
   }
+
+  const track = stream.getAudioTracks()[0];
+  const s = (track.getSettings && track.getSettings()) || {};
+  const gotTrack = track.readyState === 'live';
+
+  const ctxState = await ensureRunning(ctx);
+  out.innerHTML =
+    row('采集到音轨', track.label || '(无标签)', gotTrack ? 'ok' : 'bad') +
+    row('readyState', track.readyState, gotTrack ? 'ok' : 'bad') +
+    row('采样率 / 声道', (s.sampleRate || '?') + ' Hz / ' + (s.channelCount || '?'), '') +
+    row('音频上下文状态', String(ctxState), ctxState === 'running' ? 'ok' : 'warn') +
+    row('实时音量', '<span class="bar"><i id="lvl"></i></span>', '') +
+    '<div class="hint" id="micPrompt"><b>请现在对着麦克风持续说话…</b></div>';
+
+  let peak = 0;
+  let tick = null;
+  if (ctx && ctxState === 'running') {
+    try {
+      const src = ctx.createMediaStreamSource(stream);
+      const an = ctx.createAnalyser();
+      an.fftSize = 512;
+      src.connect(an);
+      const buf = new Uint8Array(an.fftSize);
+      tick = setInterval(() => {
+        const r = rmsOf(an, buf);
+        peak = Math.max(peak, r);
+        const el = $('lvl'); if (el) el.style.width = Math.min(100, r * 400) + '%';
+      }, 80);
+    } catch (e) {
+      out.insertAdjacentHTML('beforeend', row('音量检测', '不可用：' + e.message, 'warn'));
+    }
+  } else {
+    out.insertAdjacentHTML('beforeend', row('音量检测', '跳过（音频上下文未运行，无法测音量）', 'warn'));
+  }
+
+  let left = 6;
+  const cd = setInterval(() => {
+    left--;
+    const el = $('micPrompt');
+    if (el && left > 0) el.innerHTML = '<b>请现在对着麦克风持续说话… 还剩 ' + left + ' 秒</b>';
+  }, 1000);
+
+  setTimeout(() => {
+    clearInterval(tick);
+    clearInterval(cd);
+    stream.getTracks().forEach(x => x.stop());
+    if (ctx) ctx.close().catch(() => {});
+    $('btnMic').disabled = false;
+    $('btnMic').textContent = '重新测试麦克风';
+
+    const heard = peak > 0.02;
+    // 判定：拿到可用音轨且确实采到声音
+    results['麦克风采集'] = gotTrack && heard;
+    note('麦克风: 音轨=' + gotTrack + ' label=' + (track.label || '') + ' 峰值=' + peak.toFixed(4) +
+         ' sampleRate=' + (s.sampleRate || '?') + ' ctx=' + ctxState);
+
+    out.insertAdjacentHTML('beforeend', row('峰值音量', peak.toFixed(4), heard ? 'ok' : 'bad'));
+    if (!gotTrack) {
+      out.insertAdjacentHTML('beforeend', '<div class="hint bad">没能拿到可用的音轨（readyState=' + track.readyState + '）。</div>');
+    } else if (!heard) {
+      out.insertAdjacentHTML('beforeend',
+        '<div class="hint bad">音轨正常但 6 秒内几乎没采到声音。检查：系统输入设备是否选对、' +
+        '麦克风是否被物理静音开关关掉、Windows 设置→隐私→麦克风 是否允许桌面应用访问、' +
+        '以及你是否真的对着麦克风说话了。</div>');
+    }
+    summary();
+  }, 6000);
 };
 
 // ---------- ③ 扬声器 ----------
 $('btnTone').onclick = async () => {
   const out = $('toneOut');
+  const ctx = makeCtx();
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    if (ctx.state === 'suspended') await ctx.resume();
+    const st = await ensureRunning(ctx);
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.frequency.value = 660;
@@ -193,36 +263,45 @@ $('btnTone').onclick = async () => {
     osc.connect(gain); gain.connect(ctx.destination);
     osc.start(); osc.stop(ctx.currentTime + 1.0);
     osc.onended = () => ctx.close().catch(() => {});
-    out.innerHTML = row('已播放 1 秒 660Hz 测试音', '请确认听到了"嘟"的一声', '');
+    out.innerHTML = row('已播放 1 秒 660Hz 测试音', '请确认听到了"嘟"的一声', '') +
+                    row('音频上下文状态', String(st), st === 'running' ? 'ok' : 'warn');
     results['扬声器播放'] = true;
+    note('扬声器: 已播放测试音, ctx=' + st);
     $('btnTone').textContent = '再播一次';
   } catch (e) {
     out.innerHTML = row('失败', e.message, 'bad');
     results['扬声器播放'] = false;
+    note('扬声器: 失败 ' + e.message);
   }
   summary();
 };
 
-// ---------- ④ 回环 ----------
+// ---------- ④ WebRTC 回环 ----------
 let loopStream = null;
 $('btnLoop').onclick = async () => {
   const out = $('loopOut');
   $('btnLoop').disabled = true;
   out.innerHTML = '<div class="hint">建立回环连接…</div>';
+
+  // 同样先在手势内建上下文
+  const ctx = makeCtx();
+
   try {
     if (!loopStream) loopStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // 一对 PC：发送端把麦克风推出去，接收端收回来（同页面，不经过网络）
+    const track = loopStream.getAudioTracks()[0];
+
     const pc1 = new RTCPeerConnection();
     const pc2 = new RTCPeerConnection();
-    pc1.onicecandidate = e => e.candidate && pc2.addIceCandidate(e.candidate);
-    pc2.onicecandidate = e => e.candidate && pc1.addIceCandidate(e.candidate);
+    pc1.onicecandidate = e => e.candidate && pc2.addIceCandidate(e.candidate).catch(() => {});
+    pc2.onicecandidate = e => e.candidate && pc1.addIceCandidate(e.candidate).catch(() => {});
 
     // 与游戏内一致：先 addTransceiver 预留通道，再用 replaceTrack 挂麦克风
     const sender = pc1.addTransceiver('audio', { direction: 'sendrecv' }).sender;
-    await sender.replaceTrack(loopStream.getAudioTracks()[0]);
+    await sender.replaceTrack(track);
 
     let remoteStream = null;
     pc2.ontrack = (ev) => {
+      // 与 voice.js 相同的兜底：addTransceiver 未绑定 stream 时 ev.streams 可能为空数组
       remoteStream = (ev.streams && ev.streams[0]) || new MediaStream([ev.track]);
     };
 
@@ -233,7 +312,6 @@ $('btnLoop').onclick = async () => {
     await pc2.setLocalDescription(answer);
     await pc1.setRemoteDescription(answer);
 
-    // 等 ICE 连通（本地回环通常 <1s）
     const connected = await new Promise((resolve) => {
       const t0 = Date.now();
       const iv = setInterval(() => {
@@ -242,55 +320,82 @@ $('btnLoop').onclick = async () => {
       }, 150);
     });
 
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const an = ctx.createAnalyser(); an.fftSize = 512;
-    let peak = 0;
-    if (remoteStream) {
-      ctx.createMediaStreamSource(remoteStream).connect(an);
+    const st = await ensureRunning(ctx);
+    let an = null, buf = null;
+    if (ctx && st === 'running' && remoteStream) {
+      try {
+        an = ctx.createAnalyser(); an.fftSize = 512;
+        ctx.createMediaStreamSource(remoteStream).connect(an);
+        buf = new Uint8Array(an.fftSize);
+      } catch (e) { an = null; }
     }
-    const buf = new Uint8Array(an.fftSize);
-    const t = setInterval(() => {
-      if (!remoteStream) return;
-      an.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
-      peak = Math.max(peak, Math.sqrt(sum / buf.length));
-      const el = $('rlvl'); if (el) el.style.width = Math.min(100, peak * 400) + '%';
-    }, 80);
 
+    // 回环只判定 WebRTC 通路：ICE 连通 + 收到远端音轨。
+    // "有没有声音"属于麦克风问题，由 ② 单独判定，不能在这里重复计一次失败。
+    const trackOk = !!remoteStream;
     out.innerHTML =
       row('pc1.connectionState', pc1.connectionState, pc1.connectionState === 'connected' ? 'ok' : 'bad') +
       row('pc2.connectionState', pc2.connectionState, pc2.connectionState === 'connected' ? 'ok' : 'bad') +
-      row('收到远端音轨', remoteStream ? ('是（' + remoteStream.getAudioTracks().length + ' 条）') : '否',
-          remoteStream ? 'ok' : 'bad') +
-      row('远端音量', '<span class="bar"><i id="rlvl"></i></span>', '') +
+      row('收到远端音轨', trackOk ? ('是（' + remoteStream.getAudioTracks().length + ' 条）') : '否', trackOk ? 'ok' : 'bad') +
+      row('音频上下文状态', String(st), st === 'running' ? 'ok' : 'warn') +
+      row('远端音量（仅供参考）', '<span class="bar"><i id="rlvl"></i></span>', '') +
       '<div class="hint">现在对着麦克风持续说话 5 秒…</div>';
 
-    const trackOk = !!remoteStream;
+    let peak = 0;
+    let tick = null;
+    if (an) {
+      tick = setInterval(() => {
+        const r = rmsOf(an, buf);
+        peak = Math.max(peak, r);
+        const el = $('rlvl'); if (el) el.style.width = Math.min(100, r * 400) + '%';
+      }, 80);
+    }
+
     setTimeout(() => {
-      clearInterval(t);
+      clearInterval(tick);
       try { pc1.close(); pc2.close(); } catch (e) {}
-      ctx.close().catch(() => {});
-      const ok = connected && trackOk && peak > 0.02;
-      results['WebRTC 收发回路'] = ok;
-      out.insertAdjacentHTML('beforeend',
-        row('远端峰值音量', peak.toFixed(4), peak > 0.02 ? 'ok' : 'bad') +
-        (ok ? '' : '<div class="hint bad">' +
-          (!connected ? 'ICE 没连通（本地回环都连不上，说明浏览器 WebRTC 受限或系统防火墙拦截）。' :
-           !trackOk ? 'ontrack 没触发／没拿到远端音轨。' :
-           '收到了音轨但里面没有声音，检查麦克风输入。') + '</div>'));
+      if (ctx) ctx.close().catch(() => {});
+
+      results['WebRTC 收发回路'] = connected && trackOk;
+      note('WebRTC回环: connected=' + connected + ' gotRemoteTrack=' + trackOk + ' 远端峰值=' + peak.toFixed(4) + ' ctx=' + st);
+      out.insertAdjacentHTML('beforeend', row('远端峰值音量（仅供参考）', peak.toFixed(4), an ? (peak > 0.02 ? 'ok' : 'warn') : ''));
+      if (!connected) {
+        out.insertAdjacentHTML('beforeend', '<div class="hint bad">ICE 没连通。本地回环都连不上，说明浏览器 WebRTC 受限（安全软件 / 组策略 / 企业代理拦截），语音无法工作。</div>');
+      } else if (!trackOk) {
+        out.insertAdjacentHTML('beforeend', '<div class="hint bad">ICE 已连通但 ontrack 没拿到远端音轨。</div>');
+      } else if (peak <= 0.02) {
+        out.insertAdjacentHTML('beforeend', '<div class="hint warn">WebRTC 通路正常；远端没测到声音是麦克风输入的问题，见 ②。</div>');
+      }
       $('btnLoop').disabled = false;
       $('btnLoop').textContent = '重新回环测试';
       summary();
     }, 5000);
-
-    // 麦克风拿到后，回环按钮才可用
   } catch (e) {
     out.innerHTML = row('失败', (e && e.name ? e.name + '：' : '') + (e.message || e), 'bad');
     results['WebRTC 收发回路'] = false;
+    note('WebRTC回环: 异常 ' + (e && e.name) + ' ' + (e && e.message));
+    if (ctx) ctx.close().catch(() => {});
     $('btnLoop').disabled = false;
     summary();
   }
+};
+
+// ---------- 诊断报告 ----------
+$('btnCopy').onclick = async () => {
+  const lines = [
+    '=== 语音自检报告 ===',
+    '时间: ' + new Date().toISOString(),
+    'UA: ' + navigator.userAgent,
+    '--- 明细 ---',
+    ...log,
+    '--- 结果 ---',
+    ...Object.keys(results).map(k => (results[k] ? '[通过] ' : '[失败] ') + k),
+  ];
+  const text = lines.join('\n');
+  $('report').value = text;
+  try { await navigator.clipboard.writeText(text); $('btnCopy').textContent = '已复制到剪贴板'; }
+  catch (e) { $('btnCopy').textContent = '请手动全选下面的文本复制'; $('report').select(); }
+  setTimeout(() => { $('btnCopy').textContent = '复制诊断报告'; }, 2500);
 };
 </script>
 </body>

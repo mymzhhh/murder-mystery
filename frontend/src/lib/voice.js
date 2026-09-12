@@ -39,14 +39,27 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   }
 
   // ---------- 远端音频播放 & 说话检测 ----------
+  /** 浏览器只在用户手势里允许启动音频上下文。这里刻意在点击处理函数中调用，
+   *  否则上下文会停在 suspended，分析器恒读回静音（"正在说话"高亮永远不亮）。 */
+  function ensureAudioCtx() {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended" && audioCtx.resume) audioCtx.resume().catch(() => {});
+    } catch (e) { /* 无 AudioContext 时仅失去"正在说话"高亮 */ }
+    return audioCtx;
+  }
+
   function attachAudio(entry, stream) {
     entry.audio.srcObject = stream;
     entry.audio.muted = !listenOn;
-    entry.audio.play().catch(() => { /* 首次用户手势前可能被拦，由按钮点击解锁 */ });
+    // 远端音轨是异步到达的，此刻往往没有用户手势，play() 会被自动播放策略拒绝。
+    // 因此这里失败不要紧，关键是 setListen(true) 时必须再补一次 play()。
+    entry.audio.play().catch(() => {});
     try {
-      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      const src = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
+      const ctx = ensureAudioCtx();
+      if (!ctx) return;
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
       analyser.fftSize = 512;
       src.connect(analyser);
       entry.analyser = analyser;
@@ -169,7 +182,8 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
         // 关麦时把 track.enabled 置了 false，重开必须显式恢复，否则"麦克风已开"但实际是静音的
         if (track) track.enabled = true;
         for (const p of peers.values()) { try { await p.sender.replaceTrack(track); } catch (e) { /* ignore */ } }
-        if (audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+        // 同理：此刻在点击手势里，是拉起音频上下文最可靠的时机
+        ensureAudioCtx();
         micOn = true;
       } catch (e) {
         const name = e && e.name;
@@ -191,8 +205,16 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   function setListen(on) {
     if (closed) return listenOn;
     listenOn = !!on;
-    for (const p of peers.values()) p.audio.muted = !listenOn;
-    if (listenOn && audioCtx && audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+    // 必须在用户手势内把上下文拉起来（点击"收听"就是手势）
+    if (listenOn) ensureAudioCtx();
+    for (const p of peers.values()) {
+      p.audio.muted = !listenOn;
+      // ⚠️ 关键：attachAudio 里那次 play() 是在远端音轨异步到达时调用的，通常没有用户手势，
+      // 会被浏览器自动播放策略拒绝并留下 paused=true。如果之后不再补 play()，
+      // 元素就永远是暂停的 —— 表现为"连接正常、诊断也显示已连上，但一点声音都听不到"。
+      // 这里在点击手势里补一次，把这个状态解开。
+      if (listenOn) p.audio.play().catch(() => {});
+    }
     if (listenOn) startSpeakLoop();
     socket.emit("voice_state", { roomCode, micOn, listenOn });
     return listenOn;
