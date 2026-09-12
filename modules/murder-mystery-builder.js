@@ -992,6 +992,18 @@ function shiftClock(timeStr, deltaMin) {
   return one(String(timeStr)) || null;
 }
 
+/** 从大纲中提取唯一的案发日期（如"4月12日"）；无、或有多个不一致时返回 null */
+function parseCaseDate(outline) {
+  if (!outline) return null;
+  const text = [
+    outline.storyBackground,
+    outline.coreTrick,
+    ...(outline.timeline || []).map(t => t && t.desc),
+  ].filter(Boolean).join(" ");
+  const hits = [...new Set(text.match(/\d{1,2}月\d{1,2}日/g) || [])];
+  return hits.length === 1 ? hits[0] : null;
+}
+
 /**
  * 权威时间轴：把大纲的时间线骨架（真实时间）按诡计偏移展开成「真实 ↔ 座钟」对照表。
  * 历史缺陷：各角色各自推算、且大半不标注基准，同一个数字在不同角色嘴里代表不同真实时刻，
@@ -1008,6 +1020,14 @@ function buildTimeAxis(outline) {
   L.push("- **每条时间线条目都必须标注时间来源**，格式：`【座钟】21:30` 或 `【真实】21:15`；两者都清楚时写 `【真实】21:15（座钟21:30）`。禁止写不带来源的裸时间。");
   L.push("- 角色只能引用自己**当时实际可能看到的时间源**：普通人只看到座钟（写【座钟】）；持有怀表/手表者可看到真实时间（写【真实】）；凶手两者都知道。");
   L.push("- 下方对照表为 DM 权威，角色剧本中的同一事件必须与之吻合；若你扮演的角色当时不可能知道该换算，就只写自己看到的那一侧。");
+  // 日期基准：实测不约束时，各角色会各自编出互相冲突的日期
+  // （出现过 4月12日／10月18日／6月18日／11月4日 四个日期并存），而逐句补丁式修订修不了这类全局问题。
+  const caseDate = parseCaseDate(outline);
+  if (caseDate) {
+    L.push(`- **案发日期统一为「${caseDate}」**：所有角色的时间线必须使用该日期，禁止自创其它月份/日期。`);
+  } else {
+    L.push("- **本案未设定绝对日期**：所有角色的时间线一律使用相对日期表述（`案发前一日` / `案发当日`），**严禁自创月份与日期**（同一剧本内出现多个不同日期属于重大逻辑漏洞）。");
+  }
   const rows = (outline.timeline || []).map(t => {
     const clock = shiftClock(t.time, delta) || "—";
     return `| ${t.time} | ${clock} | ${String(t.desc || "").replace(/\|/g, "/").slice(0, 60)} |`;
@@ -1031,8 +1051,15 @@ function checkTrickObservability(report, outline, fullScript) {
   if (!axis) return { needed: false, ok: true };
   const clues = String((report && report.clues) || "");
   const text = clues + "\n" + String(fullScript || "");
-  const hasIndependent = /怀表|手表|腕表|秒表|死亡时间|尸温|尸僵|时间戳|报时|邮戳|电报/.test(text);
-  const hasClockAnomaly = /(座钟|时钟|挂钟|铜钟)[^。\n]{0,40}(拨|调|快|慢|不准|走时|机芯|痕迹|齿轮|对不上|不一致)/.test(text);
+  // 独立时间源：某人的怀表/手表读数，或对死亡时间的客观判定
+  const hasIndependent = /怀表|手表|腕表|秒表|挂表|死亡时间|尸温|尸僵|时间戳|报时|标准时间|对表/.test(text);
+  // 公共时钟本身的异常 / 被动手脚的证据。
+  // ⚠️ 钟的名词必须宽松匹配：实测剧本通篇用"落地钟"，而早期实现只列了
+  // 座钟|时钟|挂钟|铜钟，导致明明有撬痕/钥匙线索却报"缺少时钟异常线索"（假阴性）。
+  // 用 (?<!分) 排除"分钟"，避免把任意"分钟…慢"当成时钟异常。
+  const hasClockAnomaly =
+    /(?<!分)钟[^。\n]{0,40}(拨|调|不准|走时|机芯|痕迹|齿轮|撬|后盖|底座|对不上|不一致|动过|快|慢)/.test(text) ||
+    /(拨|调|撬|动过|改过)[^。\n]{0,20}(?<!分)钟/.test(text);
   return { needed: true, hasIndependent, hasClockAnomaly, ok: hasIndependent && hasClockAnomaly };
 }
 
@@ -1927,4 +1954,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability };
+module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate };

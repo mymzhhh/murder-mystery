@@ -9,6 +9,7 @@ const {
   shiftClock,
   buildTimeAxis,
   checkTrickObservability,
+  parseCaseDate,
 } = require("../modules/murder-mystery-builder");
 
 // 取自实测大纲《钟楼诡影》的真实字段：注意 type 写"调慢"而 mechanism 写"调快"
@@ -85,4 +86,55 @@ test("checkTrickObservability：非时间类诡计不参与校验", () => {
   const r = checkTrickObservability({ clues: "" }, { trickSpec: { mechanism: "暗格藏凶器。" } });
   assert.strictEqual(r.needed, false);
   assert.strictEqual(r.ok, true);
+});
+
+// ==================== 回归：实测《落钟诡计》的真实线索文本 ====================
+// 早期实现把钟的名词写成 座钟|时钟|挂钟|铜钟，而剧本通篇用「落地钟」，
+// 导致明明有撬痕/钥匙/怀表线索却误报"缺少公共时钟异常线索"（假阴性）。
+
+const REAL_CLUES = [
+  "大堂内的老式落地钟，其黄铜底座边缘有崭新的细微刮痕，位置与使用钥匙或工具打开后盖的角度一致。",
+  "落地钟后盖内侧，发现一处新鲜的、细微的撬痕。钟摆下方地面有一小滴凝固的蜡油。",
+  "吧台下层找到一个被遗忘的黄铜钥匙，齿痕特殊，与落地钟后盖锁孔尝试后吻合。",
+  "钱鼎斋随身携带一块老式怀表，表盖内侧刻有“庚申年制”字样，时间显示20:50。",
+  "钱鼎斋在“发现尸体后”于大堂集合时，曾当众查看自己的怀表并大声说：“我的表是准的，现在已经是晚上九点差十分了！大堂的钟只走到八点三十五，肯定有人动过！”",
+].join("\n");
+
+test("checkTrickObservability：真实线索（落地钟撬痕 + 怀表）应判为可观测", () => {
+  const r = checkTrickObservability({ clues: REAL_CLUES }, OUTLINE);
+  assert.strictEqual(r.hasIndependent, true, "怀表应被识别为独立时间源");
+  assert.strictEqual(r.hasClockAnomaly, true, "『落地钟…撬痕/底座刮痕』应被识别为时钟异常（曾因名词表漏了『落地钟』而假阴性）");
+  assert.strictEqual(r.ok, true);
+});
+
+test("checkTrickObservability：『分钟』不得被误判为时钟异常", () => {
+  const r = checkTrickObservability({ clues: "他等了15分钟，动作很慢。" }, OUTLINE);
+  assert.strictEqual(r.hasClockAnomaly, false, "分钟+慢 不应算作时钟被动手脚的证据");
+});
+
+// ==================== 日期基准（跨角色日期冲突的预防） ====================
+
+test("parseCaseDate：无日期或多个冲突日期时返回 null", () => {
+  assert.strictEqual(parseCaseDate({ storyBackground: "1937年，上海法租界。" }), null);
+  assert.strictEqual(
+    parseCaseDate({ timeline: [{ time: "20:00", desc: "4月12日案发" }, { time: "21:00", desc: "10月18日另一说" }] }),
+    null
+  );
+});
+
+test("parseCaseDate：唯一日期时采用", () => {
+  assert.strictEqual(parseCaseDate({ storyBackground: "案发当日为4月12日，暴雨。" }), "4月12日");
+});
+
+test("buildTimeAxis：未设绝对日期时强制相对日期（禁止自创月日）", () => {
+  const axis = buildTimeAxis(OUTLINE); // OUTLINE 的 storyBackground 只有年份
+  assert.ok(axis.includes("未设定绝对日期"), "应声明无绝对日期");
+  assert.ok(axis.includes("案发前一日"), "应给出相对日期写法");
+  assert.ok(axis.includes("严禁自创月份与日期"), "应明确禁止自创月日");
+});
+
+test("buildTimeAxis：大纲有唯一日期时统一为该日期", () => {
+  const axis = buildTimeAxis({ ...OUTLINE, storyBackground: "案发当日为4月12日。" });
+  assert.ok(axis.includes("案发日期统一为「4月12日」"), "应注入统一日期");
+  assert.ok(!axis.includes("未设定绝对日期"));
 });
