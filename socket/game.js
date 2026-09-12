@@ -13,6 +13,19 @@ const aiPlayer = require("../modules/ai-player");
 function setupGameSocket(io) {
   const disconnectTimers = {};
   const phaseTimers = {};
+  // 语音聊天（WebRTC 网状连接）信令：音频本身走点对点，服务端只记录"谁开了语音"
+  // 并中转 SDP/ICE，不接触也不转发任何音频数据。
+  const voiceRooms = {}; // roomCode → Set<socketId>
+  // socketId → Set<roomCode>。必须自己记：socket.io v4 在 disconnect 事件触发前已 leaveAll()，
+  // 断线处理器里读 socket.rooms 得到的是空集合（实测：断线后玩家 connected 永远停在 true，
+  // 而 humanCount 用 connected 过滤 → 幽灵玩家会让人永远凑不满"全员已准备"，只能等超时）。
+  const socketRooms = {};
+  function voiceLeave(code, id) {
+    const set = voiceRooms[code];
+    if (!set) return;
+    if (set.delete(id)) io.to(code).emit("voice_leave", { playerId: id });
+    if (!set.size) delete voiceRooms[code];
+  }
 
   // async socket handler 错误边界
   function safeHandler(fn) {
@@ -31,6 +44,7 @@ function setupGameSocket(io) {
     join_room: 1000,
     intro_statement: 2000,
     ask_ai_player: 3000,
+    voice_state: 400,
   };
 
   function checkRateLimit(socket, eventName) {
@@ -120,6 +134,7 @@ function setupGameSocket(io) {
           await addPlayer(roomCode, socket.id, user.username);
         }
         socket.join(roomCode);
+        (socketRooms[socket.id] || (socketRooms[socket.id] = new Set())).add(roomCode);
 
         // 同步 AI 补位：真人已选角色之外的玩家槽位自动由 AI 扮演
         await syncAiFillers(roomCode);
@@ -181,6 +196,8 @@ function setupGameSocket(io) {
         const me = players.find(p => p.playerId === socket.id);
         if (me) await removePlayer(roomCode, socket.id);
         socket.leave(roomCode);
+        if (socketRooms[socket.id]) socketRooms[socket.id].delete(roomCode);
+        voiceLeave(roomCode, socket.id); // 退出房间同时退出语音
         // 清理该玩家的 ready/投票残留（否则继续干扰阶段推进计数）
         try {
           const rr = await getRedis();
@@ -610,14 +627,77 @@ function setupGameSocket(io) {
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
 
+    // ==================== 语音聊天（WebRTC 信令中转） ====================
+    // 两个开关的语义（都在客户端一侧生效，服务端只做成员管理）：
+    //   micOn    「向其他人说话」：是否把自己的麦克风轨加入连接
+    //   listenOn 「接收其他人说话」：是否播放收到的远端音频
+    socket.on("voice_join", async ({ roomCode }) => {
+      try {
+        const players = await getPlayers(roomCode);
+        const me = players.find(p => p.playerId === socket.id);
+        if (!me) return socket.emit("error", { code: "NOT_IN_ROOM", message: "你不在该房间内" });
+        if (me.isNPC || me.isAI) return; // 虚拟角色不参与语音
+        const set = voiceRooms[roomCode] || (voiceRooms[roomCode] = new Set());
+        // 新加入者向"已在语音中的成员"发起 offer，方向固定，避免双方同时发起造成 glare
+        const peers = [...set].filter(id => id !== socket.id);
+        set.add(socket.id);
+        // 名册里只有 socketId，必须连名字一起下发，否则新加入者的成员列表上全是乱码 ID
+        const names = {};
+        for (const id of peers) {
+          const p = players.find(x => x.playerId === id);
+          if (p) names[id] = p.characterName || p.playerName;
+        }
+        socket.emit("voice_roster", { peers, names, self: socket.id });
+        socket.to(roomCode).emit("voice_join", {
+          playerId: socket.id,
+          playerName: me.characterName || me.playerName,
+        });
+      } catch (e) { socket.emit("error", { code: "VOICE_JOIN_FAILED", message: e.message }); }
+    });
+
+    socket.on("voice_leave", ({ roomCode }) => {
+      voiceLeave(roomCode, socket.id);
+      const set = voiceRooms[roomCode];
+      socket.emit("voice_roster", { peers: set ? [...set].filter(id => id !== socket.id) : [], self: socket.id });
+    });
+
+    // SDP / ICE 中转：只按 socketId 点对点转发
+    socket.on("voice_signal", ({ to, data }) => {
+      if (!to || !data) return;
+      io.to(to).emit("voice_signal", { from: socket.id, data });
+    });
+
+    // 广播开关状态，供其他玩家看到"谁开了麦 / 谁没在听"
+    socket.on("voice_state", async ({ roomCode, micOn, listenOn }) => {
+      if (!checkRateLimit(socket, "voice_state")) return;
+      try {
+        const players = await getPlayers(roomCode);
+        const me = players.find(p => p.playerId === socket.id);
+        if (!me) return;
+        io.to(roomCode).emit("voice_state", {
+          playerId: socket.id,
+          playerName: me.characterName || me.playerName,
+          micOn: !!micOn,
+          listenOn: !!listenOn,
+        });
+      } catch (e) { /* ignore */ }
+    });
+
     socket.on("disconnect", async () => {
       delete rateLimits[socket.id]; // 即时清理，不等定时器
       try {
         // 用 socket.io 自身的房间集合定位（不能依赖 rooms:open——开局时房间已被 srem，
         // 历史 bug：开局后断线处理器对所有房间空转，connected 永不落库、幽灵玩家不清理）
-        const joined = [...socket.rooms].filter(c => c !== socket.id);
+        // socket.io v4 在 emit("disconnect") 之前已执行 leaveAll()，此处 socket.rooms 为空集合。
+        // 因此以自己维护的 socketRooms 为主，socket.rooms 仅作兜底。
+        const joined = [...new Set([
+          ...(socketRooms[socket.id] ? [...socketRooms[socket.id]] : []),
+          ...[...socket.rooms].filter(c => c !== socket.id),
+        ])];
+        delete socketRooms[socket.id];
         for (const code of joined) {
           try { await updatePlayer(code, socket.id, { connected: false }); } catch (e) { /* skip */ }
+          voiceLeave(code, socket.id); // 断线即退出语音（重连后由客户端重新加入）
           // 5分钟后未重连则自动离开房间
           const timerKey = code + ":" + socket.id;
           if (disconnectTimers[timerKey]) clearTimeout(disconnectTimers[timerKey]);

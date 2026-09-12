@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
+import { createVoice } from "../lib/voice.js";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
 //
@@ -25,6 +26,14 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [sidebarTab, setSidebarTab] = useState("clues");
   const chatBoxRef = useRef(null);
   const seededRef = useRef(false);
+  // ---- 语音聊天（WebRTC 网状连接）两个开关 ----
+  const [micOn, setMicOn] = useState(false);        // 向其他人说话
+  const [listenOn, setListenOn] = useState(false);  // 接收其他人说话
+  const [voicePeers, setVoicePeers] = useState(0);
+  const [voiceError, setVoiceError] = useState("");
+  const [speaking, setSpeaking] = useState({});     // socketId → 是否正在说话
+  const [remoteVoice, setRemoteVoice] = useState({}); // socketId → { micOn, listenOn }
+  const voiceRef = useRef(null);
 
   const room = game.room || {};
   const ownerId = game.ownerId || room.ownerId;
@@ -107,6 +116,10 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         setChats((c) => [...c, { from: d.characterName || "?", content: d.content || "", ts: Date.now() }]);
       }),
       onSocket("error", (d) => { if (d && d.message) setNotice(d.message); }),
+      onSocket("voice_state", (d) => {
+        if (!d || !d.playerId) return;
+        setRemoteVoice((m) => ({ ...m, [d.playerId]: { micOn: !!d.micOn, listenOn: !!d.listenOn } }));
+      }),
     ];
     return () => offs.forEach((f) => f());
   }, []);
@@ -153,6 +166,49 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       .catch(() => {});
   }, [phase, room.roomCode, review]);
 
+  // ===== 语音聊天生命周期 =====
+  useEffect(() => {
+    if (!room.roomCode) return;
+    const v = createVoice({
+      socket,
+      roomCode: room.roomCode,
+      onPeers: (list) => setVoicePeers(list.length),
+      onSpeaking: setSpeaking,
+      onError: (m) => setVoiceError(m),
+    });
+    voiceRef.current = v;
+    return () => {
+      v.detach();
+      voiceRef.current = null;
+      setVoicePeers(0);
+      setSpeaking({});
+      setMicOn(false);
+      setListenOn(false);
+    };
+  }, [room.roomCode]);
+
+  async function toggleMic() {
+    const v = voiceRef.current;
+    if (!v) return;
+    setVoiceError("");
+    if (!v.micOn && !v.listenOn) v.join(); // 首次开启任一开关时才加入语音（避免无谓占用）
+    await v.setMic(!v.micOn);
+    setMicOn(v.micOn);
+    setListenOn(v.listenOn);
+    if (!v.micOn && !v.listenOn) v.leave();
+  }
+
+  function toggleListen() {
+    const v = voiceRef.current;
+    if (!v) return;
+    setVoiceError("");
+    if (!v.listenOn && !v.micOn) v.join();
+    v.setListen(!v.listenOn);
+    setMicOn(v.micOn);
+    setListenOn(v.listenOn);
+    if (!v.micOn && !v.listenOn) v.leave();
+  }
+
   // ===== 动作 =====
   const emit = (ev, data) => socket.emit(ev, { roomCode: room.roomCode, ...data });
 
@@ -185,14 +241,23 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         <header className="app-header">
           <h1>房间 {room.roomCode}</h1>
           {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
-          <span className="user-info" style={{ marginLeft: "auto", padding: "0 10px" }}>{user.username || ""}</span>
-          <button className="btn btn-outline btn-sm" onClick={onLeave}>离开房间</button>
+          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} />
+            <span className="user-info">{user.username || ""}</span>
+            <button className="btn btn-outline btn-sm" onClick={onLeave}>离开房间</button>
+          </div>
         </header>
         <div className="main-content" style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
           {notice && (
             <div className="alert alert-danger" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 10 }}>
               <span>{notice}</span>
               <button className="btn btn-outline btn-xs" onClick={() => setNotice("")}>关闭</button>
+            </div>
+          )}
+          {voiceError && (
+            <div className="alert alert-danger" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 10 }}>
+              <span>语音：{voiceError}</span>
+              <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
             </div>
           )}
           <div className="panel" style={{ padding: 16 }}>
@@ -213,6 +278,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
                     {/* 皇冠由 ownerId 计算：getPlayers() 不带 isOwner，room_updated 后原写法会丢 */
                     }{p.isAI ? "🤖 " : (p.playerId && p.playerId === ownerId) ? "👑 " : ""}{p.playerName}
                     {p.characterName ? ` → ${p.characterName}` : " (未选角色)"}
+                    {!p.isAI && !p.isNPC && <VoiceTag playerId={p.playerId} voice={remoteVoice} speaking={speaking} />}
                   </div>
                 ))}
               </div>
@@ -253,7 +319,8 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       <header className="app-header" style={{ flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 18 }}>{room.roomCode} · {phaseLabel(phase)}</h1>
         {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
-        <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
+          <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} />
           {myChar && <span className="tag" style={{ color: "var(--gold)" }}>{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
           <button className="btn btn-outline btn-sm" onClick={onLeave}>退出</button>
         </div>
@@ -264,6 +331,12 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
             <span>{notice}</span>
             <button className="btn btn-outline btn-xs" onClick={() => setNotice("")}>关闭</button>
+          </div>
+        )}
+        {voiceError && (
+          <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <span>语音：{voiceError}</span>
+            <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
           </div>
         )}
 
@@ -297,6 +370,8 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             onAskNpc={askNpc}
             onAskAi={askAiPlayer}
             players={players}
+            voice={remoteVoice}
+            speaking={speaking}
           />
         )}
         {phase === "voting" && (
@@ -316,6 +391,44 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         )}
       </div>
     </div>
+  );
+}
+
+// ===== 语音聊天控件 =====
+/** 两个按钮：左=是否向其他人说话，右=是否接收其他人说话 */
+function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <button
+        className={`btn btn-sm ${micOn ? "btn-success" : "btn-outline"}`}
+        onClick={onMic}
+        title="向其他人说话：关闭后其他人听不到你"
+      >
+        {micOn ? "🎤 说话中" : "🎤 说话：关"}
+      </button>
+      <button
+        className={`btn btn-sm ${listenOn ? "btn-success" : "btn-outline"}`}
+        onClick={onListen}
+        title="接收其他人说话：关闭后你听不到别人"
+      >
+        {listenOn ? "🔊 收听中" : "🔇 收听：关"}
+      </button>
+      {peerCount > 0 && <span className="text-xs text-dim">语音 {peerCount} 人</span>}
+    </div>
+  );
+}
+
+/** 玩家列表里的语音状态小标（🔊=正在说话 🎤=麦克风开 🚫=未在收听） */
+function VoiceTag({ playerId, voice, speaking }) {
+  const v = voice ? voice[playerId] : null;
+  const isSpeaking = !!(speaking && speaking[playerId]);
+  if (!v && !isSpeaking) return null;
+  const title = isSpeaking ? "正在说话" : (v && v.listenOn === false ? "未在收听" : "麦克风已开");
+  return (
+    <span style={{ marginLeft: 4 }} title={title}>
+      {isSpeaking ? "🔊" : (v && v.micOn ? "🎤" : "")}
+      {v && v.listenOn === false ? "🚫" : ""}
+    </span>
   );
 }
 
@@ -404,7 +517,7 @@ function IntroView({ onSubmit }) {
 }
 
 // ===== 搜证 + 讨论（合并阶段） =====
-function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players }) {
+function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking }) {
   const [msg, setMsg] = useState("");
   const [query, setQuery] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
@@ -478,6 +591,7 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
             {players.map((p) => (
               <div key={p.playerId || p.playerName} style={{ padding: "3px 0" }}>
                 {p.isNPC ? "🤖NPC" : p.isAI ? "🤖AI" : ""} {p.characterName || p.playerName}
+                {!p.isNPC && !p.isAI && <VoiceTag playerId={p.playerId} voice={voice} speaking={speaking} />}
               </div>
             ))}
           </div>
