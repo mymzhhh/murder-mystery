@@ -30,6 +30,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   let audioCtx = null;
   let micFallbackToRaw = false; // 是否因数字静音退回了原始采集（诊断用）
   let micSilent = false;        // 麦克风在系统层就采不到声音（诊断用）
+  let processingOn = true;      // 是否启用回声消除/降噪/自动增益
 
   const notify = (msg) => { if (onError) onError(msg); };
   const emitPeers = () => { if (onPeers) onPeers(listPeerStates()); };
@@ -73,6 +74,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
 
   function startSpeakLoop() {
     if (speakTimer) return;
+    let prevKey = "";
     speakTimer = setInterval(() => {
       if (closed || !onSpeaking) return;
       const speaking = {};
@@ -83,6 +85,13 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
         for (let i = 0; i < p.buf.length; i++) { const v = (p.buf[i] - 128) / 128; sum += v * v; }
         speaking[p.id] = Math.sqrt(sum / p.buf.length) > SPEAK_THRESHOLD;
       }
+      // 只在"谁在说话"真的变化时才回调。
+      // 原实现每 300ms 都产生一个新对象，即使没人说话也触发 React 重渲染整个对局界面，
+      // 在同时跑着 Docker、两个浏览器实例的机器上纯属白白占用 CPU —— 而音频线程对
+      // CPU 饥饿很敏感，卡顿会直接变成可听见的爆音和断续。
+      const key = Object.keys(speaking).sort().map(k => k + ":" + (speaking[k] ? 1 : 0)).join(",");
+      if (key === prevKey) return;
+      prevKey = key;
       onSpeaking(speaking);
     }, 300);
   }
@@ -204,9 +213,9 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
    *  说明那种情况是系统层没送数据，不是处理参数的问题。此时必须保留原流并给出准确提示，
    *  而不是换成一样静音的原始流、还告诉用户"已自动修复"。 */
   async function acquireMic() {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
+    // 玩家已主动关掉音频处理，就不要再自动折腾采集参数
+    if (!processingOn) return stream;
     if (!(await isDigitallySilent(stream, 1200))) return stream;
 
     try {
@@ -227,6 +236,37 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
     } catch (e) {
       return stream;
     }
+  }
+
+  /** 采集参数。外放音箱时必须开 echoCancellation，否则对方的声音会被麦克风收回去形成回声；
+   *  戴耳机时这三项处理没有用武之地，反而会引入"闷/水下/机器人"的失真
+   *  （noiseSuppression 是这类失真的常见来源），所以允许玩家自己关掉。 */
+  function audioConstraints() {
+    return processingOn
+      ? { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      : { echoCancellation: false, noiseSuppression: false, autoGainControl: false };
+  }
+
+  /** 切换音频处理：重建本地采集流并替换到所有已建立的连接上。
+   *  用 replaceTrack 替换，不需要重新协商。 */
+  async function setProcessing(on) {
+    if (closed || !!on === processingOn) return processingOn;
+    processingOn = !!on;
+    if (!localStream) return processingOn; // 还没开麦，下次采集时自然生效
+    const old = localStream;
+    try {
+      const next = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints() });
+      const track = next.getAudioTracks()[0];
+      if (track) track.enabled = micOn;
+      for (const p of peers.values()) { try { await p.sender.replaceTrack(micOn ? track : null); } catch (e) { /* ignore */ } }
+      localStream = next;
+      micFallbackToRaw = false;
+      old.getTracks().forEach(t => t.stop());
+    } catch (e) {
+      processingOn = !processingOn; // 切换失败就还原，别让开关状态和实际不一致
+      notify("切换音频处理失败：" + (e.message || e.name));
+    }
+    return processingOn;
   }
 
   async function setMic(on) {
@@ -371,6 +411,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
       audioCtx: audioCtx ? audioCtx.state : "未创建",
       micFallbackToRaw,
       micSilent,
+      processingOn,
       peers: [...peers.values()].map(p => {
         const stream = p.audio.srcObject;
         const tracks = stream && stream.getAudioTracks ? stream.getAudioTracks() : [];
@@ -393,9 +434,10 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
   }
 
   return {
-    join, leave, detach, setMic, setListen, diagnostics,
+    join, leave, detach, setMic, setListen, diagnostics, setProcessing,
     get micOn() { return micOn; },
     get listenOn() { return listenOn; },
     get peerCount() { return peers.size; },
+    get processingOn() { return processingOn; },
   };
 }

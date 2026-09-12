@@ -33,6 +33,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [voiceError, setVoiceError] = useState("");
   const [speaking, setSpeaking] = useState({});     // socketId → 是否正在说话
   const [remoteVoice, setRemoteVoice] = useState({}); // socketId → { micOn, listenOn }
+  const [processingOn, setProcessingOn] = useState(true); // 回声消除/降噪是否开启
   const voiceRef = useRef(null);
 
   const room = game.room || {};
@@ -214,6 +215,16 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const getVoiceDiag = useCallback(
     () => (voiceRef.current ? voiceRef.current.diagnostics() : null), []);
 
+  // 切换回声消除/降噪：外放音箱必须开，戴耳机时关掉音质更自然
+  const toggleProcessing = useCallback(async () => {
+    const v = voiceRef.current;
+    if (!v) return true;
+    setVoiceError("");
+    const next = await v.setProcessing(!v.processingOn);
+    setProcessingOn(!!next);
+    return next;
+  }, []);
+
   // ===== 动作 =====
   const emit = (ev, data) => socket.emit(ev, { roomCode: room.roomCode, ...data });
   function selectChar(name) { emit("select_character", { characterName: name }); }
@@ -246,7 +257,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           <h1>房间 {room.roomCode}</h1>
           {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} />
+            <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} processingOn={processingOn} onToggleProcessing={toggleProcessing} />
             <span className="user-info">{user.username || ""}</span>
             <button className="btn btn-outline btn-sm" onClick={onLeave}>离开房间</button>
           </div>
@@ -325,7 +336,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         <h1 style={{ fontSize: 18 }}>{room.roomCode} · {phaseLabel(phase)}</h1>
         {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
         <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
-          <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} />
+          <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} processingOn={processingOn} onToggleProcessing={toggleProcessing} />
           {myChar && <span className="tag" style={{ color: "var(--gold)" }}>{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
           <button className="btn btn-outline btn-sm" onClick={onLeave}>退出</button>
         </div>
@@ -412,10 +423,11 @@ export function micSupported() {
 /** 两个按钮：左=是否向其他人说话，右=是否接收其他人说话。
  *  "语音 N 人"可点开诊断面板：真机上"没声音"的原因很多（没授权 / 没收到远端音轨 /
  *  ICE 没连通 / 播放被浏览器拦），只靠现象分不清，这里直接把每步状态摊开。 */
-function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen, getDiag }) {
+function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen, getDiag, processingOn, onToggleProcessing }) {
   const supported = micSupported();
   const [showDiag, setShowDiag] = useState(false);
   const [diag, setDiag] = useState(null);
+  const [processingUi, setProcessingUi] = useState(!!processingOn);
 
   useEffect(() => {
     if (!showDiag) return;
@@ -454,7 +466,28 @@ function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen, getDiag }) {
         </button>
         {!supported && <span className="text-xs text-dim">（此页面无法用麦克风）</span>}
       </div>
-      {showDiag && <VoiceDiagPanel diag={diag} />}
+      {showDiag && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button
+              className="btn btn-outline btn-xs"
+              onClick={async () => {
+                const next = await onToggleProcessing();
+                setProcessingUi(!!next);
+              }}
+              title="回声消除/降噪/自动增益。外放音箱时必须开启；戴耳机时关掉可以明显减少闷、水下感、机器人音"
+            >
+              音频处理（回声消除/降噪）：{processingUi ? "开" : "关"}
+            </button>
+            <span className="text-xs text-dim">
+              {processingUi
+                ? "外放音箱请保持开启，否则会听到自己的回声；戴耳机时关掉音质更自然"
+                : "已关闭：音质更自然，但外放音箱会产生回声"}
+            </span>
+          </div>
+          <VoiceDiagPanel diag={diag} />
+        </div>
+      )}
     </div>
   );
 }
