@@ -6,6 +6,7 @@
 //
 // ⚠️ 浏览器要求安全上下文才能申请麦克风：http://localhost 可用，
 //    但通过局域网 IP（http://192.168.x.x）访问会被拒绝，需要 HTTPS 才能多人真机试玩。
+import { tuneOpusSdp, applySenderBitrate, opusInfoOf } from "./opus.mjs";
 
 const RTC_CONFIG = {
   // 同一台机器/同一局域网靠 host 候选即可连通；STUN 仅用于公网场景，取不到也无妨
@@ -14,6 +15,7 @@ const RTC_CONFIG = {
 
 const SPEAK_THRESHOLD = 0.02; // RMS 阈值，用于"谁在说话"的高亮
 
+/** 读出当前连接实际的 Opus 参数，用于在诊断面板里确认调音是否真的生效 */
 export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) {
   const peers = new Map();      // socketId → { pc, sender, audio, name, analyser }
   // socketId → 角色名。必须单独存：voice_join 通知往往早于对端发来的 offer 到达，
@@ -119,8 +121,12 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
     if (localStream && micOn) sender.replaceTrack(localStream.getAudioTracks()[0]).catch(() => {});
     if (initiator) {
       pc.createOffer()
-        .then(offer => pc.setLocalDescription(offer))
-        .then(() => socket.emit("voice_signal", { to: id, data: { sdp: pc.localDescription } }))
+        // 必须在 setLocalDescription 之前改 SDP，之后改就无效了
+        .then(offer => pc.setLocalDescription({ type: offer.type, sdp: tuneOpusSdp(offer.sdp) }))
+        .then(() => {
+          applySenderBitrate(sender);
+          socket.emit("voice_signal", { to: id, data: { sdp: pc.localDescription } });
+        })
         .catch(e => notify("建立语音连接失败：" + e.message));
     }
     emitPeers();
@@ -150,7 +156,9 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
         }
         if (data.sdp.type === "offer") {
           const answer = await entry.pc.createAnswer();
-          await entry.pc.setLocalDescription(answer);
+          // 与发起方一样：answer 的 fmtp 也要带上同样的 Opus 参数
+          await entry.pc.setLocalDescription({ type: answer.type, sdp: tuneOpusSdp(answer.sdp) });
+          applySenderBitrate(entry.sender);
           socket.emit("voice_signal", { to: from, data: { sdp: entry.pc.localDescription } });
         }
       } else if (data.candidate) {
@@ -378,6 +386,7 @@ export function createVoice({ socket, roomCode, onPeers, onSpeaking, onError }) 
           remoteTrackState: tracks.length ? tracks.map(t => t.readyState).join(",") : "-",
           playbackMuted: p.audio.muted,
           playbackPaused: p.audio.paused,
+          opus: opusInfoOf(p.pc),
         };
       }),
     };

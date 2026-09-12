@@ -495,6 +495,11 @@ function VoiceDiagPanel({ diag }) {
                   {" | "}播放静音={yn(p.playbackMuted)} 暂停={yn(p.playbackPaused)}
                   {p.pendingIce > 0 && ` | 待处理候选=${p.pendingIce}`}
                 </span>
+                {p.opus && (
+                  <div className="text-xs text-dim" style={{ paddingLeft: 14, ...mono, wordBreak: "break-all" }}>
+                    编码：{p.opus.fmtp}　发送端上限={p.opus.senderBitrate}
+                  </div>
+                )}
                 {!healthy && (
                   <div className="text-xs text-dim" style={{ paddingLeft: 14 }}>
                     {p.connectionState !== "connected" && "→ 连接没建立：等几秒，或让对方也点一次语音按钮重新协商。 "}
