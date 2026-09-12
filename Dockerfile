@@ -30,6 +30,8 @@ COPY templates/ ./templates/
 COPY routes/ ./routes/
 COPY socket/ ./socket/
 COPY public/ ./public/
+# 运维/数据脚本（如模型注册），随镜像分发以便在容器内直接执行
+COPY scripts/ ./scripts/
 
 # React 构建产物（来自 web-build 阶段）
 COPY --from=web-build /build/frontend/dist ./frontend/dist

@@ -791,6 +791,22 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // ============ 模型管理（生成大模型切换） ============
   const { listModels, upsertModel, removeModel, setActive, getAllModels } = require("../modules/model-manager");
 
+  /** 额外请求头：接受对象或 JSON 字符串；写错要报错而不是静默丢弃，
+   *  否则"配了 x-opencode-session 却一直 401"这种问题极难排查。 */
+  function parseExtraHeaders(v) {
+    if (v === undefined || v === null || v === "") return {};
+    if (typeof v === "object") return v;
+    const s = String(v).trim();
+    if (!s) return {};
+    let o;
+    try { o = JSON.parse(s); } catch (e) { throw new Error("额外请求头必须是合法 JSON，例如 {\"x-opencode-session\":\"abc\"}"); }
+    if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("额外请求头必须是 JSON 对象");
+    for (const [k, val] of Object.entries(o)) {
+      if (typeof val !== "string" && typeof val !== "number") throw new Error(`请求头 ${k} 的值必须是字符串`);
+    }
+    return o;
+  }
+
   // 列出全部通道模型（含环境默认项）
   app.get("/api/admin/models", authMiddleware, adminMiddleware, async (req, res) => {
     try {
@@ -802,8 +818,11 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   app.post("/api/admin/models/:channel", authMiddleware, adminMiddleware, async (req, res) => {
     try {
       const { channel } = req.params;
-      const { name, apiKey, baseUrl, model, note } = req.body || {};
-      const result = await upsertModel(channel, name, { apiKey, baseUrl, model, note });
+      const { name, apiKey, baseUrl, model, note, extraHeaders } = req.body || {};
+      // extraHeaders 原先在这个路由被直接丢掉，导致像 opencode.ai/zen/go 这种
+      // 要求 x-opencode-session 的网关在管理端根本配不出来（注册表里那条 mimo-v2.5
+      // 备注写着"需 x-opencode-session 头"，却从来没有这个字段）。
+      const result = await upsertModel(channel, name, { apiKey, baseUrl, model, note, extraHeaders: parseExtraHeaders(extraHeaders) });
       res.json(result);
     } catch (e) { res.status(400).json({ error: e.message }); }
   });
@@ -833,9 +852,23 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       const { channel } = req.params;
       const b = req.body || {};
       const name = String(b.name || "");
-      const apiKey = String(b.apiKey || "");
-      const baseUrl = String(b.baseUrl || "");
-      const model = String(b.model || "");
+      // 若填了已登记模型的名称且未重新输入密钥，就用该模型自己存储的配置来测。
+      // 历史行为：apiKey 留空时回退到"通道的环境密钥"，于是从界面上测试一个已登记的
+      // opencode 模型必然 401（用的是 Agnes 的密钥打 opencode 的网关）。
+      let reg = null;
+      if (name) {
+        try {
+          const { getRedis } = require("../modules/redis-client");
+          const rr = await getRedis();
+          const raw = await rr.hget(`model:registry:${channel}`, name);
+          if (raw) reg = JSON.parse(raw);
+        } catch (e) { /* 读不到就按未登记处理 */ }
+      }
+      const apiKey = String(b.apiKey || "") || (reg && reg.apiKey) || "";
+      const baseUrl = String(b.baseUrl || "") || (reg && reg.baseUrl) || "";
+      const model = String(b.model || "") || (reg && reg.model) || "";
+      // 测试连通也要带自定义请求头，否则 opencode 这类网关在界面上永远测不通
+      const extraHeaders = { ...((reg && reg.extraHeaders) || {}), ...parseExtraHeaders(b.extraHeaders) };
       const https = require("https");
       const http = require("http");
       const base = (baseUrl || (channel === "reasoning" ? (process.env.AGNES_BASE_URL || "https://apihub.agnes-ai.com/v1") : (process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com"))).replace(/\/+$/, "");
@@ -860,7 +893,12 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
         const req2 = mod.request({
           hostname: u.hostname, port: u.port || (u.protocol === "http:" ? 80 : 443),
           path: u.pathname + u.search, method: "POST",
-          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), "Authorization": "Bearer " + (key || "") },
+          headers: {
+            "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body),
+            "Authorization": "Bearer " + (key || ""),
+            "User-Agent": "murder-mystery/1.0",
+            ...extraHeaders,
+          },
           timeout: 45000, agent: new mod.Agent({ keepAlive: false }),
         }, res2 => {
           const chunks = [];

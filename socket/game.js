@@ -495,6 +495,7 @@ function setupGameSocket(io) {
           setting: parsed.setting,
           victim: parsed.victim,
           gameMode: parsed.setting?.gameMode || "",
+          roomCode, // 供 opencode 网关做"每段对话一个稳定会话"的路由与提示词缓存
         };
         const npcForAgent = { ...npcChar, roleMode: parsed.setting?.gameMode || "" };
 

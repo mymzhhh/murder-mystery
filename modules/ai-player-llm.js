@@ -23,6 +23,9 @@ async function buildKnowledge(roomCode, ai, parsed) {
   return {
     role,
     name: ai.characterName || "AI",
+    // 供 opencode 这类网关做"每段对话一个稳定会话"的路由与提示词缓存：
+    // 同一房间内多轮调用共用同一会话，命中率最高。
+    roomCode,
     myClues,
     allChars: (parsed.characters || []).map(c => `${c.name}${c.occupation ? "（" + c.occupation + "）" : ""}`),
     room: {
@@ -71,7 +74,7 @@ ${k.allChars.map(c => "- " + c).join("\n") || "（暂无）"}
 async function introLLM(k) {
   return agnes.chat(systemPrompt(k),
     "现在到了开场介绍环节。请以第一人称做开场自我介绍：介绍你是谁、你的身份背景、案发时你在哪里或正在做什么，以及你认为大家需要知道的事。要求：100~220字，清楚有条理，口语自然。",
-    { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.intro" });
+    { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.intro", sessionId: k.roomCode });
 }
 
 /**
@@ -79,7 +82,7 @@ async function introLLM(k) {
  */
 async function speakLLM(k, context) {
   const user = `现在是讨论阶段，大家正在交换信息。${context ? "其他人公开的发言有：\n" + context + "\n" : ""}请你回应并推动讨论：陈述你的线索、表达对某人的怀疑，或回应别人的话。60~120字，第一人称，口语化。`;
-  return agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.speak" });
+  return agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.speak", sessionId: k.roomCode });
 }
 
 /**
@@ -92,7 +95,7 @@ ${historyText ? "此前公开的对话：\n" + historyText : ""}
 请以你的角色身份回答（50~200字）：只依据你掌握的材料；不知道的就直说不清楚；不要透露你不知道的信息；凶手不得承认自己。`;
   return agnes.chat(systemPrompt(k), user, {
     maxTokens: 1500, temperature: 0.8, priority: "interactive",
-    timeoutMs: 25000, label: "ai.answer",
+    timeoutMs: 25000, label: "ai.answer", sessionId: k.roomCode,
   });
 }
 
@@ -110,7 +113,7 @@ async function voteLLM(k, candidates) {
 - 只输出 JSON，不要解释
 如果完全无法判断，也请选一个你觉得行为可疑的人。`;
   const raw = await agnes.chat(systemPrompt(k), user, {
-    maxTokens: 1500, temperature: 0.7, priority: "background", label: "ai.vote",
+    maxTokens: 1500, temperature: 0.7, priority: "background", label: "ai.vote", sessionId: k.roomCode,
   });
   if (!raw) return null;
   try {

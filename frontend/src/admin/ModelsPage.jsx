@@ -23,16 +23,28 @@ export default function ModelsPage() {
     const model = document.getElementById(`mdlModel_${channel}`).value?.trim();
     const baseUrl = document.getElementById(`mdlUrl_${channel}`).value?.trim();
     const apiKey = document.getElementById(`mdlKey_${channel}`).value?.trim();
+    const headersRaw = document.getElementById(`mdlHeaders_${channel}`).value?.trim();
     if (!name || !model) { alert("请填写名称与模型名"); return; }
+    // 提前校验，免得服务端报错后表单已被清空
+    let extraHeaders = {};
+    if (headersRaw) {
+      try {
+        extraHeaders = JSON.parse(headersRaw);
+        if (!extraHeaders || typeof extraHeaders !== "object" || Array.isArray(extraHeaders)) throw new Error("必须是对象");
+      } catch (e) {
+        alert("额外请求头必须是合法 JSON 对象，例如 {\"x-opencode-session\":\"abc\"}\n\n" + e.message);
+        return;
+      }
+    }
     setBusy((b) => ({ ...b, [channel]: "add" }));
     try {
       const d = await apiJson(`/api/admin/models/${channel}`, {
-        method: "POST", body: JSON.stringify({ name, model, baseUrl, apiKey }),
+        method: "POST", body: JSON.stringify({ name, model, baseUrl, apiKey, extraHeaders }),
       });
       if (d.error) throw new Error(d.error);
       await apiJson(`/api/admin/models/${channel}/active`, { method: "POST", body: JSON.stringify({ name }) });
       // 清空表单
-      ["Name", "Model", "Url", "Key"].forEach((s) => { const el = document.getElementById(`mdl${s}_${channel}`); if (el) el.value = ""; });
+      ["Name", "Model", "Url", "Key", "Headers"].forEach((s) => { const el = document.getElementById(`mdl${s}_${channel}`); if (el) el.value = ""; });
       load();
     } catch (e) { alert("添加失败: " + e.message); }
     finally { setBusy((b) => ({ ...b, [channel]: "" })); }
@@ -60,7 +72,12 @@ export default function ModelsPage() {
     const baseUrl = document.getElementById(`mdlUrl_${channel}`).value?.trim();
     const apiKey = document.getElementById(`mdlKey_${channel}`).value?.trim();
     const name = document.getElementById(`mdlName_${channel}`).value?.trim();
+    const headersRaw = document.getElementById(`mdlHeaders_${channel}`).value?.trim();
     if (!model) { alert("请填写模型名"); return; }
+    let extraHeaders = {};
+    if (headersRaw) {
+      try { extraHeaders = JSON.parse(headersRaw); } catch (e) { alert("额外请求头不是合法 JSON"); return; }
+    }
     setBusy((b) => ({ ...b, [channel]: "test" }));
     setTestResult((t) => ({ ...t, [channel]: "测试中..." }));
     try {
@@ -68,7 +85,7 @@ export default function ModelsPage() {
       const res = await fetch(`/api/admin/models/${channel}/test`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": "Bearer " + getToken() },
-        body: JSON.stringify({ model, name, baseUrl, apiKey }),
+        body: JSON.stringify({ model, name, baseUrl, apiKey, extraHeaders }),
       });
       let done = false;
       const result = await new Promise((resolve, reject) => {
@@ -118,6 +135,11 @@ export default function ModelsPage() {
                       {m.apiKey ? " | key: " + m.apiKey : " | key: (环境)"}
                       {m.source === "env" ? " | 来源: 环境变量" : " | 来源: 手动添加"}
                     </div>
+                    {m.extraHeaders && Object.keys(m.extraHeaders).length > 0 && (
+                      <div className="text-xs text-dim">
+                        额外请求头: {Object.entries(m.extraHeaders).map(([k, v]) => `${k}=${v}`).join(", ")}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
                     {!m.active && <button className="btn btn-outline btn-xs" onClick={() => setActive(ch.key, m.name)}>设为生效</button>}
@@ -139,6 +161,7 @@ export default function ModelsPage() {
                 </div>
                 <input id={`mdlUrl_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} placeholder="API Base URL（如 https://api.deepseek.com）" />
                 <input id={`mdlKey_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} type="password" placeholder="API Key（留空则用环境变量）" />
+                <input id={`mdlHeaders_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} placeholder='额外请求头 JSON（可留空，如 {"x-opencode-session":"abc123"}）' />
                 <div style={{ display: "flex", gap: 8 }}>
                   <button className="btn btn-primary btn-sm" disabled={busy[ch.key] === "add"} onClick={() => addModel(ch.key)}>
                     {busy[ch.key] === "add" ? "添加中..." : "添加并生效"}

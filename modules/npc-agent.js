@@ -127,6 +127,7 @@ async function generateNpcResponse(npc, question, scriptSummary, chatHistory) {
     () => agnes.chat(systemPrompt, userPrompt, {
       maxTokens: 1500, temperature: 0.8,
       priority: "interactive", timeoutMs: NPC_RESPONSE_TIMEOUT, label: "npc.answer",
+      sessionId: scriptSummary && scriptSummary.roomCode,
     }),
     () => generate(systemPrompt, userPrompt, { maxTokens: 512, temperature: 0.8 }),
   ];
