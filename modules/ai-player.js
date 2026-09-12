@@ -198,17 +198,21 @@ function scheduleRoom(io, roomCode, phase) {
 
     for (const ai of ais) {
       // 开场介绍：AI 自动作自我介绍
+      // 错峰延迟保持"不像机器人同时开口"的效果，但原来 5-15s / 10-30s / 30-120s 太长：
+      // 单次 LLM 本身要 5-9 秒（实测 6 路并发 9.1 秒全部返回，服务端不排队），
+      // 再叠加三四十秒的排队延迟，玩家感知就是"AI 半天不说话"。
+      // 现在把窗口收窄，总时长从最坏约 40 秒降到约 15 秒。
       if (phase === "intro") {
-        scheduleDelay(roomCode, () => actIntro(io, roomCode, ai), 5000 + Math.random() * 10000);
+        scheduleDelay(roomCode, () => actIntro(io, roomCode, ai), 2000 + Math.random() * 5000);   // 2-7s
       }
       // 合并轮（round1/round2 = 搜证+讨论）：AI 搜证 + 发言
       if (round > 0) {
-        scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 3000 + Math.random() * 12000);
-        scheduleDelay(roomCode, () => actSpeak(io, roomCode, ai, allChars), 10000 + Math.random() * 20000);
+        scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 1200 + Math.random() * 4000);  // 1.2-5.2s
+        scheduleDelay(roomCode, () => actSpeak(io, roomCode, ai, allChars), 3000 + Math.random() * 8000); // 3-11s
       }
       // 投票轮：延迟随机后投票
       if (phase === "voting") {
-        scheduleDelay(roomCode, () => actVote(io, roomCode, ai, allChars), 30000 + Math.random() * 90000);
+        scheduleDelay(roomCode, () => actVote(io, roomCode, ai, allChars), 8000 + Math.random() * 20000); // 8-28s
       }
     }
   }).catch(() => {});

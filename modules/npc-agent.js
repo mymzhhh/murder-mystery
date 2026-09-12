@@ -121,8 +121,13 @@ async function generateNpcResponse(npc, question, scriptSummary, chatHistory) {
 
   // 15s 超时保护：LLM 挂起时回退预设话术
   // Agnes 是推理型模型，maxTokens 需要留足（reasoning 会占输出预算）
+  // 优先级 interactive：玩家主动审讯 NPC 必须最优先，不能排在后台 AI 闲聊后面。
+  // timeoutMs 与下面的 Promise.race 保持一致，避免两套超时各说各话。
   const CHANNELS = [
-    () => agnes.chat(systemPrompt, userPrompt, { maxTokens: 1500, temperature: 0.8 }),
+    () => agnes.chat(systemPrompt, userPrompt, {
+      maxTokens: 1500, temperature: 0.8,
+      priority: "interactive", timeoutMs: NPC_RESPONSE_TIMEOUT, label: "npc.answer",
+    }),
     () => generate(systemPrompt, userPrompt, { maxTokens: 512, temperature: 0.8 }),
   ];
   let answer = null;

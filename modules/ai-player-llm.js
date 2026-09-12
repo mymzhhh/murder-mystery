@@ -66,11 +66,12 @@ ${k.allChars.map(c => "- " + c).join("\n") || "（暂无）"}
 
 /**
  * 开场自我介绍（LLM）
+ * 后台行为：可以被玩家的交互请求插队
  */
 async function introLLM(k) {
   return agnes.chat(systemPrompt(k),
     "现在到了开场介绍环节。请以第一人称做开场自我介绍：介绍你是谁、你的身份背景、案发时你在哪里或正在做什么，以及你认为大家需要知道的事。要求：100~220字，清楚有条理，口语自然。",
-    { maxTokens: 1500, temperature: 0.9 });
+    { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.intro" });
 }
 
 /**
@@ -78,17 +79,21 @@ async function introLLM(k) {
  */
 async function speakLLM(k, context) {
   const user = `现在是讨论阶段，大家正在交换信息。${context ? "其他人公开的发言有：\n" + context + "\n" : ""}请你回应并推动讨论：陈述你的线索、表达对某人的怀疑，或回应别人的话。60~120字，第一人称，口语化。`;
-  return agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.9 });
+  return agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.9, priority: "background", label: "ai.speak" });
 }
 
 /**
  * 回答玩家的审讯提问（LLM）
+ * 玩家主动发起的交互，优先级最高 —— 不能排在后台 AI 闲聊后面。
  */
 async function answerLLM(k, askerName, question, historyText) {
   const user = `玩家「${askerName}」正在向你提问，问题：${question}
 ${historyText ? "此前公开的对话：\n" + historyText : ""}
 请以你的角色身份回答（50~200字）：只依据你掌握的材料；不知道的就直说不清楚；不要透露你不知道的信息；凶手不得承认自己。`;
-  return agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.8 });
+  return agnes.chat(systemPrompt(k), user, {
+    maxTokens: 1500, temperature: 0.8, priority: "interactive",
+    timeoutMs: 25000, label: "ai.answer",
+  });
 }
 
 /**
@@ -104,7 +109,9 @@ async function voteLLM(k, candidates) {
 - 不要投给自己
 - 只输出 JSON，不要解释
 如果完全无法判断，也请选一个你觉得行为可疑的人。`;
-  const raw = await agnes.chat(systemPrompt(k), user, { maxTokens: 1500, temperature: 0.7 });
+  const raw = await agnes.chat(systemPrompt(k), user, {
+    maxTokens: 1500, temperature: 0.7, priority: "background", label: "ai.vote",
+  });
   if (!raw) return null;
   try {
     // 放宽解析：剥离代码块围栏/前后缀，再取最外层 JSON
