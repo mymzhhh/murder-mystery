@@ -105,6 +105,25 @@ const connectAndJoin = (code, token) => new Promise((resolve) => {
   check("另一个新房间仍可加入", ok2.ok === true, ok2.ok ? "" : JSON.stringify(ok2));
   check("它的创建时间是刚才", Math.abs(Date.now() - Number(await redis.hget(`game:${code2}`, "createdAt"))) < 60000);
 
+  console.log("\n【6】残留子键回收（房间主键已删、只剩 game:{code}:xxx）");
+  // 复现真实场景：AI 动作已通过存在性检查，房间随后被删，它的写入把子键建了回来。
+  // 这类房间不在 games:index 里，只按索引枚举的扫描器永远回收不掉。
+  const code3 = "ZQ" + Math.random().toString(36).slice(2, 6).toUpperCase();
+  await redis.hset(`game:${code3}:chat`, { probe: "1" });
+  await redis.hset(`game:${code3}:intro`, { probe: "1" });
+  const s3 = await sweepOnce();
+  check("扫描器发现了残留子键", s3.orphanKeys >= 1, `orphanKeys=${s3.orphanKeys} freedKeys=${s3.freedKeys}`);
+  check("残留子键已被删除", (await redis.exists(`game:${code3}:chat`)) === 0 && (await redis.exists(`game:${code3}:intro`)) === 0);
+
+  console.log("\n【7】建房占位锁不能被误删");
+  // 扫描器按 game:* 枚举时会看到 game:{code}:creating，那是建房时的唯一性占位锁，
+  // 仍在有效期内时清掉它会导致并发建房拿到同一个房号。
+  const lockCode = "ZL" + Math.random().toString(36).slice(2, 6).toUpperCase();
+  await redis.set(`game:${lockCode}:creating`, "1", "EX", 60);
+  await sweepOnce();
+  check("creating 占位锁仍存在", (await redis.exists(`game:${lockCode}:creating`)) === 1);
+  await redis.del(`game:${lockCode}:creating`);
+
   // 清理
   for (const c of [code, code2]) {
     const keys = await redis.keys(`game:${c}*`);

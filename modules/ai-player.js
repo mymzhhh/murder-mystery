@@ -180,6 +180,12 @@ function cancelRoom(roomCode) {
   }
 }
 
+// 房间被删除时（含生命周期扫描器回收、管理端删除）释放本模块的内存态。
+// 不注册的话，timers[roomCode] 与 searchCounts 会在这些路径上永久残留。
+try {
+  require("./room-cleanup-hooks").onRoomDeleted((code) => cancelRoom(code));
+} catch (e) { /* 钩子模块不可用时不影响主流程 */ }
+
 /**
  * 进入新阶段时为房间内所有 AI 玩家排定行动
  * 由 game.js 在 phase 切换（start_game / ready 推进 / 超时推进）后调用

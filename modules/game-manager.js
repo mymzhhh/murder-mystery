@@ -72,6 +72,11 @@ async function deleteRoom(code) {
     await r.del(...allKeys);
   }
   await r.zrem("games:index", code);
+  await r.srem("rooms:open", code);
+  // 通知各模块释放该房间的内存态（AI 定时器、阶段计时器、语音成员……）。
+  // 放在这里而不是各个调用点：删房间有四条路径（断线超时/主动离开/管理端/生命周期扫描器），
+  // 以前只有前两条做了内存清理，扫描器与管理端删除会留下永不释放的内存条目。
+  try { require("./room-cleanup-hooks").runRoomDeleted(code); } catch (e) { /* 清理失败不影响删除 */ }
 }
 
 

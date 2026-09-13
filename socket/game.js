@@ -63,8 +63,23 @@ function setupGameSocket(io) {
   const FAILED_JOIN_WINDOW_MS = 60 * 1000;
   const FAILED_JOIN_LOCK_MS = 10 * 60 * 1000;
 
-  function markFailedJoin(roomCode) {
-    const now = Date.now();
+  // 房间被删除时释放本模块的房间级内存态。
+  // 覆盖生命周期扫描器回收与管理端删除这两条路径 —— 以前它们不清理，
+  // phaseTimers / disconnectTimers / voiceRooms / failedJoin 会一直残留到各自超时才消失。
+  function cleanupRoomState(code) {
+    if (phaseTimers[code]) { clearTimeout(phaseTimers[code]); delete phaseTimers[code]; }
+    delete voiceRooms[code];
+    delete failedJoin[code];
+    for (const key of Object.keys(disconnectTimers)) {
+      if (key.startsWith(code + ":")) { clearTimeout(disconnectTimers[key]); delete disconnectTimers[key]; }
+    }
+    for (const [sid, set] of Object.entries(socketRooms)) {
+      if (set && set.has(code)) { set.delete(code); if (!set.size) delete socketRooms[sid]; }
+    }
+  }
+  try { require("../modules/room-cleanup-hooks").onRoomDeleted(cleanupRoomState); } catch (e) { /* ignore */ }
+
+  function markFailedJoin(roomCode) {    const now = Date.now();
     const f = failedJoin[roomCode];
     if (!f || now - f.windowStart > FAILED_JOIN_WINDOW_MS) {
       failedJoin[roomCode] = { count: 1, windowStart: now, lockedUntil: 0 };

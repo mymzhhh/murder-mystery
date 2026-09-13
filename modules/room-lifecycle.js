@@ -44,17 +44,35 @@ async function purgeRoom(r, code) {
 }
 
 /**
+ * 枚举所有"可能有残留"的房间号。
+ *
+ * 不能只看 games:index —— 曾出现"房间主键已删、却残留 game:{code}:chat / :intro 子键"
+ * 的情况（删除与 AI 写入之间的竞态：AI 已通过存在性检查，房间随后被删，它的写入又把子键建了回来）。
+ * 这类房间不在索引里，只按索引枚举就永远回收不掉。所以这里把两边取并集。
+ */
+async function enumerateRoomCodes() {
+  const r = await getRedis();
+  const codes = new Set();
+  try { (await r.zrange("games:index", 0, -1)).forEach(c => codes.add(c)); } catch (e) { /* ignore */ }
+  let keys = [];
+  try { keys = await scanKeys("game:*"); } catch (e) { /* ignore */ }
+  for (const k of keys) {
+    const m = k.match(/^game:([A-Z0-9]{6})(?::|$)/);
+    if (m) codes.add(m[1]);
+  }
+  return [...codes];
+}
+
+/**
  * 扫描一轮并回收。
- * @returns {Promise<{expired:number, abandoned:number, staleIndex:number, freedKeys:number, checked:number}>}
+ * @returns {Promise<{expired:number, abandoned:number, staleIndex:number, orphanKeys:number, freedKeys:number, checked:number}>}
  */
 async function sweepOnce(now = Date.now()) {
   const r = await getRedis();
-  const out = { expired: 0, abandoned: 0, staleIndex: 0, freedKeys: 0, checked: 0 };
+  const out = { expired: 0, abandoned: 0, staleIndex: 0, orphanKeys: 0, freedKeys: 0, checked: 0 };
   if (!r) return out;
 
-  // 以索引为准枚举房间；索引是唯一能列出"曾经存在过"的集合
-  let codes = [];
-  try { codes = await r.zrange("games:index", 0, -1); } catch (e) { return out; }
+  const codes = await enumerateRoomCodes();
   if (!codes.length) return out;
 
   for (const code of codes) {
@@ -62,8 +80,15 @@ async function sweepOnce(now = Date.now()) {
     let room = null;
     try { room = await r.hgetall(`game:${code}`); } catch (e) { continue; }
 
-    // 1) 房间已经不存在 —— 只剩索引死引用
+    // 1) 房间主键已不存在 —— 只剩子键或索引死引用。
+    //    注意排除 game:{code}:creating（建房时的唯一性占位锁，仍在有效期内不能动）。
     if (!room || !room.roomCode) {
+      const leftover = (await scanKeys(`game:${code}*`)).filter(k => !k.endsWith(":creating"));
+      if (leftover.length) {
+        await r.del(...leftover);
+        out.freedKeys += leftover.length;
+        out.orphanKeys++;
+      }
       await r.zrem("games:index", code);
       await r.srem("rooms:open", code);
       out.staleIndex++;
@@ -132,8 +157,8 @@ async function startRoomSweeper() {
   const run = async () => {
     try {
       const s = await sweepOnce();
-      if (s.expired || s.abandoned || s.staleIndex) {
-        console.log(`[rooms] 回收：过期 ${s.expired} 个、无人 ${s.abandoned} 个、清理死索引 ${s.staleIndex} 条、释放 ${s.freedKeys} 个键`);
+      if (s.expired || s.abandoned || s.staleIndex || s.orphanKeys) {
+        console.log(`[rooms] 回收：过期 ${s.expired} 个、无人 ${s.abandoned} 个、残留子键 ${s.orphanKeys} 处、死索引 ${s.staleIndex} 条、释放 ${s.freedKeys} 个键`);
       }
     } catch (e) { console.warn("[rooms] 扫描失败:", e.message); }
   };
