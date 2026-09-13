@@ -803,7 +803,10 @@ function inlineNodes(text) {
 
 function ReadingView({ script, char, iAmReady, onReady }) {
   const [page, setPage] = useState(0);
-  const [fullScroll, setFullScroll] = useState(false);
+  // 默认整篇滚动：玩家反馈分页"内容太少、还会截断"，整篇滚动一次看完最省事。
+  // 分页保留为可选（点右上角切换），有需要时还能用。
+  const [fullScroll, setFullScroll] = useState(true);
+  const [progress, setProgress] = useState(0); // 整篇模式下的阅读进度
   const boxRef = useRef(null);
   // 兜底：剧本正文必须是字符串。服务端曾经把角色 script 对象直接返回，
   // 拼进模板串就成了满屏 "[object Object]"——这里再挡一道，宁可显示提示也不要显示乱码。
@@ -814,16 +817,16 @@ function ReadingView({ script, char, iAmReady, onReady }) {
       : "");
   const text = safeScript || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
 
-  // 每页容量按容器实际尺寸估算。
-  // 原来固定 360 字：在 2149px 宽的窗口里一页只填约三分之一，玩家反馈"内容太少"，
-  // 而且 360 是硬切，句子会从中间被劈开。
+  // 每页容量按容器实际尺寸估算（仅分页模式用）。
+  // 原来固定 360 字：在 2149px 宽的窗口里一页只填约三分之一，而且 360 是硬切，
+  // 句子会从中间被劈开。整篇滚动为主之后这个值只在切回分页时才生效。
   const [budget, setBudget] = useState(1200);
   useLayoutEffect(() => {
     const calc = () => {
       const el = boxRef.current;
       if (!el) return;
       const width = Math.max(280, (el.clientWidth || 900) - 34); // 减去左右 padding
-      const height = Math.max(280, Math.round((window.innerHeight || 800) * 0.58));
+      const height = Math.max(280, Math.round((window.innerHeight || 800) * 0.62));
       setBudget(estimateBudget({ width, height }));
     };
     calc();
@@ -837,45 +840,68 @@ function ReadingView({ script, char, iAmReady, onReady }) {
   useEffect(() => { if (page > pages.length - 1) setPage(pages.length - 1); }, [pages.length, page]);
   // 切换分页/全文时回到开头，避免停在一个不存在的页码上
   useEffect(() => { setPage(0); }, [fullScroll, budget]);
+  // 切换模式时把滚动位置也归零，否则会停在中间让人以为内容丢了
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el) el.scrollTop = 0;
+    setProgress(0);
+  }, [fullScroll, page, budget]);
+
+  const readAll = fullScroll && progress >= 99;
+
+  function onScroll(e) {
+    const el = e.currentTarget;
+    const max = el.scrollHeight - el.clientHeight;
+    setProgress(max <= 0 ? 100 : Math.min(100, Math.round((el.scrollTop / max) * 100)));
+  }
 
   return (
     <div className="panel" style={{ padding: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
         <strong style={{ color: "var(--gold)" }}>📖 {char?.name || ""} 的剧本</strong>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="text-xs text-dim">
-            {fullScroll ? `全文 ${text.length} 字（可滚动）` : `第 ${page + 1}/${pages.length} 页 · 每页约 ${budget} 字`}
+          <span className="text-xs" style={{ color: readAll ? "var(--success, #4caf50)" : "var(--dim)" }}>
+            {fullScroll
+              ? (readAll ? `已读到末尾 · 全文 ${text.length} 字` : `已读 ${progress}% · 全文 ${text.length} 字`)
+              : `第 ${page + 1}/${pages.length} 页 · 每页约 ${budget} 字`}
           </span>
           <button className="btn btn-outline btn-xs" onClick={() => setFullScroll((v) => !v)}
-            title="切换「分页阅读」与「整篇滚动阅读」">
+            title="切换「整篇滚动」与「分页阅读」">
             {fullScroll ? "改为分页" : "整篇滚动"}
           </button>
         </div>
       </div>
       <div
         ref={boxRef}
+        onScroll={fullScroll ? onScroll : undefined}
         style={{
           fontSize: 15, lineHeight: 1.85, background: "rgba(255,255,255,.04)",
           padding: 16, borderRadius: 8,
-          // 高度上限 + 可滚动：即使某一页异常长（比如剧本里有个超长段落），
-          // 也绝不会被裁掉半行 —— 这是"内容被截断"这个反馈的直接兜底。
-          maxHeight: "62vh", overflowY: "auto",
+          // 固定高度 + 可滚动：内容永远不会被裁掉半行 —— 这是"被截断"这个反馈的直接兜底。
+          // 整篇模式下给足高度（68vh），一次能看到更多内容。
+          height: fullScroll ? "68vh" : undefined,
+          maxHeight: fullScroll ? undefined : "62vh",
+          overflowY: "auto",
         }}
       >
         <ScriptBody text={pages[page] || ""} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 8 }}>
-        <button className="btn btn-outline" disabled={fullScroll || page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 12, gap: 8 }}>
+        {!fullScroll && (
+          <button className="btn btn-outline" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
+        )}
         <button className="btn btn-success" disabled={iAmReady} onClick={onReady} style={iAmReady ? { opacity: 0.55 } : {}}>
           {iAmReady ? "已准备，等待其他人…" : "我已读完，准备就绪"}
         </button>
-        <button className="btn btn-outline" disabled={fullScroll || onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
+        {!fullScroll && (
+          <button className="btn btn-outline" disabled={onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
+        )}
       </div>
-      {!fullScroll && !onLast && (
-        <div className="text-xs text-dim" style={{ textAlign: "center", marginTop: 6 }}>
-          还有 {pages.length - page - 1} 页，也可以点右上角「整篇滚动」一次看完
-        </div>
-      )}
+      <div className="text-xs text-dim" style={{ textAlign: "center", marginTop: 6 }}>
+        {fullScroll
+          ? (readAll ? "已滚到末尾，可以点「我已读完」了" : "上下滚动即可阅读全文，滚到末尾会提示")
+          : `还有 ${Math.max(0, pages.length - page - 1)} 页`}
+      </div>
     </div>
   );
 }
