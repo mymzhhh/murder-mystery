@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from "react";
 import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
 import { createVoice } from "../lib/voice.js";
+import { paginate, estimateBudget, classifyLine, parseInline } from "../lib/paginate.mjs";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
 //
@@ -751,8 +752,59 @@ function PhaseBar({ readyInfo, iAmReady, onReady }) {
 }
 
 // ===== 阅读剧本（分页） =====
+// ===== 剧本正文渲染 =====
+/** 把剧本 markdown 渲染成结构化内容。
+ *  原来是把原始文本直接丢进 <div> 用 white-space: pre-wrap 显示，
+ *  于是 "###" 和 "**" 都原样打出来 —— 既难看，又白占大量行高，
+ *  一页能塞的内容因此少了一大截。 */
+function ScriptBody({ text }) {
+  const lines = String(text || "").split(/\r?\n/);
+  return (
+    <>
+      {lines.map((line, i) => {
+        const c = classifyLine(line);
+        if (c.kind === "blank") return <div key={i} style={{ height: 6 }} />;
+        if (c.kind === "heading") {
+          const size = c.level <= 2 ? 17 : c.level === 3 ? 16 : 15;
+          return (
+            <div key={i} style={{ fontSize: size, fontWeight: 700, color: "var(--gold)", margin: "10px 0 6px" }}>
+              {c.text}
+            </div>
+          );
+        }
+        if (c.kind === "subheading") {
+          return (
+            <div key={i} style={{ fontSize: 15, fontWeight: 700, margin: "12px 0 4px", color: "var(--gold-light, #e8d9a0)" }}>
+              {c.text}
+            </div>
+          );
+        }
+        if (c.kind === "list" || c.kind === "ordered") {
+          return (
+            <div key={i} style={{ display: "flex", gap: 6, margin: "3px 0 3px 4px" }}>
+              <span style={{ color: "var(--gold)", flexShrink: 0 }}>{c.kind === "ordered" ? c.index + "." : "•"}</span>
+              <span>{inlineNodes(c.text)}</span>
+            </div>
+          );
+        }
+        return <p key={i} style={{ margin: "6px 0" }}>{inlineNodes(c.text)}</p>;
+      })}
+    </>
+  );
+}
+
+function inlineNodes(text) {
+  return parseInline(text).map((seg, i) =>
+    seg.t === "bold"
+      ? <strong key={i} style={{ color: "var(--gold-light, #e8d9a0)" }}>{seg.v}</strong>
+      : <React.Fragment key={i}>{seg.v}</React.Fragment>
+  );
+}
+
 function ReadingView({ script, char, iAmReady, onReady }) {
   const [page, setPage] = useState(0);
+  const [fullScroll, setFullScroll] = useState(false);
+  const boxRef = useRef(null);
   // 兜底：剧本正文必须是字符串。服务端曾经把角色 script 对象直接返回，
   // 拼进模板串就成了满屏 "[object Object]"——这里再挡一道，宁可显示提示也不要显示乱码。
   const safeScript = typeof script === "string"
@@ -761,31 +813,69 @@ function ReadingView({ script, char, iAmReady, onReady }) {
       ? (script.fullScript || script.story || script.playerScript || "")
       : "");
   const text = safeScript || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
-  const pages = useMemo(() => {
-    const arr = [];
-    for (let i = 0; i < text.length; i += 360) arr.push(text.slice(i, i + 360));
-    return arr.length ? arr : [""];
-  }, [text]);
+
+  // 每页容量按容器实际尺寸估算。
+  // 原来固定 360 字：在 2149px 宽的窗口里一页只填约三分之一，玩家反馈"内容太少"，
+  // 而且 360 是硬切，句子会从中间被劈开。
+  const [budget, setBudget] = useState(1200);
+  useLayoutEffect(() => {
+    const calc = () => {
+      const el = boxRef.current;
+      if (!el) return;
+      const width = Math.max(280, (el.clientWidth || 900) - 34); // 减去左右 padding
+      const height = Math.max(280, Math.round((window.innerHeight || 800) * 0.58));
+      setBudget(estimateBudget({ width, height }));
+    };
+    calc();
+    window.addEventListener("resize", calc);
+    return () => window.removeEventListener("resize", calc);
+  }, []);
+
+  const pages = useMemo(() => (fullScroll ? [text] : paginate(text, budget)), [text, budget, fullScroll]);
   const onLast = page >= pages.length - 1;
 
   useEffect(() => { if (page > pages.length - 1) setPage(pages.length - 1); }, [pages.length, page]);
+  // 切换分页/全文时回到开头，避免停在一个不存在的页码上
+  useEffect(() => { setPage(0); }, [fullScroll, budget]);
 
   return (
     <div className="panel" style={{ padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
         <strong style={{ color: "var(--gold)" }}>📖 {char?.name || ""} 的剧本</strong>
-        <span className="text-xs text-dim">第 {page + 1}/{pages.length} 页</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="text-xs text-dim">
+            {fullScroll ? `全文 ${text.length} 字（可滚动）` : `第 ${page + 1}/${pages.length} 页 · 每页约 ${budget} 字`}
+          </span>
+          <button className="btn btn-outline btn-xs" onClick={() => setFullScroll((v) => !v)}
+            title="切换「分页阅读」与「整篇滚动阅读」">
+            {fullScroll ? "改为分页" : "整篇滚动"}
+          </button>
+        </div>
       </div>
-      <div style={{ whiteSpace: "pre-wrap", fontSize: 14, lineHeight: 1.8, minHeight: 260, background: "rgba(255,255,255,.04)", padding: 16, borderRadius: 8 }}>
-        {pages[page] || ""}
+      <div
+        ref={boxRef}
+        style={{
+          fontSize: 15, lineHeight: 1.85, background: "rgba(255,255,255,.04)",
+          padding: 16, borderRadius: 8,
+          // 高度上限 + 可滚动：即使某一页异常长（比如剧本里有个超长段落），
+          // 也绝不会被裁掉半行 —— 这是"内容被截断"这个反馈的直接兜底。
+          maxHeight: "62vh", overflowY: "auto",
+        }}
+      >
+        <ScriptBody text={pages[page] || ""} />
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12 }}>
-        <button className="btn btn-outline" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 12, gap: 8 }}>
+        <button className="btn btn-outline" disabled={fullScroll || page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
         <button className="btn btn-success" disabled={iAmReady} onClick={onReady} style={iAmReady ? { opacity: 0.55 } : {}}>
-          {iAmReady ? "已准备，等待其他人…" : onLast ? "我已读完，准备就绪" : "我已读完，准备就绪（还有下一页）"}
+          {iAmReady ? "已准备，等待其他人…" : "我已读完，准备就绪"}
         </button>
-        <button className="btn btn-outline" disabled={onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
+        <button className="btn btn-outline" disabled={fullScroll || onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
       </div>
+      {!fullScroll && !onLast && (
+        <div className="text-xs text-dim" style={{ textAlign: "center", marginTop: 6 }}>
+          还有 {pages.length - page - 1} 页，也可以点右上角「整篇滚动」一次看完
+        </div>
+      )}
     </div>
   );
 }
