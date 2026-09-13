@@ -12,7 +12,103 @@ const aiPlayer = require("../modules/ai-player");
 
 function setupGameSocket(io) {
   const disconnectTimers = {};
+  // 断线多久算"人走了"：超过这个时间仍未重连就踢出房间，并由 AI 接管其角色。
+  // 只有断开超过 AFK_KICK_MS 才动手，短暂掉线（刷新页面、切网络）不会被误踢。
+  const AFK_KICK_MS = Math.max(60 * 1000, (Number(process.env.AFK_KICK_MIN || 5) || 5) * 60 * 1000);
   const phaseTimers = {};
+
+  // ==================== 阶段推进：就绪阈值与倒计时 ====================
+  // 原来的规则是"全员就绪 → 5 秒推进；否则干等 10 分钟超时"。
+  // 问题是只要有一个真人挂着不点，全桌就得干等十分钟；而玩家反馈正是"因某人不动而无法推进"。
+  // 现在分两档：
+  //   · 全员就绪        → ALL_READY_SECONDS（默认 10 秒）后推进
+  //   · 只差一个人就绪  → PARTIAL_READY_SECONDS（默认 60 秒）倒计时后自动推进
+  // 两者都保留 10 分钟的阶段兜底（见 armPhaseDeadline），确保任何情况下都不会永久卡住。
+  //
+  // ⚠ 这一整块（状态 + 函数）必须留在 setupGameSocket 作用域，绝不能挪进下面 io.on("connection") 的回调。
+  //   挪进去就变成"每个 socket 各一份"：A 点准备起了 60 秒倒计时，B 随后点准备想取消它时
+  //   读到的是自己那份空表（实测日志：cancel run=false keys=），于是旧倒计时停不下来，
+  //   桌上同时收到两个倒计时数字（all cd=2 与 partial cd=48 交替下发）。
+  const ALL_READY_SECONDS = Math.max(3, Number(process.env.ALL_READY_SECONDS || 10) || 10);
+  const PARTIAL_READY_SECONDS = Math.max(10, Number(process.env.PARTIAL_READY_SECONDS || 60) || 60);
+  const PHASE_MAX_WAIT_MS = Math.max(60 * 1000, (Number(process.env.PHASE_MAX_WAIT_MIN || 10) || 10) * 60 * 1000);
+  const REASON_ALL = "全员已准备";
+
+  /** 进行中的倒计时：roomCode → { cancelled, reason, seconds } */
+  const readyCountdowns = {};
+
+  /** 取消进行中的倒计时，并立刻释放锁（随后可能马上起一个更短的倒计时） */
+  async function cancelReadyCountdown(roomCode) {
+    const run = readyCountdowns[roomCode];
+    if (run) run.cancelled = true;
+    // 立刻删锁：否则紧接着要起的"全员就绪"倒计时会因 SET NX 失败而根本起不来
+    await getRedis().del(`game:${roomCode}:countdown`).catch(() => {});
+  }
+
+  /**
+   * 倒计时结束后自动推进阶段。
+   * 用"带 token 的 SET NX"抢锁：并发的 ready 只有一个能推进（原来的锁机制保留），
+   * 且被取消的旧倒计时不会误删新倒计时的锁（token 不匹配就不删）。
+   * @returns {Promise<boolean>} 是否真正完成了推进
+   */
+  async function advanceAfterCountdown(io, roomCode, seconds, reason, meta = {}) {
+    const r = getRedis();
+    const countdownKey = `game:${roomCode}:countdown`;
+    const token = Date.now() + ":" + Math.random().toString(36).slice(2, 8);
+    const got = await r.set(countdownKey, token, "EX", seconds + 20, "NX");
+    if (!got) return false;
+
+    const run = { cancelled: false, reason, seconds };
+    readyCountdowns[roomCode] = run;
+    try {
+      const room = await getRoom(roomCode);
+      if (!room) return false;
+      const parsed = JSON.parse(room.parsedScript || "{}");
+      const nextPhase = getNextPhase(room.phase);
+      // 提前并行生成叙事，别让倒计时走完还要再等一次 LLM
+      const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
+
+      for (let cd = seconds; cd >= 1; cd--) {
+        if (run.cancelled) return false;
+        io.to(roomCode).emit("ready_update", {
+          readyCount: meta.readyCount || 0, totalCount: meta.totalCount || 0,
+          countdown: cd, reason, mode: meta.mode || "",
+        });
+        await new Promise(res => setTimeout(res, 1000));
+      }
+      if (run.cancelled) return false;
+
+      await r.del(`game:${roomCode}:ready`).catch(() => {});
+      const preGen = await narrativePromise;
+      await autoAdvancePhase(io, roomCode, parsed, preGen);
+      aiPlayer.scheduleRoom(io, roomCode, nextPhase);
+      // 进入下一阶段后重新装兜底计时器（reading/intro/round1/round2 才需要）
+      armPhaseDeadline(io, roomCode, nextPhase);
+      io.to(roomCode).emit("narrative", { text: `⏱ ${reason}，已自动进入下一阶段。` });
+      return true;
+    } finally {
+      // 只在锁仍属于自己时才删，避免把后来者的倒计时锁误删
+      const cur = await r.get(countdownKey).catch(() => null);
+      if (cur === token) await r.del(countdownKey).catch(() => {});
+      if (readyCountdowns[roomCode] === run) delete readyCountdowns[roomCode];
+    }
+  }
+
+  /** 阶段兜底：进入需要"就绪"的阶段后，无论如何 10 分钟内推进一次 */
+  function armPhaseDeadline(io, roomCode, phase) {
+    if (!["reading", "intro", "round1", "round2"].includes(phase)) return;
+    if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
+    phaseTimers[roomCode] = setTimeout(async () => {
+      try {
+        const cur = await getRoom(roomCode);
+        if (!cur || cur.phase !== phase) return;
+        const players = await getPlayers(roomCode);
+        const humanCount = players.filter(p => !p.isNPC && p.connected).length;
+        await advanceAfterCountdown(io, roomCode, 5, "⏰ 等待超时（AI DM 接管）", { readyCount: 0, totalCount: humanCount, mode: "timeout" });
+      } catch (e) { /* 忽略 */ } finally { delete phaseTimers[roomCode]; }
+    }, PHASE_MAX_WAIT_MS);
+  }
+
   // 语音聊天（WebRTC 网状连接）信令：音频本身走点对点，服务端只记录"谁开了语音"
   // 并中转 SDP/ICE，不接触也不转发任何音频数据。
   const voiceRooms = {}; // roomCode → Set<socketId>
@@ -68,6 +164,9 @@ function setupGameSocket(io) {
   // phaseTimers / disconnectTimers / voiceRooms / failedJoin 会一直残留到各自超时才消失。
   function cleanupRoomState(code) {
     if (phaseTimers[code]) { clearTimeout(phaseTimers[code]); delete phaseTimers[code]; }
+    // 倒计时也要停：房间都没了，再往下推进只会对空气广播
+    if (readyCountdowns[code]) readyCountdowns[code].cancelled = true;
+    delete readyCountdowns[code];
     delete voiceRooms[code];
     delete failedJoin[code];
     for (const key of Object.keys(disconnectTimers)) {
@@ -344,6 +443,8 @@ function setupGameSocket(io) {
         (await getRedis()).srem("rooms:open", roomCode);
         // 调度 AI 玩家行为（reading 阶段无行动，下一阶段由 ready 推进时调度）
         aiPlayer.scheduleRoom(io, roomCode, "reading");
+        // 装上阶段兜底计时器：即使全桌没人点"已读完"，10 分钟后也会自动推进，不会永久卡住
+        armPhaseDeadline(io, roomCode, "reading");
 
         // 异步生成开场叙事，完成后推送
         generatePhaseNarrative(parsed, "reading", {}).then(async (narrative) => {
@@ -586,20 +687,20 @@ function setupGameSocket(io) {
       } catch (e) { socket.emit("error", { code: "VOTE_FAILED", message: e.message }); }
     });
 
+    // ==================== 阶段推进：就绪阈值与倒计时 ====================
+    // 实现（readyCountdowns / advanceAfterCountdown / armPhaseDeadline）在 setupGameSocket 作用域，
+    // 不在本回调内 —— 详见文件上方那一大段注释（放进回调会变成每 socket 一份，取消不生效）。
+
     socket.on("ready", async ({ roomCode }) => {
       if (!checkRateLimit(socket, "ready")) return;
       try {
         const room = await getRoom(roomCode);
+        if (!room) return socket.emit("error", { code: "ROOM_NOT_FOUND", message: "房间不存在或已过期" });
         if (room.phase === "truth_reveal" || room.phase === "finished" || room.phase === "lobby") return;
-        const { getRedis } = require("../modules/game-manager");
-        const r = await getRedis();
+        const r = getRedis();
         const player = await getPlayer(roomCode, socket.id);
         if (!player) return socket.emit("error", { code: "NOT_IN_ROOM", message: "玩家不在房间内，请刷新页面重新加入" });
         if (player.isNPC) return;
-
-        // 倒计时进行中：忽略重复 ready 事件
-        const countdownKey = `game:${roomCode}:countdown`;
-        if (await r.exists(countdownKey)) return;
 
         const readyKey = `game:${roomCode}:ready`;
         // 用稳定的玩家标识（playerName）而非 socket.id 作为成员：
@@ -612,62 +713,25 @@ function setupGameSocket(io) {
 
         io.to(roomCode).emit("ready_update", { readyCount, totalCount: humanCount, playerName: player.characterName || player.playerName });
 
-        // 10分钟超时计时器（仅首次）
-        if (readyCount === 1 && !phaseTimers[roomCode]) {
-          phaseTimers[roomCode] = setTimeout(async () => {
-            try {
-              const curRoom = await getRoom(roomCode);
-              if (!curRoom || curRoom.phase === "truth_reveal" || curRoom.phase === "finished") {
-                delete phaseTimers[roomCode];
-                return;
-              }
-              // 10分钟到了，强制推进
-              const r2 = await getRedis();
-              const curPlayers = await getPlayers(roomCode);
-              const curHuman = curPlayers.filter(p => !p.isNPC && p.connected).length;
-              await r2.del(readyKey);
-              await r2.setex(countdownKey, 30, "1");
-              io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: curHuman, forceAdvance: true, countdown: 5 });
-              io.to(roomCode).emit("narrative", { text: "⏰ 等待超时，AI DM 将自动进入下一阶段。" });
+        const allReady = humanCount > 0 && readyCount >= humanCount;
+        // 只差一个人：不能再干等十分钟。给一段可预期的倒计时，到点自动推进。
+        const almostReady = humanCount >= 2 && readyCount >= humanCount - 1;
+        const running = readyCountdowns[roomCode];
 
-              const parsed = JSON.parse(curRoom.parsedScript || "{}");
-              const nextPhase = getNextPhase(curRoom.phase);
-              const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
-
-              for (let cd = 4; cd >= 0; cd--) {
-                await new Promise(resolve => setTimeout(resolve, 1000));
-                io.to(roomCode).emit("ready_update", { readyCount: 0, totalCount: curHuman, forceAdvance: true, countdown: cd });
-              }
-              const preGenNarrative = await narrativePromise;
-              await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
-              aiPlayer.scheduleRoom(io, roomCode, nextPhase);
-              await r2.del(countdownKey);
-              delete phaseTimers[roomCode];
-            } catch (e) { await getRedis().del(countdownKey); delete phaseTimers[roomCode]; }
-          }, 10 * 60 * 1000); // 10分钟
-        }
-
-        // 所有人就绪：取消计时器，立即倒计时推进
-        if (readyCount >= humanCount) {
+        // ⚠ 这里不能"倒计时进行中就早退"。
+        //   那样会在"只差一人"的长倒计时跑着时，把最后一人点准备的合法升级路径一并挡掉，
+        //   结果全桌都准备好了还得把 60 秒倒计时走完（实测复现过）：
+        //   既要挡住重复点击导致倒计时被无限重启，又要允许"情况升级"换成更短的倒计时。
+        if (allReady) {
+          if (running && running.reason === REASON_ALL) return; // 已在跑全员倒计时，重复点击不重启
           if (phaseTimers[roomCode]) { clearTimeout(phaseTimers[roomCode]); delete phaseTimers[roomCode]; }
-          // 原子抢锁：SET NX EX 只有一个调用者能成功，避免并发 ready 导致双推进（round1 直接跳 voting）
-          const gotLock = await r.set(countdownKey, "1", "EX", 30, "NX");
-          if (!gotLock) return;
-          await r.del(readyKey);
-          io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: 5 });
-
-          const parsed = JSON.parse(room.parsedScript || "{}");
-          const nextPhase = getNextPhase(room.phase);
-          const narrativePromise = nextPhase ? generatePhaseNarrative(parsed, nextPhase, { roomCode }) : Promise.resolve("");
-
-          for (let cd = 4; cd >= 0; cd--) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            io.to(roomCode).emit("ready_update", { readyCount: humanCount, totalCount: humanCount, countdown: cd });
-          }
-          const preGenNarrative = await narrativePromise;
-          await autoAdvancePhase(io, roomCode, parsed, preGenNarrative);
-          aiPlayer.scheduleRoom(io, roomCode, nextPhase);
-          await r.del(countdownKey);
+          await cancelReadyCountdown(roomCode);                 // 把"只差一人"的长倒计时换成短的
+          await advanceAfterCountdown(io, roomCode, ALL_READY_SECONDS, REASON_ALL, { readyCount: humanCount, totalCount: humanCount, mode: "all" });
+        } else if (almostReady) {
+          if (running) return;                                  // 已有倒计时在跑，让它跑完
+          // mode=partial 告诉前端"还没到齐，最后一个人现在点准备依然有效"，
+          // 否则前端会把准备按钮置灰，玩家眼睁睁看着 60 秒倒计时却按不动。
+          await advanceAfterCountdown(io, roomCode, PARTIAL_READY_SECONDS, `已有 ${readyCount}/${humanCount} 人准备`, { readyCount, totalCount: humanCount, mode: "partial" });
         }
       } catch (e) { socket.emit("error", { code: "READY_FAILED", message: e.message }); }
     });
@@ -743,29 +807,61 @@ function setupGameSocket(io) {
         for (const code of joined) {
           try { await updatePlayer(code, socket.id, { connected: false }); } catch (e) { /* skip */ }
           voiceLeave(code, socket.id); // 断线即退出语音（重连后由客户端重新加入）
-          // 5分钟后未重连则自动离开房间
+          // 超过 AFK_KICK_MS 仍未重连则踢出房间
           const timerKey = code + ":" + socket.id;
           if (disconnectTimers[timerKey]) clearTimeout(disconnectTimers[timerKey]);
           disconnectTimers[timerKey] = setTimeout(async () => {
             try {
               const players = await getPlayers(code);
               const me = players.find(p => p.playerId === socket.id);
-              if (me && !me.connected) {
-                await removePlayer(code, socket.id);
-                const remaining = await getPlayers(code);
-                const humanRemaining = remaining.filter(p => !p.isNPC);
-                if (humanRemaining.length === 0) {
-                  aiPlayer.cancelRoom(code);
-                  const r = await getRedis();
-                  await r.srem("rooms:open", code);
-                  await deleteGameRoom(code);
-                } else {
-                  io.to(code).emit("room_updated", { players: remaining, ownerId: (await getRoom(code)).ownerId });
-                }
+              if (!me || me.connected) return; // 已重连或已被移除
+
+              const leftChar = me.characterName || "";
+              await removePlayer(code, socket.id);
+
+              let remaining = await getPlayers(code);
+              const humanRemaining = remaining.filter(p => !p.isNPC);
+              if (humanRemaining.length === 0) {
+                aiPlayer.cancelRoom(code);
+                const r = await getRedis();
+                await r.srem("rooms:open", code);
+                await deleteGameRoom(code);
+                return;
               }
-            } catch (e) { /* skip */ }
+
+              // 房间还有其他人：让 AI 接管这名玩家原来的角色。
+              // 不接管的话那个角色会永远空着 —— 剧情缺一角，而且"凶手/关键角色"可能恰好是它。
+              // syncAiFillers 的语义正是"把没有被真人选中的角色补成 AI"，直接复用。
+              let tookOver = null;
+              try {
+                await syncAiFillers(code);
+                remaining = await getPlayers(code);
+                if (leftChar) {
+                  const ai = remaining.find(p => p.isNPC && p.isAI && p.characterName === leftChar);
+                  if (ai) tookOver = leftChar;
+                }
+              } catch (e) { console.warn("[socket] AI 接管失败:", e.message); }
+
+              // 房主走了要把房主转给还在的人，否则没人能开局/推进
+              let room = await getRoom(code);
+              if (room && (!room.ownerId || !humanRemaining.some(p => p.playerId === room.ownerId))) {
+                await updateRoom(code, { ownerId: humanRemaining[0].playerId });
+                room = await getRoom(code);
+              }
+
+              // 无论有没有成功补位，都必须告诉桌上其他人"这个人走了"。
+              // 原来只在 AI 接管成功时发消息，补位失败就变成"人凭空消失"，其他人根本不知道发生了什么。
+              const mins = Math.round(AFK_KICK_MS / 60000);
+              const who = me.characterName || me.playerName;
+              const text = tookOver
+                ? `🤖 ${who} 已离开超过 ${mins} 分钟，由 AI 接管该角色继续游戏。`
+                : `⚠️ ${who} 已离开超过 ${mins} 分钟，已被移出房间（该角色暂时空置）。`;
+              const msg = await addChatMessage(code, "system", "系统", "系统", text, room ? room.phase : "lobby");
+              io.to(code).emit("chat_message", msg);
+              io.to(code).emit("room_updated", { players: remaining, ownerId: room ? room.ownerId : undefined });
+            } catch (e) { console.warn("[socket] 断线清理异常:", e.message); }
             delete disconnectTimers[timerKey];
-          }, 5 * 60 * 1000); // 5分钟
+          }, AFK_KICK_MS);
         }
       } catch (e) { console.warn("[socket] disconnect 处理异常:", e.message); }
     });

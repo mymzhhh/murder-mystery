@@ -20,7 +20,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [availChars, setAvailChars] = useState([]);
   const [voteState, setVoteState] = useState({ recordedTarget: null, count: 0, total: 0 });
   const [narrative, setNarrative] = useState("");
-  const [readyInfo, setReadyInfo] = useState({ count: 0, total: 0, countdown: null, force: false, last: "" });
+  const [readyInfo, setReadyInfo] = useState({ count: 0, total: 0, countdown: null, force: false, reason: "", mode: "", last: "" });
   const [iAmReady, setIAmReady] = useState(false);
   const [review, setReview] = useState(null);
   const [notice, setNotice] = useState("");
@@ -82,7 +82,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         setPhase(d.phase);
         // 阶段推进后重置准备状态
         setIAmReady(false);
-        setReadyInfo({ count: 0, total: 0, countdown: null, force: false, last: "" });
+        setReadyInfo({ count: 0, total: 0, countdown: null, force: false, mode: "", last: "" });
       }),
       onSocket("narrative_ready", (d) => { if (d.narrative) setNarrative(d.narrative); }),
       onSocket("narrative", (d) => { if (d.text) setNarrative(d.text); }),
@@ -109,6 +109,8 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           total: d.totalCount !== undefined ? d.totalCount : r.total,
           countdown: typeof d.countdown === "number" ? d.countdown : null,
           force: !!d.forceAdvance,
+          reason: d.reason || "",
+          mode: d.mode || "",
           last: d.playerName || r.last,
         }));
       }),
@@ -121,7 +123,13 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       // 注意：这里刻意不监听 intro_statement。
       // 服务端已经为自我介绍写入了一条持久化的 chat_message（带 📣 前缀），
       // 若此处再把它追加进聊天列表，同一次发言会显示两遍。
-      onSocket("error", (d) => { if (d && d.message) setNotice(d.message); }),
+      onSocket("error", (d) => {
+        if (!d || !d.message) return;
+        setNotice(d.message);
+        // 准备按钮是"乐观更新"（点了就先显示已准备）。若服务端因限流/掉线没收下这个 ready，
+        // 必须回滚本地状态，否则按钮永远停在"已准备，等待其他人…"，玩家既不能重试也看不到失败。
+        if (d.code === "READY_FAILED" || d.code === "NOT_IN_ROOM" || d.code === "ROOM_NOT_FOUND") setIAmReady(false);
+      }),
       onSocket("voice_state", (d) => {
         if (!d || !d.playerId) return;
         setRemoteVoice((m) => ({ ...m, [d.playerId]: { micOn: !!d.micOn, listenOn: !!d.listenOn } }));
@@ -727,7 +735,10 @@ function phaseLabel(p) {
 // ===== 阶段推进条（全员共识） =====
 function PhaseBar({ readyInfo, iAmReady, onReady }) {
   const counting = readyInfo.countdown !== null;
-  const canReady = !iAmReady && !counting;
+  // "只差一人"的倒计时不能锁住准备按钮：服务端支持在倒计时途中升级成 10 秒全员倒计时，
+  // 若前端在这里把按钮置灰，最后一个人就只能干看着 60 秒走完。
+  const partialWait = counting && readyInfo.mode === "partial";
+  const canReady = !iAmReady && (!counting || partialWait);
   return (
     <div className="panel" style={{ padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
       <span className="text-sm">
@@ -735,16 +746,26 @@ function PhaseBar({ readyInfo, iAmReady, onReady }) {
         {readyInfo.last && !counting ? <span className="text-dim">（{readyInfo.last} 刚准备好）</span> : null}
       </span>
       {counting && (
-        <span className="tag tag-success">
-          {readyInfo.force ? "等待超时，" : "全员就绪，"} {readyInfo.countdown} 秒后进入下一阶段…
+        <span className="tag tag-success" title="到点会自动进入下一阶段，不需要所有人都在">
+          {readyInfo.reason || (readyInfo.force ? "等待超时" : "全员就绪")}，{readyInfo.countdown} 秒后自动进入下一阶段…
         </span>
       )}
       {!counting && readyInfo.total > 0 && readyInfo.count >= readyInfo.total && (
         <span className="tag tag-success">全员已准备</span>
       )}
+      {partialWait && !iAmReady && (
+        <span className="text-xs" style={{ color: "var(--warn, #ffb300)" }}>
+          还没准备的话现在也来得及：人一齐就会换成短倒计时
+        </span>
+      )}
+      {!counting && !partialWait && readyInfo.total > 1 && readyInfo.count === readyInfo.total - 1 && (
+        <span className="text-xs" style={{ color: "var(--warn, #ffb300)" }}>
+          还差 1 人，再等一会儿会自动推进
+        </span>
+      )}
       <div style={{ marginLeft: "auto" }}>
         <button className="btn btn-success btn-sm" disabled={!canReady} onClick={onReady} style={canReady ? {} : { opacity: 0.55 }}>
-          {iAmReady ? "已准备，等待其他人…" : counting ? "即将推进…" : "进入下一阶段"}
+          {iAmReady ? "已准备，等待其他人…" : counting && !partialWait ? "即将推进…" : "进入下一阶段"}
         </button>
       </div>
     </div>

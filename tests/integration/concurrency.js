@@ -118,7 +118,11 @@ async function joinRoom(code, token) {
     a.sock.emit("ready", { roomCode: code });
     b.sock.emit("ready", { roomCode: code });
     c.sock.emit("ready", { roomCode: code });
-    await sleep(9000);
+    // 全员就绪后默认 ALL_READY_SECONDS=10 秒才推进（规则从 5 秒改成 10 秒过，
+    // 这里写死 9 秒就会误判成"没推进"）。改为等事件到齐，再留一点时间看有没有重复推进。
+    const deadline = Date.now() + 18000;
+    while (Date.now() < deadline && seen.filter(x => x === "intro").length < 3) await sleep(300);
+    await sleep(1500);
 
     const introCount = seen.filter(x => x === "intro").length;
     const distinct = [...new Set(seen)];
