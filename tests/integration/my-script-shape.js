@@ -96,6 +96,7 @@ function check(name, cond, extra = "") {
   const keys = await redis.keys(`game:${code}*`);
   if (keys.length) await redis.del(...keys);
   await redis.srem("rooms:open", code);
+  await redis.zrem("games:index", code); // 别漏：只删房间键会留下死索引（线上曾积到 59 条）
   await redis.quit();
   console.log(`\n已清理测试房间 ${code} 的 ${keys.length} 个 Redis 键`);
   console.log(`结果：通过 ${pass} / 失败 ${fail}`);

@@ -107,7 +107,13 @@ function setupGameSocket(io) {
           if (isJoinLocked(roomCode)) {
             return socket.emit("error", { code: "JOIN_LOCKED", message: "该房间连接尝试次数过多，已临时限制" });
           }
-          return socket.emit("error", { code: "NOT_FOUND", message: "房间不存在" });
+          // 房间可能"已过期"而不是"从未存在"：getRoom 对超过最大存活时间的房间返回 null，
+          // 这里把两种可能都告诉用户，避免他反复怀疑自己输错了房号。
+          const { expiryText } = require("../modules/room-lifecycle");
+          return socket.emit("error", {
+            code: "NOT_FOUND",
+            message: `房间不存在或已超过保留时间（最长 ${expiryText()}）`,
+          });
         }
 
         // 清除断线计时器（玩家重连成功）

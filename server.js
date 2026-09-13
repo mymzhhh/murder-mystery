@@ -189,6 +189,12 @@ process.on("SIGINT", () => gracefulShutdown(0));
     const { reconcileOnStart } = require("./modules/pg-sync");
     reconcileOnStart();
   } catch (e) { console.warn("[warn] PG 同步对账失败:", e.message); }
+  // 房间生命周期：启动自愈（清掉上次运行残留的"幽灵连接"）+ 定期回收过期/无人房间。
+  // 不 await，避免 Redis 慢时拖住启动；扫描器自身有 try/catch。
+  try {
+    const { startRoomSweeper } = require("./modules/room-lifecycle");
+    startRoomSweeper().catch((e) => console.warn("[rooms] 启动扫描失败:", e.message));
+  } catch (e) { console.warn("[rooms] 生命周期模块加载失败:", e.message); }
   server.listen(PORT, () => {
     console.log(`\n  剧本杀平台已启动: http://localhost:${PORT}`);
     console.log(`  管理员账号: admin（密码由 ADMIN_PASSWORD 环境变量或默认值配置）`);

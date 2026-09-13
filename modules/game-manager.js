@@ -2,6 +2,7 @@
 // 使用 WATCH+MULTI 乐观锁 + 独立 key 设计避免误冲突
 const { getRedis, scanKeys, ensureRedis } = require("./redis-client");
 const { v4: uuidv4 } = require("uuid");
+const { isRoomExpired } = require("./room-lifecycle");
 
 async function ensureConn() { return ensureRedis(); }
 
@@ -52,6 +53,10 @@ async function getRoom(code) {
   const r = await ensureConn();
   const room = await r.hgetall(`game:${code}`);
   if (!room || !room.roomCode) return null;
+  // 超过最大存活时间的房间一律视为不存在。
+  // 放在这里是因为 getRoom 是所有入口（加入/列表/每个动作/阶段推进）唯一的收口点，
+  // 只要这一处拦住，过期房间就不可能再被进入；实际删除交给 room-lifecycle 的扫描器。
+  if (isRoomExpired(room)) return null;
   return room;
 }
 
