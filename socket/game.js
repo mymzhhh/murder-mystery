@@ -2,7 +2,7 @@
 
 const { verifyToken } = require("../modules/auth");
 const { getRedis } = require("../modules/redis-client");
-const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions } = require("../modules/game-manager");
+const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions, claimClue, claimCharacter, releaseCharacterClaim } = require("../modules/game-manager");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, getAvailableCluesForPlayer, pickRandomClue, searchClues } = require("../modules/game-engine");
 const { generatePhaseNarrative } = require("../modules/dm-agent");
 const { generateNpcResponse } = require("../modules/npc-agent");
@@ -266,6 +266,14 @@ function setupGameSocket(io) {
         if (me?.characterName && me.characterName === characterName) return socket.emit("error", { code: "SAME_CHAR", message: "你已经选择了该角色" });
         // AI 补位的角色真人可随时抢占（TAKEN 只针对真人）
         if (players.some(p => !p.isAI && p.characterName === characterName)) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
+        // ⚠ 上面的校验是"先查后写"，两名玩家同时选同一个角色时会双双通过校验、
+        //   双双写入（实测复现过：两人都拿到同一角色）。必须再用原子占位兜一次。
+        const got = await claimCharacter(roomCode, characterName, socket.id);
+        if (!got) return socket.emit("error", { code: "TAKEN", message: "角色已被选择" });
+        // 换角：占住新角色之后，再释放自己原来的角色占位
+        if (me?.characterName && me.characterName !== characterName) {
+          await releaseCharacterClaim(roomCode, me.characterName, socket.id).catch(() => {});
+        }
         await updatePlayer(roomCode, socket.id, { characterName, characterScript: JSON.stringify(char) });
         socket.emit("character_selected", { characterName, character: char, isMurderer: char.isMurderer });
         // 重新对齐 AI 补位（真人抢走 AI 角色后，AI 释放并补齐其它剩余角色）
@@ -364,7 +372,7 @@ function setupGameSocket(io) {
         // 自然语言搜证 vs 随机发放
         // 并发安全：用 SET NX 抢占线索，避免两人同时搜证拿到同一条
         // （此前"读时过滤 + SADD"在并发下会重复发放同一条线索）
-        const r2 = await getRedis();
+        // 抢占逻辑已抽到 game-manager.claimClue，人类路径与 AI 路径共用同一套。
         let clue = null;
         let dmMessage = "";
         let pool = available.slice();
@@ -378,8 +386,7 @@ function setupGameSocket(io) {
             cand = pickRandomClue(pool);
           }
           if (!cand) break;
-          const claimed = await r2.set(`game:${roomCode}:claim:${cand.id}`, socket.id, "EX", 3600, "NX");
-          if (claimed) { clue = cand; break; }
+          if (await claimClue(roomCode, cand.id, socket.id)) { clue = cand; break; }
           pool = pool.filter(c => c.id !== cand.id); // 已被抢走，换下一条
         }
         if (!clue) return socket.emit("error", { code: "NO_CLUES", message: "线索已被其他玩家取走，请稍后再试" });

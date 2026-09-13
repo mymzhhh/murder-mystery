@@ -14,7 +14,8 @@
     "test:intro": "node tests/integration/intro-dedup.js",
     "test:notes": "node tests/integration/notes-isolation.js",
     "test:rooms": "node tests/integration/room-expiry.js",
-    "audit:orphans": "node scripts/audit-orphans.js"
+    "audit:orphans": "node scripts/audit-orphans.js",
+    "test:concurrency": "node tests/integration/concurrency.js"
   },
   "dependencies": {
     "dotenv": "^16.4.0",

@@ -6,7 +6,7 @@
 //   - 投票：线索指向加权 + 随机噪声（AI 若为凶手则绝不投自己）
 // 公平性红线：所有 AI 决策只读【公开信息】（已发现线索 / 角色名单），不读凶手答案。
 
-const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage, addIntroduction } = require("./game-manager");
+const { getRoom, getPlayers, addPlayer, updatePlayer, removePlayer, getClues, assignClue, recordVote, getVotes, addChatMessage, addIntroduction, claimClue } = require("./game-manager");
 const { getAvailableCluesForPlayer, pickRandomClue, searchClues, getPhaseRound } = require("./game-engine");
 const llm = require("./ai-player-llm");
 
@@ -267,8 +267,18 @@ async function actInvestigate(io, roomCode, ai) {
   const available = getAvailableCluesForPlayer(allClues, ai.playerId, round);
   if (!available.length) return;
 
-  const searchResult = searchClues("", available); // 随机发放
-  const clue = searchResult && searchResult.clue ? searchResult.clue : pickRandomClue(available);
+  // ⚠ 必须和人类玩家走同一套原子抢占（claimClue）。
+  //   原来这里是"读可用列表 → 直接 assignClue"，而人类路径已经用 SET NX 加固 ——
+  //   AI 与真人同时搜证时，AI 会拿着读到的旧快照去写一条已经被抢走的线索，
+  //   结果同一条线索出现两个发现者。抽成共用助手就是为了不再出现这种"只加固一半"。
+  let clue = null;
+  let pool = available.slice();
+  for (let i = 0; i < 6 && pool.length; i++) {
+    const cand = pickRandomClue(pool);
+    if (!cand) break;
+    if (await claimClue(roomCode, cand.id, ai.playerId)) { clue = cand; break; }
+    pool = pool.filter(c => c.id !== cand.id); // 已被抢走，换下一条
+  }
   if (!clue) return;
   await assignClue(roomCode, clue.id, ai.playerId);
   // AI 搜到线索：仅广播线索事件（进入玩家线索列表），不刷聊天框

@@ -140,6 +140,9 @@ async function updatePlayer(code, playerId, fields) {
 async function removePlayer(code, playerId) {
   const r = await ensureConn();
   await r.del(playerKey(code, playerId));
+  // 顺带释放该玩家占用的角色占位。不释放的话，人走了角色还锁着，
+  // 其他人再也选不了那个角色（房间还活着的整段时间都受影响）。
+  try { await releaseCharacterClaims(code, playerId); } catch (e) { /* 不影响移除 */ }
 }
 
 
@@ -194,8 +197,55 @@ async function getClues(code, round) {
   return clues;
 }
 
-async function assignClue(code, clueId, playerId) {
+// ==================== 并发抢占（原子占位） ====================
+// 线索与角色都必须"先原子抢到、再落库"，否则并发下会出现
+// "读的时候还是空闲、写的时候已经被别人拿走了"（TOCTOU）。
+// 人类玩家路径原本已经用 SET NX 加固，但 AI 的搜证路径漏了同一套保护 ——
+// 抽成共用助手就是为了杜绝"加固了一条路径、忘了另一条"。
+
+/** 原子抢一条线索。true = 抢到（或本来就是自己占的）。 */
+async function claimClue(code, clueId, playerId, ttlSec = 3600) {
   const r = await ensureConn();
+  const key = `game:${code}:claim:${clueId}`;
+  const ok = await r.set(key, playerId, "EX", ttlSec, "NX");
+  if (ok === "OK") return true;
+  return (await r.get(key)) === playerId;
+}
+
+/**
+ * 原子占一个角色。true = 占成功。
+ * 用 HSETNX 而不是"先查后写"：两名玩家同时选同一个角色时，
+ * 原来的 check-then-act 会双双通过校验、双双写入（实测复现过）。
+ */
+async function claimCharacter(code, characterName, playerId) {
+  const r = await ensureConn();
+  const key = `game:${code}:charclaims`;
+  const created = await r.hsetnx(key, characterName, playerId);
+  if (created === 1) return true;
+  return (await r.hget(key, characterName)) === playerId;
+}
+
+/** 释放某个角色占位（只有持有者本人能释放）。true = 确实释放了。 */
+async function releaseCharacterClaim(code, characterName, playerId) {
+  const r = await ensureConn();
+  const key = `game:${code}:charclaims`;
+  const holder = await r.hget(key, characterName);
+  if (holder !== playerId) return false;
+  await r.hdel(key, characterName);
+  return true;
+}
+
+/** 释放该玩家占用的全部角色（换角、离开房间时用）。返回被释放的角色名。 */
+async function releaseCharacterClaims(code, playerId) {
+  const r = await ensureConn();
+  const key = `game:${code}:charclaims`;
+  const all = await r.hgetall(key).catch(() => ({}));
+  const mine = Object.entries(all || {}).filter(([, pid]) => pid === playerId).map(([name]) => name);
+  if (mine.length) await r.hdel(key, ...mine);
+  return mine;
+}
+
+async function assignClue(code, clueId, playerId) {  const r = await ensureConn();
   const contentKey = clueKey(code, clueId);
   const foundByKey = clueFoundByKey(code, clueId);
 
@@ -332,6 +382,7 @@ module.exports = {
   createRoom, getRoom, updateRoom, deleteRoom,
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
   loadClues, getClues, assignClue, getPlayerClues,
+  claimClue, claimCharacter, releaseCharacterClaim, releaseCharacterClaims,
   recordVote, getVotes, clearVotes,
   addIntroduction, getIntroductions,
   addChatMessage, getChatMessages,

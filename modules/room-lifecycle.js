@@ -69,9 +69,11 @@ async function enumerateRoomCodes() {
  */
 async function sweepOnce(now = Date.now()) {
   const r = await getRedis();
-  const out = { expired: 0, abandoned: 0, staleIndex: 0, orphanKeys: 0, freedKeys: 0, checked: 0 };
+  const out = { expired: 0, abandoned: 0, staleIndex: 0, orphanKeys: 0, garbage: 0, freedKeys: 0, checked: 0 };
   if (!r) return out;
 
+  let indexed = new Set();
+  try { indexed = new Set(await r.zrange("games:index", 0, -1)); } catch (e) { /* ignore */ }
   const codes = await enumerateRoomCodes();
   if (!codes.length) return out;
 
@@ -95,14 +97,24 @@ async function sweepOnce(now = Date.now()) {
       continue;
     }
 
-    // 2) 超过最大存活时间
+    // 2) 既没有 createdAt、又不在索引里 —— 不可能是 createRoom 建的（它两者都会写），
+    //    属于测试或脚本直接 hset 出来的垃圾房间。这类房间原本永远不会被回收：
+    //    isRoomExpired 对缺 createdAt 的房间刻意返回 false（避免误杀历史数据），
+    //    于是它们既不过期、也不满足"无人回收"的时间条件（created=0 时该判断被跳过）。
+    if (!Number(room.createdAt) && !indexed.has(code)) {
+      out.freedKeys += await purgeRoom(r, code);
+      out.garbage++;
+      continue;
+    }
+
+    // 3) 超过最大存活时间
     if (isRoomExpired(room, now)) {
       out.freedKeys += await purgeRoom(r, code);
       out.expired++;
       continue;
     }
 
-    // 3) 长期没有任何玩家（覆盖"建了没玩"和"人全走光"）
+    // 4) 长期没有任何玩家（覆盖"建了没玩"和"人全走光"）
     const created = Number(room.createdAt) || 0;
     if (created && now - created > ABANDONED_MS) {
       const playerKeys = await scanKeys(`game:${code}:player:*`);
@@ -157,8 +169,8 @@ async function startRoomSweeper() {
   const run = async () => {
     try {
       const s = await sweepOnce();
-      if (s.expired || s.abandoned || s.staleIndex || s.orphanKeys) {
-        console.log(`[rooms] 回收：过期 ${s.expired} 个、无人 ${s.abandoned} 个、残留子键 ${s.orphanKeys} 处、死索引 ${s.staleIndex} 条、释放 ${s.freedKeys} 个键`);
+      if (s.expired || s.abandoned || s.staleIndex || s.orphanKeys || s.garbage) {
+        console.log(`[rooms] 回收：过期 ${s.expired} 个、无人 ${s.abandoned} 个、垃圾房 ${s.garbage} 个、残留子键 ${s.orphanKeys} 处、死索引 ${s.staleIndex} 条、释放 ${s.freedKeys} 个键`);
       }
     } catch (e) { console.warn("[rooms] 扫描失败:", e.message); }
   };
