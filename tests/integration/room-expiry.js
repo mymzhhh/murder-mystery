@@ -124,6 +124,64 @@ const connectAndJoin = (code, token) => new Promise((resolve) => {
   check("creating 占位锁仍存在", (await redis.exists(`game:${lockCode}:creating`)) === 1);
   await redis.del(`game:${lockCode}:creating`);
 
+  console.log("\n【8】房间已删除后仍有人写聊天/自我介绍 → 不留孤儿键");
+  // 复现"删除与写入竞争"：房间被回收的同一瞬间，AI 回答或系统消息正在落盘，
+  // 结果是 game:{code} 没了、game:{code}:chat 留下（每次跑回归测试都会漏一个 KHUMKA 这种）。
+  // 现在写入方会在写完后复查房间主键，发现房间没了就把自己刚写的键撤掉。
+  {
+    const gm = require("../../modules/game-manager");
+    const code4 = "ZW" + Math.random().toString(36).slice(2, 6).toUpperCase();
+    await redis.del(`game:${code4}`);
+    await gm.addChatMessage(code4, "sys", "系统", "系统", "房间已经没了的消息", "lobby");
+    check("房间不存在时写聊天不会留下 game:{code}:chat", (await redis.exists(`game:${code4}:chat`)) === 0,
+      `chat 键存在=${await redis.exists(`game:${code4}:chat`)}`);
+    await gm.addIntroduction(code4, "某人", "迟到的自我介绍");
+    check("房间不存在时写自我介绍不会留下 game:{code}:intro", (await redis.exists(`game:${code4}:intro`)) === 0);
+    // 反向确认：房间还在时写入必须正常保留，别把正常消息也删了
+    await redis.hset(`game:${code4}`, { roomCode: code4, phase: "lobby" });
+    await gm.addChatMessage(code4, "sys", "系统", "系统", "房间还在的消息", "lobby");
+    check("房间还在时聊天正常保留", (await redis.llen(`game:${code4}:chat`)) === 1);
+    await redis.del(...(await redis.keys(`game:${code4}*`)));
+  }
+
+  console.log("\n【9】人全走光（记录还在但一个真人都没连着）→ 超过阈值就回收");
+  // 真实场景：所有人先后掉线，期间服务器重启过一次 —— 断线定时器在内存里，重启即丢，
+  // 于是玩家记录永远留着（connected=false）。只判断"玩家记录为 0"的旧规则看不到这种情况，
+  // 房间会一直撑到 6 小时上限。线上案例：昨晚开的房，第二天还能重连进去且没有真人。
+  {
+    const stale = Date.now() - 31 * 60 * 1000;
+    const code5 = "ZY" + Math.random().toString(36).slice(2, 4).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase();
+    await redis.hset(`game:${code5}`, { roomCode: code5, phase: "round1", createdAt: String(stale), ownerId: "p1" });
+    await redis.zadd("games:index", stale, code5);
+    await redis.set(`game:${code5}:player:p1`, JSON.stringify({ playerId: "p1", playerName: "u1", characterName: "角色甲", isNPC: false, connected: false }));
+    // AI 补位通常还在房间里，且 connected 也不一定是 false —— 判定必须只看真人
+    await redis.set(`game:${code5}:player:ai_x`, JSON.stringify({ playerId: "ai_x", playerName: "AI 玩家", characterName: "角色乙", isNPC: true, isAI: true, connected: true }));
+    await redis.hset(`game:${code5}:chat`, { probe: "1" });
+    const s5 = await sweepOnce();
+    check("真人全部掉线的房间被回收", (await redis.exists(`game:${code5}`)) === 0,
+      `abandoned=${s5.abandoned} freedKeys=${s5.freedKeys}`);
+    check("它的子键也一起清了", (await redis.exists(`game:${code5}:chat`)) === 0);
+    check("索引里也不再有它", (await redis.zscore("games:index", code5)) === null);
+
+    // 反向：只要还有一个真人连着，就不能回收 —— 正在进行的局不能被误杀
+    const code6 = "ZX" + Math.random().toString(36).slice(2, 4).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase();
+    await redis.hset(`game:${code6}`, { roomCode: code6, phase: "round1", createdAt: String(stale), ownerId: "p2" });
+    await redis.zadd("games:index", stale, code6);
+    await redis.set(`game:${code6}:player:p2`, JSON.stringify({ playerId: "p2", playerName: "u2", characterName: "角色丙", isNPC: false, connected: true }));
+    await sweepOnce();
+    check("仍有真人连着时不会被回收", (await redis.exists(`game:${code6}`)) === 1);
+    await redis.del(...(await redis.keys(`game:${code6}*`)));
+    await redis.zrem("games:index", code6);
+
+    // 只剩 AI、连一个真人记录都没有的房间同样要回收
+    const code7 = "ZV" + Math.random().toString(36).slice(2, 4).toUpperCase() + Math.random().toString(36).slice(2, 4).toUpperCase();
+    await redis.hset(`game:${code7}`, { roomCode: code7, phase: "round1", createdAt: String(stale) });
+    await redis.zadd("games:index", stale, code7);
+    await redis.set(`game:${code7}:player:ai_y`, JSON.stringify({ playerId: "ai_y", playerName: "AI 玩家", characterName: "角色丁", isNPC: true, isAI: true, connected: true }));
+    await sweepOnce();
+    check("只剩 AI 的房间被回收（AI 的 connected 不算'有人'）", (await redis.exists(`game:${code7}`)) === 0);
+  }
+
   // 清理
   for (const c of [code, code2]) {
     const keys = await redis.keys(`game:${c}*`);

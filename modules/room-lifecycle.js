@@ -40,6 +40,10 @@ async function purgeRoom(r, code) {
   if (keys.length) await r.del(...keys);
   await r.zrem("games:index", code);
   await r.srem("rooms:open", code);
+  // 释放各模块的房级内存态（AI 定时器、阶段计时器、倒计时、语音成员……）。
+  // 扫描器这条路径原来是直接删 Redis 键的，绕过了 deleteRoom 的钩子，
+  // 于是被扫描器回收的房间会在内存里留下 timers[roomCode] 这类永不释放的条目。
+  try { require("./room-cleanup-hooks").runRoomDeleted(code); } catch (e) { /* ignore */ }
   return keys.length;
 }
 
@@ -61,6 +65,27 @@ async function enumerateRoomCodes() {
     if (m) codes.add(m[1]);
   }
   return [...codes];
+}
+
+/**
+ * 房间里还有没有"连着的真人"？
+ *
+ * 只看非 NPC 记录：AI 补位玩家的 connected 字段不参与判断，
+ * 否则一个只剩 AI 的空房间会被永远认为"有人"，永远回收不掉。
+ * @returns {Promise<boolean>} true = 至少有一个真人处于连接状态
+ */
+async function hasConnectedHuman(r, code) {
+  const keys = await scanKeys(`game:${code}:player:*`);
+  if (!keys.length) return false;
+  let raw = [];
+  try { raw = await r.mget(...keys); } catch (e) { return true; } // 读不到就别删，宁可留着
+  for (const v of raw) {
+    if (!v) continue;
+    let p = null;
+    try { p = JSON.parse(v); } catch (e) { continue; }
+    if (p && !p.isNPC && p.connected === true) return true;
+  }
+  return false;
 }
 
 /**
@@ -114,11 +139,24 @@ async function sweepOnce(now = Date.now()) {
       continue;
     }
 
-    // 4) 长期没有任何玩家（覆盖"建了没玩"和"人全走光"）
+    // 4) 长期没有任何玩家记录（覆盖"建了没玩"）
     const created = Number(room.createdAt) || 0;
     if (created && now - created > ABANDONED_MS) {
       const playerKeys = await scanKeys(`game:${code}:player:*`);
       if (!playerKeys.length) {
+        out.freedKeys += await purgeRoom(r, code);
+        out.abandoned++;
+        continue;
+      }
+
+      // 5) 有玩家记录，但一个真人都没连着 —— 人全走光了。
+      //
+      //    为什么规则 4 不够：玩家记录只有在"断线 AFK 清理"里才会被删，而那个定时器存在内存里，
+      //    服务器一重启就全丢。于是"所有人先后掉线 + 期间重启过一次"的房间会留下满满一屋子
+      //    处于 connected=false 的玩家记录，规则 4 永远看不到 playerKeys 为空，
+      //    房间就一直撑到 6 小时上限（线上真实案例：昨晚开的房间，第二天还能重连进去，
+      //    且里面一个真人都没有）。这里改成看"有没有真人连着"。
+      if (!(await hasConnectedHuman(r, code))) {
         out.freedKeys += await purgeRoom(r, code);
         out.abandoned++;
       }

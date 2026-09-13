@@ -9,6 +9,12 @@
 //   宿主机  REDIS_URL=redis://127.0.0.1:6380 DATABASE_URL=postgresql://... node scripts/audit-orphans.js
 //
 // 退出码：0 = 未发现孤儿；1 = 发现孤儿（可用于定时巡检）
+//
+// ⚠ 从宿主机直接 `npm run audit:orphans` 时，脚本不会自动读 .env，
+//   会退化成 redis://localhost:6379 —— 那可能是另一个（本地开发用的）Redis 实例，
+//   于是要么误报一大堆"孤儿"，要么对着空库报"一切正常"。
+//   这里显式加载 .env（dotenv 默认不覆盖已有环境变量，所以容器内跑仍然以容器 env 为准）。
+require("dotenv").config();
 const Redis = require("ioredis");
 
 const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
@@ -110,5 +116,8 @@ function bucket(keys, re) {
     process.exit(1);
   }
   console.log("✔ 未发现孤儿资源");
+  // 没有 DATABASE_URL 时一半的对照检查（PG 是否有对应剧本/用户）是静默跳过的，
+  // 此时"未发现孤儿"并不等于真的干净，必须把这件事说出来。
+  if (!pgOk) console.log("（注意：PG 对照检查未执行（未配置 DATABASE_URL 或连不上），结论不完整）");
   process.exit(0);
 })().catch(e => { console.error("审计失败: " + e.message); process.exit(2); });

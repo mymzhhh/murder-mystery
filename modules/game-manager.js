@@ -294,7 +294,10 @@ async function clearVotes(code) {
 
 async function addIntroduction(code, characterName, content) {
   const r = await ensureConn();
-  await r.hset(`game:${code}:intro`, characterName, content);
+  const key = `game:${code}:intro`;
+  await r.hset(key, characterName, content);
+  // 同 addChatMessage：房间已被删就撤销写入，避免只剩子键的孤儿
+  if (!(await roomHashExists(r, code))) await r.del(key).catch(() => {});
 }
 
 async function getIntroductions(code) {
@@ -305,16 +308,27 @@ async function getIntroductions(code) {
 
 // ==================== 聊天 ====================
 
+/**
+ * 房间主键还在吗？
+ * 用来兜住"删除与写入竞争"：房间被回收/删除的同时，某条 AI 回答或系统消息正在落盘，
+ * 结果 `game:{code}` 没了、`game:{code}:chat` 却留了下来。
+ * 这类残留不会报错也不会告警，只会慢慢堆积（实测每次回归测试都会漏一个）。
+ */
+async function roomHashExists(r, code) {
+  return (await r.exists(`game:${code}`)) === 1;
+}
+
 async function addChatMessage(code, playerId, playerName, characterName, content, phase) {
   const r = await ensureConn();
+  const key = `game:${code}:chat`;
   const msg = JSON.stringify({
     messageId: uuidv4(), playerId, playerName, characterName,
     content, phase, timestamp: new Date().toISOString(),
   });
-  await r.multi()
-    .lpush(`game:${code}:chat`, msg)
-    .ltrim(`game:${code}:chat`, 0, 499)
-    .exec();
+  await r.multi().lpush(key, msg).ltrim(key, 0, 499).exec();
+  // 写完复查：房间已经不存在就撤销这次写入，别留下孤儿键。
+  // （生命周期扫描器 10 分钟内也能收到，但那是兜底，不该拿它当唯一防线。）
+  if (!(await roomHashExists(r, code))) await r.del(key).catch(() => {});
   return JSON.parse(msg);
 }
 
