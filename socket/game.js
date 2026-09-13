@@ -385,6 +385,10 @@ function setupGameSocket(io) {
         if (!val.ok) return socket.emit("error", { code: val.error, message: val.message });
         const msg = await addChatMessage(roomCode, socket.id, player?.playerName || "", player?.characterName || "", content, room.phase);
         io.to(roomCode).emit("chat_message", msg);
+        // 真人在聊天里点名某位 AI 角色并提问时，让该 AI 作答。
+        // 只认"点名 + 问号"，避免 AI 对每句话都插嘴刷屏。
+        aiPlayer.maybeAnswerMention(io, roomCode, content, player?.characterName || player?.playerName || "")
+          .catch(() => {});
       } catch (e) { socket.emit("error", { code: "CHAT_FAILED", message: e.message }); }
     });
 
@@ -488,7 +492,14 @@ function setupGameSocket(io) {
         await r.expire(qKey, 3 * 3600); // 3小时覆盖一局游戏时长，局后自动清理
 
         // 获取最近的聊天记录作为上下文
-        const chatHistory = await getChatMessages(roomCode, 10);
+        const chatHistory = await getChatMessages(roomCode, 12);
+
+        // 全场已公开的线索：玩家常常引用线索来质证 NPC（"有人看见你20:35在走廊"），
+        // 不把这些给它，NPC 只会在自己的剧本范围内打转、答非所问。
+        const allCluesForNpc = await getClues(roomCode);
+        const publicCluesForNpc = (allCluesForNpc || [])
+          .filter(c => (c.foundBy || []).length > 0)
+          .map(c => `【${c.id || "线索"}】${String(c.content || "").substring(0, 200)}${c.location ? "（发现于 " + c.location + "）" : ""}`);
 
         const scriptSummary = {
           title: parsed.title,
@@ -496,6 +507,7 @@ function setupGameSocket(io) {
           victim: parsed.victim,
           gameMode: parsed.setting?.gameMode || "",
           roomCode, // 供 opencode 网关做"每段对话一个稳定会话"的路由与提示词缓存
+          publicClues: publicCluesForNpc,
         };
         const npcForAgent = { ...npcChar, roleMode: parsed.setting?.gameMode || "" };
 

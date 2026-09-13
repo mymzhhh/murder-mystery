@@ -264,6 +264,60 @@ async function getChatMessages(code, limit = 100) {
   return raw.map(v => JSON.parse(v)).reverse();
 }
 
+// ==================== 玩家便签（私有，仅本人可读写） ====================
+
+// 便签按【玩家名（登录用户名）】而不是 playerId 存储：
+// playerId 是 socket.id，断线重连会换一个，用它做键会让玩家一掉线笔记就丢失。
+// 这也是 ready 计数采用 playerName 作为稳定成员标识的同一个理由。
+const NOTES_MAX = 30;
+const NOTES_TITLE_MAX = 120;
+const NOTES_BODY_MAX = 4000;
+const NOTES_TOTAL_MAX = 60000;
+
+function notesKey(code, playerName) {
+  // encodeURIComponent 兜住用户名里的冒号/空格等，避免污染 Redis 键空间
+  return `game:${code}:notes:${encodeURIComponent(String(playerName || ""))}`;
+}
+
+async function getNotes(code, playerName) {
+  const r = await ensureConn();
+  const raw = await r.get(notesKey(code, playerName));
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+
+/** 便签清洗：截断、去空、限制总长度。抽成纯函数以便离线单测（不依赖 Redis）。 */
+function normalizeNotes(notes) {
+  const list = Array.isArray(notes) ? notes.slice(0, NOTES_MAX) : [];
+  let total = 0;
+  const clean = [];
+  for (const n of list) {
+    if (!n || typeof n !== "object") continue;
+    const body = String(n.content || "").slice(0, NOTES_BODY_MAX);
+    const title = String(n.title || "").slice(0, NOTES_TITLE_MAX);
+    if (!title && !body.trim()) continue; // 全空的便签不存，避免留下空壳
+    if (total + title.length + body.length > NOTES_TOTAL_MAX) break;
+    total += title.length + body.length;
+    clean.push({
+      id: String(n.id || uuidv4()).slice(0, 64),
+      title,
+      content: body,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  return clean;
+}
+
+async function saveNotes(code, playerName, notes) {
+  const r = await ensureConn();
+  const clean = normalizeNotes(notes);
+  await r.set(notesKey(code, playerName), JSON.stringify(clean));
+  return clean;
+}
+
 module.exports = {
   createRoom, getRoom, updateRoom, deleteRoom,
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
@@ -271,5 +325,6 @@ module.exports = {
   recordVote, getVotes, clearVotes,
   addIntroduction, getIntroductions,
   addChatMessage, getChatMessages,
+  getNotes, saveNotes, normalizeNotes,
   getRedis,
 };

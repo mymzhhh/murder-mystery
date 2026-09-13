@@ -1,7 +1,7 @@
 // 共享的房间创建逻辑 — admin 和 player 路由共用，避免循环依赖
 const { getRedis, scanKeys } = require("./redis-client");
 const { getSession } = require("./history-manager");
-const { parseScript } = require("./script-parser");
+const { parseScript, extractSecretFromScript } = require("./script-parser");
 const { createRoom, updateRoom, removePlayer, loadClues } = require("./game-manager");
 
 async function createGameRoom(scriptSessionId, maxPlayers) {
@@ -52,7 +52,12 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
         const d = results[i][1];
         if (!d) continue;
         if (d.playerScript !== undefined) {
-          characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret: d.secret } });
+          // 秘密兜底：早期解析只认固定标题「你需要隐瞒的事」，模型换措辞就漏掉
+          // （实测某剧本 7 个角色漏了 5 个）。在建立房间时从正文补提一次，
+          // 让 AI 玩家/NPC 也能拿到自己的秘密 —— 它们不走 normalizeCharacterScript，
+          // 没有这一层就会演不出隐藏动机。
+          const secret = d.secret || extractSecretFromScript(d.playerScript, 1200);
+          characters.push({ name: d.name, isMurderer: d.isMurderer === "1", occupation: d.occupation, roleType: d.roleType || "player", script: { story: d.playerScript, secret } });
           characterNames.push(d.name);
         } else { allClues.push(d); }
       }

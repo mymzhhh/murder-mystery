@@ -1,6 +1,6 @@
 // Player API routes
 
-const { getRoom, getPlayers, getClues, getVotes, getChatMessages } = require("../modules/game-manager");
+const { getRoom, getPlayers, getClues, getVotes, getChatMessages, getNotes, saveNotes } = require("../modules/game-manager");
 const { getRedis } = require("../modules/redis-client");
 const { normalizeCharacterScript } = require("../modules/script-parser");
 
@@ -131,6 +131,41 @@ const { createGameRoom } = require("../modules/game-room-creator");
         votes, clues, chat,
         generatedAt: new Date().toISOString(),
       });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ==================== 玩家便签（私有） ====================
+  // 只有本人能读写自己的便签：身份取自已认证的用户名，不接受客户端传入的 playerId，
+  // 也不接受"看别人的便签"这种请求 —— 便签里会写满推理与怀疑，泄漏等于剧透。
+  //
+  // 用 playerName（登录用户名）而不是 playerId 做键：playerId 是 socket.id，
+  // 断线重连会变，用它会让玩家一掉线笔记全丢。
+
+  async function resolveSelf(req, res) {
+    const room = await getRoom(req.params.code);
+    if (!room) { res.status(404).json({ error: "房间不存在" }); return null; }
+    const players = await getPlayers(req.params.code);
+    const me = players.find(p => p.playerName === req.user.username);
+    if (!me) { res.status(403).json({ error: "你不在该房间内" }); return null; }
+    return { room, me, key: req.user.username };
+  }
+
+  app.get("/api/player/rooms/:code/notes", authMiddleware, async (req, res) => {
+    try {
+      const self = await resolveSelf(req, res);
+      if (!self) return;
+      res.json({ notes: await getNotes(req.params.code, self.key) });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+  });
+
+  app.put("/api/player/rooms/:code/notes", authMiddleware, async (req, res) => {
+    try {
+      const self = await resolveSelf(req, res);
+      if (!self) return;
+      const incoming = (req.body && req.body.notes) || [];
+      if (!Array.isArray(incoming)) return res.status(400).json({ error: "notes 必须是数组" });
+      const saved = await saveNotes(req.params.code, self.key, incoming);
+      res.json({ notes: saved });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
 

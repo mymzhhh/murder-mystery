@@ -11,7 +11,8 @@
     "build:web": "cd frontend && npx vite build",
     "test:voice": "node tests/integration/voice-signaling.js",
     "test:myscript": "node tests/integration/my-script-shape.js",
-    "test:intro": "node tests/integration/intro-dedup.js"
+    "test:intro": "node tests/integration/intro-dedup.js",
+    "test:notes": "node tests/integration/notes-isolation.js"
   },
   "dependencies": {
     "dotenv": "^16.4.0",

@@ -205,10 +205,12 @@ function scheduleRoom(io, roomCode, phase) {
       if (phase === "intro") {
         scheduleDelay(roomCode, () => actIntro(io, roomCode, ai), 2000 + Math.random() * 5000);   // 2-7s
       }
-      // 合并轮（round1/round2 = 搜证+讨论）：AI 搜证 + 发言
+      // 合并轮（round1/round2 = 搜证+讨论）：AI 搜证 + 发言 + 主动向他人提问
       if (round > 0) {
         scheduleDelay(roomCode, () => actInvestigate(io, roomCode, ai), 1200 + Math.random() * 4000);  // 1.2-5.2s
         scheduleDelay(roomCode, () => actSpeak(io, roomCode, ai, allChars), 3000 + Math.random() * 8000); // 3-11s
+        // 提问排在发言之后：先亮明自己的立场，再向别人质证，读起来更像真人
+        scheduleDelay(roomCode, () => actAsk(io, roomCode, ai, allChars), 14000 + Math.random() * 12000); // 14-26s
       }
       // 投票轮：延迟随机后投票
       if (phase === "voting") {
@@ -282,20 +284,106 @@ async function actSpeak(io, roomCode, ai, allChars) {
   const room = await getRoom(roomCode);
   if (!room || !getPhaseRound(room.phase)) return;
   let text = null;
-  // 优先 LLM：基于自己的角色/线索 + 公开对话发言
+  // 优先 LLM：基于自己的角色信息 + 全场已公开线索 + 公开对话做推理发言
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
-    const context = await llm.getPublicContext(roomCode, 8);
+    const context = await llm.getPublicContext(roomCode, 12);
     text = await llm.speakLLM(k, context);
   } catch (e) { console.warn("[ai-player] speak LLM 失败:", e.message); }
   if (!text) {
     const allClues = await getClues(roomCode);
-    const myClues = (allClues || []).filter(c => (c.foundBy || []).includes(ai.playerId));
-    text = "🤖 " + buildAiSpeech(myClues, allChars);
+    // 回退也要对齐玩家视角：用全场已公开的线索，而不是只有自己那几条
+    const publicClues = (allClues || []).filter(c => (c.foundBy || []).length > 0);
+    text = "🤖 " + buildAiSpeech(publicClues, allChars);
   }
   const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, room.phase);
   io.to(roomCode).emit("chat_message", msg);
+}
+
+/**
+ * AI 主动向某位角色提问，以获取自己缺失的信息。
+ * 每轮每个 AI 只问一次（由调度侧保证），避免刷屏。
+ * 若对象也是 AI，则排一次作答，让"AI 之间互相质证"也能跑起来。
+ */
+async function actAsk(io, roomCode, ai, allChars) {
+  const room = await getRoom(roomCode);
+  if (!room || !getPhaseRound(room.phase)) return;
+
+  const players = await getPlayers(roomCode);
+  // 候选：除自己以外的所有已入场角色（NPC 不参与玩家间问答）
+  const candidates = (allChars || [])
+    .filter(c => c && c.roleType !== "npc" && c.name && c.name !== ai.characterName)
+    .map(c => c.name);
+  if (!candidates.length) return;
+
+  let picked = null;
+  try {
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const k = await llm.buildKnowledge(roomCode, ai, parsed);
+    picked = await llm.askLLM(k, candidates);
+  } catch (e) { console.warn("[ai-player] ask LLM 失败:", e.message); }
+
+  // 规则回退：优先问"最可疑"的人（公开线索里被点名最多的）
+  if (!picked) {
+    const allClues = await getClues(roomCode);
+    const publicText = (allClues || []).filter(c => (c.foundBy || []).length > 0)
+      .map(c => (c.content || "") + " " + (c.location || "")).join(" ").toLowerCase();
+    let best = candidates[Math.floor(Math.random() * candidates.length)];
+    let bestScore = -1;
+    for (const n of candidates) {
+      const s = publicText.split(n.toLowerCase()).length - 1;
+      if (s > bestScore) { bestScore = s; best = n; }
+    }
+    picked = { target: best, question: `关于${best}你在案发前后的行踪，能再说得具体一点吗？` };
+  }
+
+  const text = `❓ 我想问 ${picked.target}：${picked.question}`;
+  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, room.phase);
+  io.to(roomCode).emit("chat_message", msg);
+
+  // 被问的如果也是 AI，稍后作答（真人则自行在聊天里回复）
+  const targetPlayer = players.find(p => p.characterName === picked.target);
+  if (targetPlayer && targetPlayer.isAI) {
+    scheduleDelay(roomCode, () => actReplyToQuestion(io, roomCode, targetPlayer, ai.characterName || "AI", picked.question), 4000 + Math.random() * 5000);
+  }
+}
+
+/**
+ * 被点名提问后作答（AI 之间互问）
+ */
+async function actReplyToQuestion(io, roomCode, ai, askerName, question) {
+  const room = await getRoom(roomCode);
+  if (!room || !getPhaseRound(room.phase)) return;
+  let text = null;
+  try {
+    const parsed = JSON.parse(room.parsedScript || "{}");
+    const k = await llm.buildKnowledge(roomCode, ai, parsed);
+    const context = await llm.getPublicContext(roomCode, 12);
+    text = await llm.replyToQuestionLLM(k, askerName, question, context);
+  } catch (e) { console.warn("[ai-player] replyToQuestion LLM 失败:", e.message); }
+  if (!text) return; // 拿不到就保持沉默，不要用模板硬答（会答非所问）
+  const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, room.phase);
+  io.to(roomCode).emit("chat_message", msg);
+}
+
+/**
+ * 真人玩家在聊天里点名某位 AI 角色时，让该 AI 作答。
+ * 由 socket/game.js 的 chat 处理器调用；只认"点名 + 像问题"的消息，避免 AI 对每句话都插嘴。
+ * @returns {Promise<boolean>} 是否触发了作答
+ */
+async function maybeAnswerMention(io, roomCode, content, askerName) {
+  try {
+    const text = String(content || "");
+    if (!text.includes("?") && !text.includes("？")) return false;
+    const room = await getRoom(roomCode);
+    if (!room || !["intro", "round1", "round2"].includes(room.phase)) return false;
+    const players = await getPlayers(roomCode);
+    const named = players.find(p => p.isAI && p.characterName && text.includes(p.characterName));
+    if (!named || named.characterName === askerName) return false;
+    scheduleDelay(roomCode, () => actReplyToQuestion(io, roomCode, named, askerName, text.substring(0, 200)), 1500 + Math.random() * 3000);
+    return true;
+  } catch (e) { return false; }
 }
 
 async function actVote(io, roomCode, ai, allChars) {
@@ -363,4 +451,5 @@ async function voteForAllPending(io, roomCode) {
 module.exports = {
   computeAiFillers, chooseVoteTarget, voteCandidates, buildAiSpeech, buildAiIntro,
   syncAiFillers, scheduleRoom, cancelRoom, voteForAllPending,
+  maybeAnswerMention,
 };

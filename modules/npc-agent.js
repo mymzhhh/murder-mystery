@@ -29,7 +29,15 @@ ${secret ? secret.substring(0, 1000) : '（无特殊秘密）'}
 标题：《${scriptSummary?.title || '未知'}》
 时代：${scriptSummary?.setting?.era || '未知'}
 地点：${scriptSummary?.setting?.location || '未知'}
-死者：${scriptSummary?.victim?.name || '未知'}`;
+死者：${scriptSummary?.victim?.name || '未知'}
+
+## 全场已经公开的线索（玩家们已经找到并公开的，他们会拿这些来质证你）
+${(scriptSummary?.publicClues || []).length ? scriptSummary.publicClues.map(c => "- " + c).join("\n") : "（目前还没有人公开过线索）"}
+
+关于上面这些线索的应对原则：
+- 如果线索与你的行踪有关，你要基于自己的立场回应：无辜者如实解释；凶手要给出能自圆其说的解释，但不得承认作案
+- 不要复述线索卡原文，用你自己的话说
+- 不要凭空否认线索的存在（线索是玩家实际找到的事实）`;
 
   if (isWitnessRole) {
     return `${baseInfo}

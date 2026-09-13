@@ -34,6 +34,10 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [speaking, setSpeaking] = useState({});     // socketId → 是否正在说话
   const [remoteVoice, setRemoteVoice] = useState({}); // socketId → { micOn, listenOn }
   const [processingOn, setProcessingOn] = useState(true); // 回声消除/降噪是否开启
+  const [notes, setNotes] = useState([]);              // 私人便签（仅本人可见）
+  const [showNotes, setShowNotes] = useState(false);
+  const [notesSaving, setNotesSaving] = useState("");  // "" | "saving" | "saved" | "error"
+  const notesTimer = useRef(null);
   const voiceRef = useRef(null);
 
   const room = game.room || {};
@@ -225,6 +229,36 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     return next;
   }, []);
 
+  // ===== 私人便签 =====
+  // 服务端存储（按登录用户名，断线重连不丢），本地先改后防抖保存，
+  // 这样打字时不会每敲一个字就打一次接口。
+  useEffect(() => {
+    if (!room.roomCode) return;
+    let cancelled = false;
+    apiJson(`/api/player/rooms/${encodeURIComponent(room.roomCode)}/notes`)
+      .then((d) => { if (!cancelled) setNotes(Array.isArray(d.notes) ? d.notes : []); })
+      .catch(() => { /* 拉不到就当空便签，不打断游戏 */ });
+    return () => { cancelled = true; };
+  }, [room.roomCode]);
+
+  const updateNotes = useCallback((next) => {
+    setNotes(next);
+    setNotesSaving("saving");
+    if (notesTimer.current) clearTimeout(notesTimer.current);
+    notesTimer.current = setTimeout(() => {
+      if (!room.roomCode) return;
+      apiJson(`/api/player/rooms/${encodeURIComponent(room.roomCode)}/notes`, {
+        method: "PUT",
+        body: JSON.stringify({ notes: next }),
+      })
+        .then(() => setNotesSaving("saved"))
+        .catch(() => setNotesSaving("error"));
+    }, 800);
+  }, [room.roomCode]);
+
+  // 离开时把未落盘的改动补一次，避免"刚写完就退出"丢内容
+  useEffect(() => () => { if (notesTimer.current) clearTimeout(notesTimer.current); }, []);
+
   // ===== 动作 =====
   const emit = (ev, data) => socket.emit(ev, { roomCode: room.roomCode, ...data });
   function selectChar(name) { emit("select_character", { characterName: name }); }
@@ -336,6 +370,9 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         <h1 style={{ fontSize: 18 }}>{room.roomCode} · {phaseLabel(phase)}</h1>
         {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
         <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
+          <button className="btn btn-outline btn-sm" onClick={() => setShowNotes((v) => !v)} title="私人便签：记录线索、疑点、时间线。只有你自己能看到">
+            📝 便签{notes.length > 0 ? ` ${notes.length}` : ""}
+          </button>
           <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} processingOn={processingOn} onToggleProcessing={toggleProcessing} />
           {myChar && <span className="tag" style={{ color: "var(--gold)" }}>{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
           <button className="btn btn-outline btn-sm" onClick={onLeave}>退出</button>
@@ -356,6 +393,16 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           </div>
         )}
         <InsecureVoiceNotice />
+
+        {showNotes && (
+          <NotesPanel
+            notes={notes}
+            onChange={updateNotes}
+            onClose={() => setShowNotes(false)}
+            saving={notesSaving}
+            myClues={myClues}
+          />
+        )}
 
         {/* 阶段推进条：原先只有 ReadingView 有"准备就绪"按钮，
             intro/round1/round2 完全没有推进入口，只能干等 10 分钟超时 */}
@@ -585,6 +632,87 @@ function VoiceTag({ playerId, voice, speaking }) {
       {isSpeaking ? "🔊" : (v && v.micOn ? "🎤" : "")}
       {v && v.listenOn === false ? "🚫" : ""}
     </span>
+  );
+}
+
+// ===== 私人便签 =====
+/** 玩家自己的记录面板：记线索、疑点、时间线、谁说了什么。
+ *  内容存在服务端并只按登录用户名存取，别人（包括其他玩家和 AI）看不到。
+ *  设计上刻意保持简单：多条便签 + 标题 + 正文，输入即自动保存，不需要"保存"按钮。 */
+function NotesPanel({ notes, onChange, onClose, saving, myClues }) {
+  const box = {
+    background: "var(--panel, #1c1f25)", border: "1px solid var(--border, #2b2f38)",
+    borderRadius: 8, padding: 12, marginBottom: 10,
+  };
+  const inputStyle = { width: "100%", marginBottom: 6 };
+
+  function addNote(title = "", content = "") {
+    const id = "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    onChange([...notes, { id, title, content }]);
+  }
+  function patch(id, field, value) {
+    onChange(notes.map(n => (n.id === id ? { ...n, [field]: value } : n)));
+  }
+  function remove(id) {
+    if (!confirm("删除这条便签？")) return;
+    onChange(notes.filter(n => n.id !== id));
+  }
+  /** 一键把已获得的线索追加成一条便签，省得手动抄 */
+  function importClues() {
+    if (!myClues || !myClues.length) { alert("你还没有获得线索"); return; }
+    const body = myClues.map(c => {
+      const id = c.id || "线索";
+      const loc = c.location ? `（${c.location}）` : "";
+      return `【${id}】${c.content || ""}${loc}`;
+    }).join("\n");
+    addNote(`线索整理（${myClues.length} 条）`, body);
+  }
+
+  const status = saving === "saving" ? "保存中…" : saving === "saved" ? "已保存" : saving === "error" ? "保存失败（内容仍在本地）" : "";
+
+  return (
+    <div style={box}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+        <strong style={{ color: "var(--gold)" }}>📝 我的便签</strong>
+        <span className="text-xs text-dim">只有你自己能看到</span>
+        <span className="text-xs" style={{ color: saving === "error" ? "var(--danger, #e57373)" : "var(--dim)" }}>{status}</span>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+          <button className="btn btn-outline btn-xs" onClick={() => addNote()}>＋ 新建</button>
+          <button className="btn btn-outline btn-xs" onClick={importClues}>导入我的线索</button>
+          <button className="btn btn-outline btn-xs" onClick={onClose}>收起</button>
+        </div>
+      </div>
+
+      {notes.length === 0 && (
+        <div className="text-xs text-dim">
+          还没有便签。可以记：谁的时间线有矛盾、哪条线索指向谁、接下来要问谁什么。
+          打字会自动保存，刷新或断线重连都不会丢。
+        </div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 8 }}>
+        {notes.map((n) => (
+          <div key={n.id} className="card card-static" style={{ padding: 8 }}>
+            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+              <input
+                className="form-input" style={inputStyle}
+                placeholder="标题（如「张三的时间线」）"
+                value={n.title || ""}
+                onChange={(e) => patch(n.id, "title", e.target.value)}
+              />
+              <button className="btn btn-outline btn-xs" onClick={() => remove(n.id)} title="删除这条便签">✕</button>
+            </div>
+            <textarea
+              className="form-input" rows={6}
+              style={{ width: "100%", resize: "vertical", fontSize: 12, lineHeight: 1.6 }}
+              placeholder="记录内容…（自动保存）"
+              value={n.content || ""}
+              onChange={(e) => patch(n.id, "content", e.target.value)}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 

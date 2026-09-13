@@ -1,5 +1,81 @@
 // 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
 
+/** 去掉 markdown 强调符与全角标记，仅用于"匹配"，不用于输出 */
+function stripMd(s) {
+  return String(s || "").replace(/[*_`#＞]/g, "");
+}
+
+/**
+ * 从角色剧本正文里提取"需要隐瞒的事"。
+ *
+ * 为什么不能只按固定标题匹配：生成模型对这个小节的写法极不稳定 ——
+ * 有时是三级标题，有时是「三、你的任务」下的一个编号条目，有时带 ** 强调符，
+ * 有时省略开头的"你"。实测某个剧本 7 个角色里因此漏掉了 5 个的秘密
+ * （苏婉娘写成"你需要隐瞒的事"能匹配，沈砚写成"需要隐瞒的事"就匹配不上）。
+ * 而秘密丢了会连带毁掉两件事：玩家看不到自己的隐藏信息、AI 玩家演不出隐藏动机。
+ *
+ * 提取顺序：
+ *   1) 独立小节标题（标题本身含"隐瞒/秘密"）
+ *   2) 「你的任务」这类列表里，以"隐瞒/秘密"开头的编号条目（含其下的续行）
+ *   3) 退化处理：任意一行以该词开头
+ *
+ * @param {string} text 角色剧本正文
+ * @param {number} max 返回长度上限
+ * @returns {string} 提取到的秘密；找不到返回空串
+ */
+function extractSecretFromScript(text, max = 2000) {
+  const src = String(text || "");
+  if (!src.trim()) return "";
+  const clamp = (s) => String(s || "").trim().substring(0, max);
+  const NEEDLE = /隐瞒|秘密|隐情/;
+
+  const lines = src.split(/\r?\n/);
+
+  // 1) 独立标题小节
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    const isHeading = /^\s*#{2,4}\s/.test(raw);
+    if (!isHeading) continue;
+    const head = stripMd(raw).replace(/^\s*#{2,4}\s*/, "").trim();
+    if (!head || head.length > 40) continue;
+    if (!NEEDLE.test(head)) continue;
+    const out = [];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^\s*#{2,4}\s/.test(lines[j])) break; // 下一个标题为止
+      out.push(lines[j]);
+    }
+    const body = out.join("\n").trim();
+    if (body) return clamp(body);
+  }
+
+  // 2) 编号条目：以"隐瞒/秘密"开头的列表项。
+  //    判据是"开头 10 字内出现关键词"而不是枚举措辞 —— 实测模型写过
+  //    「你需要隐瞒的事」「需要隐瞒的事」「你必须隐瞒的事」「必须隐瞒的事」四种，
+  //    枚举永远会漏。用"开头 10 字"而不是"整行包含"，是为了避免误吞
+  //    「开场交代：…（可选择性隐瞒）」这种顺带一提的条目。
+  const itemStart = /^\s*(\d+)[.、]\s*/;
+  for (let i = 0; i < lines.length; i++) {
+    if (!itemStart.test(lines[i])) continue;
+    const headCore = stripMd(lines[i]).replace(itemStart, "").trim();
+    if (!NEEDLE.test(headCore.slice(0, 10))) continue;
+    const out = [headCore];
+    // 收集该条目下的续行（直到下一个编号条目）
+    for (let j = i + 1; j < lines.length; j++) {
+      if (itemStart.test(lines[j])) break;
+      out.push(lines[j]);
+    }
+    const body = out.join("\n").trim();
+    if (body) return clamp(body);
+  }
+
+  // 3) 退化：任意一行开头就带关键词（例如未参与编号的 "**需要隐瞒的事**：…"）
+  for (const raw of lines) {
+    const t = stripMd(raw).trim();
+    if (NEEDLE.test(t.slice(0, 10))) return clamp(t);
+  }
+  return "";
+}
+
 function parseScript(markdown) {
   const result = {
     title: "",
@@ -281,7 +357,7 @@ function extractCharacterScripts(markdown, characters) {
       // NPC：提取关系、动机、时间线、隐瞒/可供审讯信息
       char.script = {
         story: extractSection(section, "人物关系", 4000) || extractSection(section, "背景故事", 4000) || section.substring(0, 4000),
-        secret: extractSection(section, "需要隐瞒", 2000) || extractSection(section, "秘密", 2000),
+        secret: extractSecretFromScript(section) || extractSection(section, "需要隐瞒", 2000) || extractSection(section, "秘密", 2000),
         motive: extractSection(section, "作案动机", 2000),
         personalTimeline: extractSection(section, "时间线", 5000),
         items: extractSection(section, "可供审讯透露", 2000) || extractSection(section, "相关物品", 2000),
@@ -291,7 +367,7 @@ function extractCharacterScripts(markdown, characters) {
     } else {
       char.script = {
         story: extractSection(section, "你的背景故事", 5000) || extractField(section, "你的身份") || extractSection(section, "你的身份", 4000) || extractField(section, "案发背景") || extractSection(section, "案发背景", 4000) || extractField(section, "你的故事") || extractSection(section, "你的故事", 4000) || extractSection(section, "背景故事", 4000),
-        secret: extractSection(section, "你需要隐瞒的事", 2000) || extractField(section, "你要隐瞒的") || extractSection(section, "你要隐瞒的", 2000) || extractField(section, "你的秘密") || extractSection(section, "你的秘密", 2000) || extractField(section, "秘密"),
+        secret: extractSecretFromScript(section) || extractSection(section, "你需要隐瞒的事", 2000) || extractField(section, "你要隐瞒的") || extractSection(section, "你要隐瞒的", 2000) || extractField(section, "你的秘密") || extractSection(section, "你的秘密", 2000) || extractField(section, "秘密"),
         personalTimeline: extractSection(section, "你的时间线", 3000) || extractSection(section, "时间线", 3000),
         motive: extractSection(section, "你的杀机", 2000) || extractSection(section, "作案动机", 2000),
         goals: extractSection(section, "你的任务", 2000) || extractSection(section, "调查目标", 2000) || extractField(section, "你要查明的") || extractSection(section, "你要查明的", 2000) || extractSection(section, "你需要查明或隐瞒的事", 2000),
@@ -464,7 +540,12 @@ function normalizeCharacterScript(char) {
   }
   if (!text && typeof char.playerScript === "string") text = char.playerScript;
   if (!secret && typeof char.secret === "string") secret = char.secret;
-  return { script: String(text || ""), secret: String(secret || "") };
+  const script = String(text || "");
+  // 秘密兜底：早期解析只认固定标题「你需要隐瞒的事」，模型换个措辞（"需要隐瞒的事"等）
+  // 就会漏掉 —— 实测某剧本 7 个角色漏了 5 个。这里在读取时从正文再提取一次，
+  // 让【已经生成并存库的旧剧本】也能恢复秘密，不必重新生成。
+  if (!secret && script) secret = extractSecretFromScript(script, 1200);
+  return { script, secret: String(secret || "") };
 }
 
-module.exports = { parseScript, normalizeCharacterScript };
+module.exports = { parseScript, normalizeCharacterScript, extractSecretFromScript };
