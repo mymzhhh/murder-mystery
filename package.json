@@ -16,7 +16,8 @@
     "test:rooms": "node tests/integration/room-expiry.js",
     "audit:orphans": "node scripts/audit-orphans.js",
     "test:concurrency": "node tests/integration/concurrency.js",
-    "test:ready": "node tests/integration/ready-advance.js"
+    "test:ready": "node tests/integration/ready-advance.js",
+    "test:security": "node tests/integration/security-isolation.js"
   },
   "dependencies": {
     "dotenv": "^16.4.0",

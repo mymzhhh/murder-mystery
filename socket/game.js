@@ -112,15 +112,58 @@ function setupGameSocket(io) {
   // 语音聊天（WebRTC 网状连接）信令：音频本身走点对点，服务端只记录"谁开了语音"
   // 并中转 SDP/ICE，不接触也不转发任何音频数据。
   const voiceRooms = {}; // roomCode → Set<socketId>
+  // socketId → roomCode（反向索引）。voice_signal 只带 {to, data}，没有房号，
+  // 必须靠这张表才知道"这个 socket 属于哪个语音房间"，从而校验转发目标是否同房。
+  const voiceSocketRoom = {};
+
+  /**
+   * 玩家记录 → 可以下发给客户端的字段白名单。
+   *
+   * 玩家记录里存着 characterScript —— 那是**完整角色对象**（整篇个人剧本 + secret + isMurderer），
+   * AI 补位与叙事生成要用，属于服务端内部数据。历史上 room_updated 直接把 getPlayers() 原样广播，
+   * 于是同房间任何人（甚至没选角色、只是旁观的）打开 DevTools 的 WS 面板就能看到：
+   *   "characterScript":"{\"name\":\"沈砚\",\"isMurderer\":true,..."
+   * 以及凶手完整的作案过程与别人的秘密（实测单帧 28KB）。
+   * room_state 一直做对了（有 publicCharacters 白名单），room_updated 漏了同一道防线。
+   *
+   * ⚠ 所有面向客户端的玩家列表都必须走这里，不要再出现 emit(..., { players: await getPlayers() }).
+   */
+  function publicPlayers(players, ownerId) {
+    return (players || []).filter(Boolean).map(p => ({
+      playerId: p.playerId,
+      playerName: p.playerName,
+      characterName: p.characterName || "",
+      connected: !!p.connected,
+      isNPC: !!p.isNPC,
+      isAI: !!p.isAI,
+      isAlive: p.isAlive !== false,
+      ...(ownerId !== undefined ? { isOwner: p.playerId === ownerId } : {}),
+    }));
+  }
   // socketId → Set<roomCode>。必须自己记：socket.io v4 在 disconnect 事件触发前已 leaveAll()，
   // 断线处理器里读 socket.rooms 得到的是空集合（实测：断线后玩家 connected 永远停在 true，
   // 而 humanCount 用 connected 过滤 → 幽灵玩家会让人永远凑不满"全员已准备"，只能等超时）。
   const socketRooms = {};
   function voiceLeave(code, id) {
     const set = voiceRooms[code];
+    if (voiceSocketRoom[id] === code) delete voiceSocketRoom[id];
     if (!set) return;
     if (set.delete(id)) io.to(code).emit("voice_leave", { playerId: id });
     if (!set.size) delete voiceRooms[code];
+  }
+
+  // voice_signal 是高频事件：trickle ICE 会一次连着来几十条候选，
+  // 用"最小间隔"限流会丢掉候选、导致连不上。改成滑动窗口计数：
+  // 正常一局每秒几条，给到 3 秒 60 条足够宽松，同时能挡住刷帧。
+  const voiceSignalLog = {}; // socketId → number[]
+  const VOICE_SIGNAL_WINDOW_MS = 3000;
+  const VOICE_SIGNAL_MAX = 60;
+  function voiceSignalAllowed(id) {
+    const now = Date.now();
+    const arr = (voiceSignalLog[id] || []).filter(t => now - t < VOICE_SIGNAL_WINDOW_MS);
+    arr.push(now);
+    voiceSignalLog[id] = arr;
+    return arr.length <= VOICE_SIGNAL_MAX;
   }
 
   // async socket handler 错误边界
@@ -167,6 +210,7 @@ function setupGameSocket(io) {
     // 倒计时也要停：房间都没了，再往下推进只会对空气广播
     if (readyCountdowns[code]) readyCountdowns[code].cancelled = true;
     delete readyCountdowns[code];
+    if (voiceRooms[code]) for (const id of voiceRooms[code]) { if (voiceSocketRoom[id] === code) delete voiceSocketRoom[id]; }
     delete voiceRooms[code];
     delete failedJoin[code];
     for (const key of Object.keys(disconnectTimers)) {
@@ -296,7 +340,7 @@ function setupGameSocket(io) {
           room: { roomCode, status: room.status, phase: room.phase, ownerId: updatedRoom.ownerId, maxPlayers: room.maxPlayers },
           phase: room.phase,
           playerId: socket.id,
-          players: allPlayers.map(p => ({ playerId: p.playerId, playerName: p.playerName, characterName: p.characterName, connected: p.connected, isNPC: p.isNPC || false, isAI: p.isAI || false, isOwner: p.playerId === updatedRoom.ownerId })),
+          players: publicPlayers(allPlayers, updatedRoom.ownerId),
           myCharacter: myCharacter ? { name: myCharacter.name, occupation: myCharacter.occupation || "", roleType: myCharacter.roleType || "player" } : null,
           myClues, allClues: foundClues, chatMessages: await getChatMessages(roomCode, 50),
           phaseConfig: getPhaseConfig(room.phase), narrative: room.aiNarrative || "",
@@ -305,7 +349,7 @@ function setupGameSocket(io) {
           introData: await getIntroductions(roomCode),
           canStart: allReady, totalSlots: totalPlayerSlots,
         });
-        io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: room.ownerId });
+        io.to(roomCode).emit("room_updated", { players: publicPlayers(await getPlayers(roomCode)), ownerId: room.ownerId });
       } catch (e) { socket.emit("error", { code: "JOIN_FAILED", message: e.message }); }
     });
 
@@ -346,7 +390,7 @@ function setupGameSocket(io) {
             try { await syncAiFillers(roomCode); } catch (e) { console.warn("[leave_room] AI 接管失败:", e.message); }
           }
           const updatedRoom = await getRoom(roomCode);
-          io.to(roomCode).emit("room_updated", { players: await getPlayers(roomCode), ownerId: updatedRoom.ownerId });
+          io.to(roomCode).emit("room_updated", { players: publicPlayers(await getPlayers(roomCode)), ownerId: updatedRoom.ownerId });
         }
         socket.emit("left_room", {});
       } catch (e) { socket.emit("error", { code: "LEAVE_FAILED", message: e.message }); }
@@ -377,7 +421,7 @@ function setupGameSocket(io) {
         socket.emit("character_selected", { characterName, character: char, isMurderer: char.isMurderer });
         // 重新对齐 AI 补位（真人抢走 AI 角色后，AI 释放并补齐其它剩余角色）
         const after = await syncAiFillers(roomCode);
-        io.to(roomCode).emit("room_updated", { players: after, ownerId: room.ownerId });
+        io.to(roomCode).emit("room_updated", { players: publicPlayers(after), ownerId: room.ownerId });
       } catch (e) { socket.emit("error", { code: "SELECT_FAILED", message: e.message }); }
     });
 
@@ -750,6 +794,7 @@ function setupGameSocket(io) {
         // 新加入者向"已在语音中的成员"发起 offer，方向固定，避免双方同时发起造成 glare
         const peers = [...set].filter(id => id !== socket.id);
         set.add(socket.id);
+        voiceSocketRoom[socket.id] = roomCode;
         // 名册里只有 socketId，必须连名字一起下发，否则新加入者的成员列表上全是乱码 ID
         const names = {};
         for (const id of peers) {
@@ -770,9 +815,22 @@ function setupGameSocket(io) {
       socket.emit("voice_roster", { peers: set ? [...set].filter(id => id !== socket.id) : [], self: socket.id });
     });
 
-    // SDP / ICE 中转：只按 socketId 点对点转发
+    // SDP / ICE 中转：只按 socketId 点对点转发。
+    //
+    // ⚠ 必须校验"收发双方在同一个语音房间里"：
+    //   socket.io 是匿名可连的（握手不带 token），原来这里对 to/data 不做任何校验，
+    //   于是任何能连上服务端的人，只要拿到某个 socketId，就能往任意连接注入 SDP/ICE：
+    //   既能无限刷帧，也能伪造 offer 逼对方建立 P2P 连接 —— 而 WebRTC 的 ICE 会暴露
+    //   对端的真实 IP（本机与公网地址都会进候选），对方开麦时还能收到音频。
+    //   socketId 不是秘密：room_state / voice_roster / clue_received 里都会下发。
     socket.on("voice_signal", ({ to, data }) => {
-      if (!to || !data) return;
+      if (!to || !data || typeof to !== "string") return;
+      if (to === socket.id) return;
+      if (!voiceSignalAllowed(socket.id)) return;
+      const myRoom = voiceSocketRoom[socket.id];
+      if (!myRoom) return;                       // 自己没在语音里，不许转发
+      const set = voiceRooms[myRoom];
+      if (!set || !set.has(socket.id) || !set.has(to)) return;  // 目标不在同一语音房间
       io.to(to).emit("voice_signal", { from: socket.id, data });
     });
 
@@ -794,6 +852,8 @@ function setupGameSocket(io) {
 
     socket.on("disconnect", async () => {
       delete rateLimits[socket.id]; // 即时清理，不等定时器
+      delete voiceSocketRoom[socket.id];
+      delete voiceSignalLog[socket.id];
       try {
         // 用 socket.io 自身的房间集合定位（不能依赖 rooms:open——开局时房间已被 srem，
         // 历史 bug：开局后断线处理器对所有房间空转，connected 永不落库、幽灵玩家不清理）
@@ -858,7 +918,7 @@ function setupGameSocket(io) {
                 : `⚠️ ${who} 已离开超过 ${mins} 分钟，已被移出房间（该角色暂时空置）。`;
               const msg = await addChatMessage(code, "system", "系统", "系统", text, room ? room.phase : "lobby");
               io.to(code).emit("chat_message", msg);
-              io.to(code).emit("room_updated", { players: remaining, ownerId: room ? room.ownerId : undefined });
+              io.to(code).emit("room_updated", { players: publicPlayers(remaining), ownerId: room ? room.ownerId : undefined });
             } catch (e) { console.warn("[socket] 断线清理异常:", e.message); }
             delete disconnectTimers[timerKey];
           }, AFK_KICK_MS);
