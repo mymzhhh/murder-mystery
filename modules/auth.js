@@ -4,18 +4,93 @@ const { getRedis, ensureRedis, scanKeys } = require("./redis-client");
 
 const TOKEN_TTL = 24 * 3600; // token 24 小时过期
 
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
-  return salt + ":" + hash;
+// ==================== 口令哈希 ====================
+// 历史实现是 pbkdf2Sync(…, 10000, …)：迭代次数偏低（OWASP 对 PBKDF2-HMAC-SHA512 的
+// 建议是 210000），而且是同步版本 —— 单进程架构下每次登录都会阻塞整个事件循环，
+// 连带所有房间卡住。现在改成异步 + 更高迭代，并且把参数写进哈希串以便逐步升级。
+const PBKDF2_DIGEST = "sha512";
+const PBKDF2_KEYLEN = 64;
+const PBKDF2_ITERATIONS = Math.max(10000, Number(process.env.PBKDF2_ITERATIONS || 210000) || 210000);
+// 旧格式（salt:hash）对应的迭代次数，仅用于校验历史数据
+const LEGACY_ITERATIONS = 10000;
+
+function pbkdf2(password, salt, iterations, keylen) {
+  return new Promise((resolve, reject) => {
+    crypto.pbkdf2(password, salt, iterations, keylen, PBKDF2_DIGEST, (err, dk) => err ? reject(err) : resolve(dk));
+  });
 }
 
-function verifyPassword(password, stored) {
-  if (!stored || !stored.includes(":")) return false;
-  const [salt, hash] = stored.split(":");
-  const verify = crypto.pbkdf2Sync(password, salt, 10000, 64, "sha512").toString("hex");
-  return hash === verify;
+/**
+ * 生成口令哈希。
+ * 格式：pbkdf2$<迭代次数>$<盐>$<哈希> —— 把参数写进哈希串，
+ * 以后调整迭代次数不会让老用户登不进来（校验时按存储里的次数算）。
+ */
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("hex");
+  const hash = (await pbkdf2(password, salt, PBKDF2_ITERATIONS, PBKDF2_KEYLEN)).toString("hex");
+  return `pbkdf2$${PBKDF2_ITERATIONS}$${salt}$${hash}`;
 }
+
+/**
+ * 校验口令。
+ * 兼容两种存储格式：新的 pbkdf2$… 与旧的 salt:hash（10000 次）。
+ * 比较用 timingSafeEqual，避免逐字节短路比较泄漏信息。
+ */
+async function verifyPassword(password, stored) {
+  if (!stored || typeof stored !== "string") return false;
+  let iterations = 0, salt = "", expected = "";
+  if (stored.startsWith("pbkdf2$")) {
+    const parts = stored.split("$");
+    if (parts.length !== 4) return false;
+    iterations = Number(parts[1]) || 0;
+    salt = parts[2];
+    expected = parts[3];
+  } else if (stored.includes(":")) {
+    const parts = stored.split(":");
+    if (parts.length !== 2) return false;
+    iterations = LEGACY_ITERATIONS;
+    salt = parts[0];
+    expected = parts[1];
+  } else {
+    return false;
+  }
+  if (!iterations || !salt || !expected || !/^[0-9a-f]+$/i.test(expected)) return false;
+  try {
+    const actual = await pbkdf2(password, salt, iterations, expected.length / 2);
+    const a = Buffer.from(actual.toString("hex"), "hex");
+    const b = Buffer.from(expected, "hex");
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch (e) {
+    return false;
+  }
+}
+
+/** 这个哈希是否需要用当前参数重算（旧格式或迭代次数偏低） */
+function needsRehash(stored) {
+  if (!stored || typeof stored !== "string") return false;
+  if (!stored.startsWith("pbkdf2$")) return true;
+  const it = Number(stored.split("$")[1]) || 0;
+  return it < PBKDF2_ITERATIONS;
+}
+
+/** 写入新口令哈希（PG 优先，Redis 兜底）。表不存在/连不上时静默失败。 */
+async function setUserPassword(username, passwordHash) {
+  let ok = false;
+  try {
+    const { updateUserPassword } = require("./db");
+    ok = await updateUserPassword(username, passwordHash);
+  } catch (e) { /* PG 不可用 */ }
+  try {
+    const r = getRedis();
+    if (await r.exists(`user:${username}`)) {
+      await r.hset(`user:${username}`, "password", passwordHash);
+      ok = true;
+    }
+  } catch (e) { /* Redis 不可用 */ }
+  return ok;
+}
+
 
 // Token 管理 — 存入 Redis 并设置 TTL，多进程共享 + 自动过期
 async function saveToken(token, data) {
@@ -26,13 +101,13 @@ async function saveToken(token, data) {
 async function register(username, password) {
   try {
     const { createUser } = require("./db");
-    await createUser(username, hashPassword(password), "player");
+    await createUser(username, await hashPassword(password), "player");
   } catch (e) {
     if (e.code === "23505") return { ok: false, message: "用户名已存在" };
     // PG 不可用时回退到 Redis
     const r = getRedis();
     if (await r.exists(`user:${username}`)) return { ok: false, message: "用户名已存在" };
-    await r.hset(`user:${username}`, { username, password: hashPassword(password), role: "player", createdAt: new Date().toISOString() });
+    await r.hset(`user:${username}`, { username, password: await hashPassword(password), role: "player", createdAt: new Date().toISOString() });
   }
   const token = crypto.randomBytes(32).toString("hex");
   await saveToken(token, { username, role: "player" });
@@ -51,7 +126,14 @@ async function login(username, password) {
     user = await r.hgetall(`user:${username}`);
   }
   if (!user || !user.username) return { ok: false, message: "用户名不存在" };
-  if (!verifyPassword(password, user.password)) return { ok: false, message: "密码错误" };
+  if (!(await verifyPassword(password, user.password))) return { ok: false, message: "密码错误" };
+  // 登录成功且哈希参数已过时（旧格式/迭代次数偏低）→ 顺手升级到当前参数
+  if (needsRehash(user.password)) {
+    try {
+      await setUserPassword(username, await hashPassword(password));
+      console.log(`[auth] 已升级 ${username} 的口令哈希到 ${PBKDF2_ITERATIONS} 次迭代`);
+    } catch (e) { /* 升级失败不影响本次登录 */ }
+  }
   const token = crypto.randomBytes(32).toString("hex");
   await saveToken(token, { username, role: user.role });
   return { ok: true, token, role: user.role, username };
@@ -188,20 +270,61 @@ async function deleteUser(username) {
 }
 
 // 初始化默认管理员账号
+//
+// 加固要点（原来是"没配就静默用 admin123"）：
+//   1) 生产环境（NODE_ENV=production）未设置 ADMIN_PASSWORD 时**拒绝启动** ——
+//      否则一个绑在 0.0.0.0 的部署，管理员口令就是 admin123，等于没有鉴权。
+//   2) 显式配置了 ADMIN_PASSWORD 时，把它当作管理员口令的唯一来源：
+//      已存在的 admin 账号会按配置轮换（原实现只在"账号不存在"时创建，
+//      所以先被默认口令建出来的 admin 永远改不掉），并撤销其旧令牌。
 async function initAdmin() {
-  const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
+  const configured = process.env.ADMIN_PASSWORD || "";
+  const isProd = process.env.NODE_ENV === "production";
+  if (!configured) {
+    if (isProd) {
+      console.error("[auth] ✖ 未设置 ADMIN_PASSWORD，生产环境拒绝以默认口令启动。");
+      console.error("[auth]   请在 .env 里设置一个强口令，例如： ADMIN_PASSWORD=<32位随机串>");
+      process.exit(1);
+    }
+    console.warn("[auth] ⚠ 未设置 ADMIN_PASSWORD，开发环境暂用默认口令 admin123 —— 切勿用于任何他人可访问的部署");
+  }
+  const adminPassword = configured || "admin123";
+
+  let existing = null;
   try {
     const { createUser, getUser } = require("./db");
-    const existing = await getUser("admin");
-    if (!existing) await createUser("admin", hashPassword(adminPassword), "admin");
+    existing = await getUser("admin");
+    if (!existing) {
+      await createUser("admin", await hashPassword(adminPassword), "admin");
+      console.log(`[auth] 默认管理员已创建（口令来源：${configured ? "ADMIN_PASSWORD" : "内置默认值"}）`);
+    }
   } catch (e) {
     // PG 不可用，Redis 回退
     const r = getRedis();
-    if (!(await r.exists("user:admin"))) {
-      await r.hset("user:admin", { username: "admin", password: hashPassword(adminPassword), role: "admin", createdAt: new Date().toISOString() });
+    const cur = await r.hgetall("user:admin");
+    if (!cur || !cur.username) {
+      await r.hset("user:admin", { username: "admin", password: await hashPassword(adminPassword), role: "admin", createdAt: new Date().toISOString() });
+      console.log(`[auth] 默认管理员已创建（Redis 回退，口令来源：${configured ? "ADMIN_PASSWORD" : "内置默认值"}）`);
+    } else {
+      existing = { username: "admin", password: cur.password };
     }
-    console.log("[auth] 默认管理员已就绪");
+  }
+
+  // 已存在 + 显式配置了口令 → 按配置轮换
+  // 注意字段名：PG 的列是 password_hash，Redis 回退路径写的是 password
+  if (existing && configured) {
+    const storedHash = existing.password_hash || existing.password || "";
+    const same = storedHash ? await verifyPassword(configured, storedHash) : false;
+    if (!same) {
+      const ok = await setUserPassword("admin", await hashPassword(configured));
+      if (ok) {
+        await revokeUserTokens("admin");
+        console.log("[auth] 管理员口令已按 ADMIN_PASSWORD 轮换，旧登录令牌已撤销");
+      }
+    }
   }
 }
 
-module.exports = { register, login, verifyToken, logout, listUsers, setRole, deleteUser, initAdmin };
+module.exports = { register, login, verifyToken, logout, listUsers, setRole, deleteUser, initAdmin,
+  // 导出给单测用（口令哈希的格式兼容与参数升级需要能单独验证）
+  hashPassword, verifyPassword, needsRehash, PBKDF2_ITERATIONS, LEGACY_ITERATIONS };

@@ -32,7 +32,12 @@ function req(method, path, body, token) {
       },
     }, (res) => {
       let b = ""; res.on("data", c => b += c);
-      res.on("end", () => { try { resolve({ status: res.statusCode, body: JSON.parse(b) }); } catch (e) { resolve({ status: res.statusCode, body: b }); } });
+      res.on("end", () => {
+        const headers = {};
+        for (const [k, v] of Object.entries(res.headers)) headers[k.toLowerCase()] = v;
+        try { resolve({ status: res.statusCode, body: JSON.parse(b), headers }); }
+        catch (e) { resolve({ status: res.statusCode, body: b, headers }); }
+      });
     });
     r.on("error", reject);
     if (data) r.write(data);
@@ -237,6 +242,77 @@ function scanForbidden(payload) {
 
     for (const cl of [a, b, c]) cl.sock.disconnect();
     outsider.disconnect();
+  }
+
+  // ================= 3. 房间准入：人数上限 + 进行中的局不收新人 =================
+  console.log("\n【3】房间准入：maxPlayers 生效，且进行中的局不收新人");
+  {
+    // maxPlayers=2 的房间：前 2 人进得去，第 3 人必须被拒
+    const nr = await req("POST", "/api/player/rooms", { scriptSessionId: sid, maxPlayers: 2 }, tokens[0]);
+    const code = nr.body.roomCode;
+    codes.push(code);
+
+    const a = await joinRoom(code, tokens[0]);
+    const b = await joinRoom(code, tokens[1]);
+    const cSock = io(BASE, { transports: ["websocket"] });
+    await once(cSock, "connect");
+    const cErrs = [];
+    cSock.on("error", d => cErrs.push(d.code));
+    const cState = await new Promise(res => { const t = setTimeout(() => res(null), 5000); cSock.once("room_state", d => { clearTimeout(t); res(d); }); cSock.emit("join_room", { roomCode: code, token: tokens[2] }); });
+    await sleep(500);
+    check("超过 maxPlayers 的加入被拒（ROOM_FULL）", !cState && cErrs.includes("ROOM_FULL"),
+      `拿到房间状态=${!!cState}，错误=${JSON.stringify(cErrs)}`);
+
+    // 开局 → 进 reading 阶段（start_game 要求所有真人都已选角，所以 a、b 都要选）
+    const chars = a.state.allCharacters.filter(x => x.roleType !== "npc").map(x => x.name);
+    for (const [cl, nm] of [[a, chars[0]], [b, chars[1]]]) {
+      const p = once(cl.sock, "character_selected");
+      cl.sock.emit("select_character", { roomCode: code, characterName: nm });
+      await p;
+    }
+    const startErrs = [];
+    a.sock.on("error", d => startErrs.push(d.code + ":" + d.message));
+    let started = false;
+    const pr = new Promise(res => { const on = d => { if (d.phase === "reading") { a.sock.off("phase_changed", on); res(true); } }; a.sock.on("phase_changed", on); setTimeout(() => res(false), 30000); });
+    a.sock.emit("start_game", { roomCode: code });
+    started = await pr;
+    check("开局成功进入 reading（后续准入测试的前提）", started, started ? "" : `错误=${JSON.stringify(startErrs)}`);
+
+    // 局外人此时加入：必须被拒
+    const dSock = io(BASE, { transports: ["websocket"] });
+    await once(dSock, "connect");
+    const dErrs = [];
+    dSock.on("error", d => dErrs.push(d.code));
+    const dState = await new Promise(res => { const t = setTimeout(() => res(null), 5000); dSock.once("room_state", d => { clearTimeout(t); res(d); }); dSock.emit("join_room", { roomCode: code, token: tokens[2] }); });
+    await sleep(500);
+    check("进行中的局拒绝新人加入（GAME_STARTED）", !dState && dErrs.includes("GAME_STARTED"),
+      `拿到房间状态=${!!dState}，错误=${JSON.stringify(dErrs)}`);
+
+    // 原班底换一个 socket 重连（同一账号）：必须放行，否则刷新页面就回不来了
+    const aAgain = await joinRoom(code, tokens[0]);
+    check("原班底掉线重连仍被放行", !!aAgain.state && aAgain.state.phase === "reading",
+      `phase=${aAgain.state?.phase}`);
+
+    for (const s of [a.sock, b.sock, cSock, dSock, aAgain.sock]) s.disconnect();
+  }
+
+  // ================= 4. 安全响应头 =================
+  console.log("\n【4】安全响应头");
+  {
+    const r = await req("GET", "/api/health", null, null);
+    const h = r.headers || {};
+    const need = {
+      "content-security-policy": "CSP",
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "防点击劫持",
+      "referrer-policy": "Referrer-Policy",
+    };
+    for (const [k, label] of Object.entries(need)) {
+      check(`${label} 已设置`, !!h[k], h[k] ? String(h[k]).slice(0, 60) : "缺失");
+    }
+    check("不再暴露 X-Powered-By", !h["x-powered-by"], h["x-powered-by"] || "已移除");
+    const csp = String(h["content-security-policy"] || "");
+    check("CSP 允许语音所需 media-src blob: 与 ws 连接", /media-src[^;]*blob:/.test(csp) && /connect-src[^;]*ws:/.test(csp));
   }
 
   await cleanup();

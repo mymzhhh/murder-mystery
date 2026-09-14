@@ -283,6 +283,29 @@ function setupGameSocket(io) {
         const humanPlayers = existing.filter(p => !p.isNPC);
         const byUsername = humanPlayers.find(p => p.playerName === user.username);
         const bySocketId = humanPlayers.find(p => p.playerId === socket.id);
+        const isReturning = !!(byUsername || bySocketId);
+
+        // ⚠ 两条准入校验（原来一条都没有，实测：maxPlayers=2 的房间能进 4 个人；
+        //   而且任何人都能用房间号闯进一局进行中的牌 —— 他的 ready 会被算进人数
+        //   把全桌推进押着走，还能 investigate 从线索池里拿走线索、投票影响结局。
+        //   房间号不是秘密：/api/player/rooms 会把开放房间直接列给任何登录用户。）
+
+        // 1) 进行中的局不收新人，原班底掉线重连不受影响
+        if (room.phase !== "lobby" && !isReturning) {
+          return socket.emit("error", {
+            code: "GAME_STARTED",
+            message: "这局已经开始，无法中途加入。如果你是掉线重连，请用原来那个账号登录。",
+          });
+        }
+
+        // 2) 人数上限（只算真人；AI 补位不占名额）
+        const maxPlayers = parseInt(room.maxPlayers, 10) || 6;
+        if (!isReturning && humanPlayers.length >= maxPlayers) {
+          return socket.emit("error", {
+            code: "ROOM_FULL",
+            message: `房间已满（${humanPlayers.length}/${maxPlayers}），请换一个房间。`,
+          });
+        }
 
         // 检查重连前是否是房主
         const wasOwner = room.ownerId && byUsername && room.ownerId === byUsername.playerId;

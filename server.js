@@ -17,10 +17,19 @@ const app = express();
 const server = http.createServer(app);
 // CORS 可通过环境变量配置（逗号分隔多来源），默认 "*"（同源部署无需改动）
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "*";
+const CORS_ORIGINS = CORS_ORIGIN === "*" ? null : CORS_ORIGIN.split(",").map(s => s.trim()).filter(Boolean);
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN === "*" ? "*" : CORS_ORIGIN.split(",").map(s => s.trim()).filter(Boolean),
+    origin: CORS_ORIGINS || "*",
     methods: ["GET", "POST"],
+  },
+  // 纯 WebSocket 握手不受 CORS 约束（浏览器不会拦），所以只配 cors.origin 挡不住它 ——
+  // 必须自己看 Origin。默认 "*" 时保持宽松（本机/内网部署），一旦显式配了 CORS_ORIGIN 就严格按它校验。
+  allowRequest: (req, callback) => {
+    if (!CORS_ORIGINS) return callback(null, true);
+    const origin = req.headers.origin || "";
+    // 无 Origin 的是非浏览器客户端（脚本），它们本来就不受 CORS 保护，鉴权靠事件里的 token
+    callback(null, !origin || CORS_ORIGINS.includes(origin));
   },
   pingTimeout: 60000,
   pingInterval: 25000,
@@ -30,6 +39,32 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 
 // ===== 全局中间件 =====
+
+// 安全响应头。
+// 不引 helmet：CSP 一旦写错会直接打断语音（blob: 音频、ws: 长连接），而这里没法用真实浏览器回归，
+// 所以显式列出本应用确实需要的策略，宁可精确也不留"配了但没验证过"的东西。
+// 已确认前端不引用任何外部资源（无 CDN 字体/脚本/图片），因此 default-src 'self' 是安全的。
+const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",   // React 内联 style 属性
+  "img-src 'self' data:",
+  "media-src 'self' blob:",             // 自检页的提示音走 blob: URL
+  "connect-src 'self' ws: wss:",        // socket.io
+  "font-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",             // 防点击劫持（等价于 X-Frame-Options）
+].join("; ");
+app.use((req, res, next) => {
+  res.set("Content-Security-Policy", CSP);
+  res.set("X-Content-Type-Options", "nosniff");
+  res.set("X-Frame-Options", "SAMEORIGIN");
+  res.set("Referrer-Policy", "no-referrer");
+  res.removeHeader("X-Powered-By");     // 不必告诉别人我们是 Express
+  next();
+});
 
 // 请求日志（含耗时）
 app.use((req, res, next) => {

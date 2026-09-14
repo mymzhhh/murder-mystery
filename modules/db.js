@@ -180,10 +180,16 @@ async function updateUserRole(username, role) {
   return r.rowCount > 0;
 }
 
+/** 更新用户口令哈希（登录时顺手升级旧哈希、以及按 ADMIN_PASSWORD 轮换管理员口令用） */
+async function updateUserPassword(username, passwordHash) {
+  const r = await query("UPDATE users SET password_hash=$1 WHERE username=$2", [passwordHash, username]);
+  return r.rowCount > 0;
+}
+
 /** 删除用户 */
 async function deleteUser(username) {
   const r = await query("DELETE FROM users WHERE username=$1", [username]);
   return r.rowCount > 0;
 }
 
-module.exports = { initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers, updateUserRole, deleteUser };
+module.exports = { initDB, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers, updateUserRole, updateUserPassword, deleteUser };
