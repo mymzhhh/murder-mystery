@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { apiJson, api, getToken } from "../lib/api.js";
 import { getSocket } from "../lib/socket.js";
+import { ScriptBody } from "../components/ScriptBody.jsx";
+import { clueBodyText } from "../lib/clue-body.mjs";
 
 const PHASE_TEXT = {
   lobby: "等待开局", reading: "阅读剧本", intro: "自我介绍",
@@ -349,7 +351,18 @@ export default function TestRunPage() {
                         <span className="text-dim">{c.location || "?"}{c.round ? `／第${c.round}轮` : ""}</span>
                         <span className="text-dim" style={{ marginLeft: "auto" }}>{String(c.content || "").slice(0, 14)}…</span>
                       </button>
-                      {openClue === c.id ? <div style={{ lineHeight: 1.7, padding: "4px 6px" }}>{String(c.content || "")}</div> : null}
+                      {/* 展开的线索正文走与玩家端同一个渲染器（components/ScriptBody.jsx）：
+                          线索里带 `![说明](img:键名)` 配图时必须看到图 —— 管理员在这里判断
+                          "这条线索玩家能不能靠它推出真相"，看不到图就等于漏判了关键证据。
+                          scriptId 是本次测试选中的剧本 id（房间的 scriptSessionId），
+                          拿不到时 ScriptBody 自动退回纯文本，线索不会因此不显示。 */}
+                      {openClue === c.id
+                        ? (
+                          <div style={{ lineHeight: 1.7, padding: "4px 6px" }}>
+                            <ScriptBody text={clueBodyText(c)} scriptId={scriptId} />
+                          </div>
+                        )
+                        : null}
                     </div>
                   ))}
                   {!state.clues.length ? <div className="text-xs text-dim">这个剧本没有线索数据（本身就是一个问题）。</div> : null}
@@ -406,11 +419,13 @@ export default function TestRunPage() {
                     {scriptPack.characters.map((c) => (
                       <div key={c.name} style={{ borderTop: "1px solid var(--ink-600, rgba(255,255,255,.08))" }}>
                         <div
-                          className="text-xs"
                           className="btn btn-outline btn-xs"
                           style={{ width: "100%", textAlign: "left", padding: "6px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}
                           onClick={() => setOpenChar(openChar === c.name ? "" : c.name)}
                         >
+                          {/* 这个 div 原本写了两遍 className（"text-xs" + "btn btn-outline btn-xs"）：
+                              JSX 同名属性是硬错误（TS 17001），而 React 实际只吃最后一个，
+                              所以删掉前面那个不改变任何渲染结果，只是把错误清掉。 */}
                           <span className="text-dim">{openChar === c.name ? "▾" : "▸"}</span>
                           <strong>{c.name}</strong>
                           <span className="text-dim">{c.occupation || ""}{c.roleType === "npc" ? "｜NPC" : ""}</span>

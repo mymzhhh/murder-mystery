@@ -3,6 +3,7 @@ import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
 import { createVoice } from "../lib/voice.js";
 import { groupCluesByPlace, clueCategoryStats } from "../lib/clue-place.mjs";
+import { clueBodyText } from "../lib/clue-body.mjs";
 import { paginate, estimateBudget, classifyLine } from "../lib/paginate.mjs";
 import { votablePlayers, canVoteFor } from "../lib/vote.mjs";
 import { ScriptBody } from "../components/ScriptBody.jsx";
@@ -637,6 +638,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             players={players}
             voice={remoteVoice}
             speaking={speaking}
+            scriptId={scriptId}
           />
         )}
         {phase === "voting" && (
@@ -659,6 +661,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             myReview={myReview}
             myReviewState={myReviewState}
             onLoadMyReview={loadMyReview}
+            scriptId={scriptId}
           />
         )}
       </div>
@@ -1223,7 +1226,7 @@ function ReadingView({ script, char, scriptId, iAmReady, onReady }) {
 // 布局：左侧（宽）全屋讨论 + 在场玩家；右侧（窄）搜证 / 审讯 / 私聊 / 线索。
 // 之所以把讨论放主列：讨论是这一阶段真正的主场，需要横向空间读长发言；
 // 而线索列表是短行文本，窄列反而更易扫读。
-function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper }) {
+function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper, scriptId }) {
   const [msg, setMsg] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
   // 私聊：与公屏完全分开，服务端按参与者过滤后才下发
@@ -1371,7 +1374,7 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                   还没有线索被发现。线索一被搜到就会自动公开给全场。
                 </div>
               )
-              : <GroupedClues clues={myClues} />}
+              : <GroupedClues clues={myClues} scriptId={scriptId} />}
           </div>
         </div>
 
@@ -1458,6 +1461,22 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   );
 }
 
+// ===== 线索正文（列表与复盘共用） =====
+//
+// 线索正文也要过 ScriptBody：线索里可能带配图（`![说明](img:键名)` 独立成行），
+// 例如《吉普赛女郎之死》的 B1/B2/B7 —— 那两张伤口形状图是"内脏镜像分布"核心诡计的唯一证据，
+// 按纯文本渲染的话玩家只会看到一行裸的 `![线索·图片1](img:cluedoc-1)`，诡计就推不出来了。
+// scriptId 拿不到时 ScriptBody 自动退回文本渲染，线索本身仍然完整显示（绝不允许整条消失）；
+// 取正文用哪几个字段由 lib/clue-body.mjs 统一口径（玩家端两处 + 管理端一处共用）。
+function ClueBody({ clue, scriptId }) {
+  const text = clueBodyText(clue);
+  return (
+    <div className="clue-body">
+      {text ? <ScriptBody text={text} scriptId={scriptId} /> : null}
+    </div>
+  );
+}
+
 // ===== 线索列表（按大地点分组 + 类别筛选） =====
 //
 // 归组逻辑抽到了 lib/clue-place.mjs（纯 ESM，可被单测覆盖）——
@@ -1471,7 +1490,7 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
 // 所以现在只按"类别"（地点 / 人物证词 / 搜身物品）筛选，一共 4 个按钮；
 // 想定位到具体某个地点，靠分组头本身 —— 每个分组头都能点开/收起，
 // 全收起时就等于一份地点目录。
-function GroupedClues({ clues }) {
+function GroupedClues({ clues, scriptId }) {
   const [cat, setCat] = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
 
@@ -1554,7 +1573,7 @@ function GroupedClues({ clues }) {
                         {place && place !== g.label ? <span className="tag">{place}</span> : null}
                         {c.foundByName ? <span className="text-xs text-muted" style={{ marginLeft: "auto" }}>{c.foundByName} 发现</span> : null}
                       </div>
-                      <div className="clue-body">{c.description || c.content || c.text || ""}</div>
+                      <ClueBody clue={c} scriptId={scriptId} />
                     </div>
                   ))}
                 </div>
@@ -1622,7 +1641,7 @@ function VotingView({ players, myChar, recordedTarget, voteCount, voteTotal, gam
 }
 
 // ===== 真相复盘 =====
-function TruthView({ narrative, review, finished, myReview, myReviewState, onLoadMyReview }) {
+function TruthView({ narrative, review, finished, myReview, myReviewState, onLoadMyReview, scriptId }) {
   const murderer = review?.murderer || {};
   return (
     <div>
@@ -1658,7 +1677,10 @@ function TruthView({ narrative, review, finished, myReview, myReviewState, onLoa
               </>
             )}
             <hr />
-            <ScriptBody text={review?.truthReveal || narrative || "复盘内容生成中…"} />
+            {/* 真相复盘正文里也有配图（实测 344 号剧本的 img:truth-1，"子弹弹道"那张示意图
+                就在这一节里）。这里以前漏传 scriptId → ScriptBody 只能退回文本，
+                玩家在复盘里看到的是裸的图片语法。顺手补上：不传 scriptId 时行为不变。 */}
+            <ScriptBody text={review?.truthReveal || narrative || "复盘内容生成中…"} scriptId={scriptId} />
           </div>
         </div>
       </div>
@@ -1694,7 +1716,7 @@ function TruthView({ narrative, review, finished, myReview, myReviewState, onLoa
                       <span className="text-xs text-muted">{c.location || "未知"}</span>
                       {c.foundBy ? <span className="text-xs" style={{ color: "var(--verd-bright)", marginLeft: "auto" }}>{c.foundBy}</span> : null}
                     </div>
-                    <div className="clue-body">{c.content}</div>
+                    <ClueBody clue={c} scriptId={scriptId} />
                   </div>
                 ))}
             </div>
