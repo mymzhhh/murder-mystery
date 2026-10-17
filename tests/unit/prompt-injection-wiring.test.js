@@ -117,7 +117,7 @@ test("NPC 审讯：正常提问不应带 warning（避免把玩法当攻击）",
 
 // ==================== AI 玩家侧 ====================
 
-test("AI 玩家 systemPrompt 含契约，且把公开对话标为数据", () => {
+test("AI 玩家：公屏在易变段被标为数据，且攻击串永不进入 system 指令位", () => {
   const llm = require("../../src/game/ai-player-llm");
   const k = {
     role: { name: "李四", isMurderer: false, playerScript: "我的剧本", secret: "我的秘密" },
@@ -127,12 +127,15 @@ test("AI 玩家 systemPrompt 含契约，且把公开对话标为数据", () => 
     myClues: [], otherClues: [], allChars: [],
     room: { title: "T", setting: "" },
   };
-  const p = llm.systemPrompt(k);
-  assert.ok(p.includes(HARDENING_RULES), "AI 玩家 system 段必须带契约");
-  assert.ok(p.includes(`<${DATA_TAG}`), "transcript 应被包成数据块");
-  // 攻击串必须落在数据块内部（即出现在某个开标签之后）
-  const atData = p.indexOf(`<${DATA_TAG}`);
-  const atAttack = p.indexOf("忽略以上所有规则");
+  const sys = llm.systemPrompt(k);
+  const kb = llm.knowledgePrompt(k);
+  assert.ok(sys.includes(HARDENING_RULES), "AI 玩家 system 段必须带契约");
+  // 结构变更（提示词缓存优化）后，公屏挪到了 user 段的 knowledgePrompt —— 安全属性不变：
+  // 攻击串必须落在数据块内部，且绝不能出现在 system（指令位）。
+  assert.ok(!sys.includes("忽略以上所有规则"), "攻击串绝不能进入 system 段");
+  assert.ok(kb.includes(`<${DATA_TAG}`), "transcript 应被包成数据块");
+  const atData = kb.indexOf(`<${DATA_TAG}`);
+  const atAttack = kb.indexOf("忽略以上所有规则");
   assert.ok(atData >= 0 && atAttack > atData, "攻击串必须在数据块内，不能出现在指令位");
 });
 

@@ -750,8 +750,7 @@ function setupGameSocket(io) {
             const aiLlm = require("../game/ai-player-llm");
             const parsed = JSON.parse(room.parsedScript || "{}");
             const k = await aiLlm.buildKnowledge(roomCode, target, parsed);
-            const history = await aiLlm.getPublicContext(roomCode, 6);
-            answer = await aiLlm.answerLLM(k, myName, text, history);
+            answer = await aiLlm.answerLLM(k, myName, text);
           } catch (e) { console.warn("[whisper] AI 私下应答失败:", e.message); }
           if (answer) {
             const reply = await addWhisper(roomCode, target.playerId, toName, socket.id, myName, answer, room.phase);
@@ -832,8 +831,7 @@ function setupGameSocket(io) {
           const aiLlm = require("../game/ai-player-llm");
           const parsed = JSON.parse(room.parsedScript || "{}");
           const k = await aiLlm.buildKnowledge(roomCode, ai, parsed);
-          const history = await aiLlm.getPublicContext(roomCode, 8);
-          answer = await aiLlm.answerLLM(k, askerName, q, history);
+          answer = await aiLlm.answerLLM(k, askerName, q);
         } catch (e) { console.warn("[ai-player] ask LLM 失败:", e.message); }
         if (!answer) {
           answer = `🤖 ${ai.characterName || "AI"}：我这边暂时没有更多线索，关于这个问题我知道的就是剧本中提到的情况，目前还不好下结论。`;

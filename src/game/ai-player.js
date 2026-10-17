@@ -730,11 +730,12 @@ async function actTurn(io, roomCode, ai, allChars) {
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
-    const context = await llm.getPublicContext(roomCode, 12);
+    // ⚠️ 不再单独取"最近公屏"：buildKnowledge 的 transcript 已经是同一份数据，
+    // 重复投喂每次要多付最多 2500 字（见 ai-player-llm 的 knowledgePrompt）。
     // ⚠️ 没有可问的人时**也要**调用：发言不需要候选人。
     // （写成"有候选人才调"会让 candidates 为空的房间彻底说不了话；
     //   而"提问"的合法性由 parseTurnOutput 自己校验——目标不在候选里就返回 null。）
-    decision = await llm.turnLLM(k, candidates, context);
+    decision = await llm.turnLLM(k, candidates);
   } catch (e) { console.warn("[ai-player] 出手 LLM 失败:", e.message); }
 
   if (decision && decision.action === "ask") {
@@ -809,8 +810,7 @@ async function actReplyToQuestion(io, roomCode, ai, askerName, question, attempt
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
-    const context = await llm.getPublicContext(roomCode, 12);
-    text = await llm.replyToQuestionLLM(k, askerName, question, context);
+    text = await llm.replyToQuestionLLM(k, askerName, question);
   } catch (e) { console.warn("[ai-player] replyToQuestion LLM 失败:", e.message); }
   if (!text) {
     // 拿不到内容多半不是"答不出来"，而是被 LLM 闸门超时摘掉了

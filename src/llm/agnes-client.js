@@ -3,6 +3,7 @@
 // 模型配置动态读取：管理端 model-manager 的 reasoning 通道优先，否则回退环境变量。
 const OpenAI = require("openai");
 const gate = require("./llm-gate");
+const { getRedis } = require("../core/redis-client");
 
 const AGNES_API_KEY = process.env.AGNES_API_KEY || "";
 const AGNES_BASE_URL = process.env.AGNES_BASE_URL || "https://apihub.agnes-ai.com/v1";
@@ -92,6 +93,39 @@ function requestOptions(cfg, signal, sessionId) {
  * @param {object} [opts] maxTokens / temperature / priority("interactive"|"background") / timeoutMs / label / sessionId
  * @returns {Promise<string|null>} 正文内容；失败/超时/未配置一律返回 null，由调用方回退规则引擎
  */
+/**
+ * token 计量（只做统计，**绝不影响主流程**）。
+ *
+ * 为什么需要：AI 玩家这条链路此前完全没有计量 —— chat() 只返回字符串，把响应里的
+ * usage 丢掉了，所以"省了多少 token"只能靠估。这里按 label 累计进 Redis：
+ *   ai:usage:<sessionId>  →  { <label>.calls / .in / .out / .chars }
+ * sessionId 就是房间号（ai-player-llm 传的是 k.roomCode），因此可以按房间看。
+ * `.chars` 是兜底口径：有的网关不返回 usage，但"输入字符数"照样能比较改前改后。
+ *
+ * 三条硬约束：连不上就跳过、异常全部吞掉、不 await —— 计量绝不能拖慢或拖垮 AI 发言。
+ */
+function recordUsage(sessionId, label, usage, chars) {
+  try {
+    const r = getRedis();
+    if (!r || r.status !== "ready") return;
+    const key = `ai:usage:${sessionId || "global"}`;
+    const p = r.pipeline();
+    p.hincrby(key, `${label}.calls`, 1);
+    p.hincrby(key, `${label}.in`, Number(usage && usage.prompt_tokens) || 0);
+    p.hincrby(key, `${label}.out`, Number(usage && usage.completion_tokens) || 0);
+    p.hincrby(key, `${label}.chars`, Number(chars) || 0);
+    // 提示词缓存命中量（DeepSeek 系返回 prompt_cache_hit_tokens；其它网关可能返回 cached_tokens）
+    // —— 这是"把易变内容挪出 system 段"到底有没有效的唯一硬证据：
+    // 没这一项就只能看总输入，"挪位置"这个改动在总量上是看不出来的。
+    const cached = Number(
+      (usage && (usage.prompt_cache_hit_tokens ?? (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)))
+    ) || 0;
+    if (cached) p.hincrby(key, `${label}.cacheHit`, cached);
+    p.expire(key, 6 * 3600);
+    p.exec().catch(() => {});
+  } catch (e) { /* 计量失败不影响 AI 发言 */ }
+}
+
 async function chat(systemPrompt, userPrompt, opts = {}) {
   const cfg = await getActiveConfig();
   const c = getClient(cfg);
@@ -118,6 +152,9 @@ async function chat(systemPrompt, userPrompt, opts = {}) {
   }
   const content = (res.value && res.value.choices && res.value.choices[0]
     && res.value.choices[0].message && res.value.choices[0].message.content || "").trim();
+  // 计量：成功才记。chars 口径 = system + user 的字符数（不依赖网关是否返回 usage）
+  recordUsage(opts.sessionId, opts.label || "agnes.chat", res.value && res.value.usage,
+    String(systemPrompt || "").length + String(userPrompt || "").length);
   return content || null;
 }
 

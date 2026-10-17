@@ -32,7 +32,7 @@ Module._load = function (request, parent, isMain) {
 const llm = require("../../src/game/ai-player-llm");
 Module._load = origLoad; // 立刻还原，避免影响其他测试文件
 
-const { systemPrompt, buildKnowledge, turnLLM, parseTurnOutput, voteLLM } = llm;
+const { systemPrompt, knowledgePrompt, buildKnowledge, turnLLM, parseTurnOutput, voteLLM } = llm;
 
 const AI = { playerId: "ai_1", characterName: "李四", characterScript: JSON.stringify({ name: "李四", isMurderer: false }) };
 const PARSED = {
@@ -53,7 +53,7 @@ function resetStubs() {
   stubs.lastUserPrompt = "";
 }
 
-test("systemPrompt 包含自己的剧本/秘密/线索/角色名单", () => {
+test("systemPrompt 只含**稳定**内容：剧本/秘密/案情/角色名单在，线索与公屏必须挪出去", () => {
   const p = systemPrompt({
     role: { name: "张三", occupation: "医生", isMurderer: false, playerScript: "我是张三，案发当晚我在书房看书", secret: "我背着大家借了高利贷" },
     name: "张三",
@@ -68,14 +68,43 @@ test("systemPrompt 包含自己的剧本/秘密/线索/角色名单", () => {
   });
   assert.ok(p.includes("我是张三，案发当晚我在书房看书"));
   assert.ok(p.includes("高利贷"));
-  assert.ok(p.includes("书房抽屉里发现一把生锈的钥匙"));
   assert.ok(p.includes("李四"));
   assert.ok(p.includes("沪上迷局"));
-  // 新增：公开线索、自己说过的话、案情、场景都应进入 prompt
-  assert.ok(p.includes("后厨水缸边有半枚鞋印"), "全场公开线索必须进入 prompt");
-  assert.ok(p.includes("我八点就在书房了"), "自己说过的话必须进入 prompt（防自我矛盾）");
   assert.ok(p.includes("20:45"), "案情（死亡时间）必须进入 prompt");
   assert.ok(p.includes("茶楼二层"), "场景必须进入 prompt");
+  // ↓ 本次改动的新契约：易变内容**绝不能**留在 system 段。
+  //   提示词缓存只认最长公共前缀 —— system 里只要有一处每轮都变（线索/自己的发言/公屏），
+  //   缓存就永远只能命中前面那一小段，剩下每次全价重发（实测改前就是这样）。
+  assert.ok(!p.includes("书房抽屉里发现一把生锈的钥匙"), "自己找到的线索必须挪到 user 段");
+  assert.ok(!p.includes("后厨水缸边有半枚鞋印"), "公开线索必须挪到 user 段");
+  assert.ok(!p.includes("我八点就在书房了"), "自己说过的话必须挪到 user 段");
+  assert.ok(!p.includes("我一直在前厅"), "公屏必须挪到 user 段");
+});
+
+test("knowledgePrompt 承载易变内容；同一角色的 system 段必须逐字节稳定", () => {
+  const base = {
+    role: { name: "张三", occupation: "医生", isMurderer: false, playerScript: "我是张三", secret: "我的秘密" },
+    name: "张三",
+    myClues: ["【A1】书房抽屉里发现一把生锈的钥匙"],
+    otherClues: ["【A2】后厨水缸边有半枚鞋印"],
+    allChars: ["张三（医生）", "李四（管家）"],
+    myStatements: ["我八点就在书房了"],
+    transcript: "李四: 我一直在前厅",
+    victim: "陆老板，中毒",
+    scene: "茶楼二层",
+    room: { title: "沪上迷局", setting: "民国，上海" },
+  };
+  const kb = knowledgePrompt(base);
+  assert.ok(kb.includes("书房抽屉里发现一把生锈的钥匙"), "自己找到的线索要在易变段");
+  assert.ok(kb.includes("后厨水缸边有半枚鞋印"), "公开线索要在易变段");
+  assert.ok(kb.includes("我八点就在书房了"), "自己说过的话要在易变段（防自我矛盾）");
+  assert.ok(kb.includes("我一直在前厅"), "公屏要在易变段");
+
+  // 关键不变量：线索/公屏变化后，system 段必须**一模一样** —— 这是提示词缓存能命中的前提。
+  // 这条一旦被破坏，缓存命中率会静默归零，而页面和测试都不会报错。
+  const changed = { ...base, myClues: ["【A9】新发现的一条线索"], transcript: "张三: 新的一句话" };
+  assert.equal(systemPrompt(base), systemPrompt(changed), "线索/公屏变化不得影响 system 段");
+  assert.notEqual(knowledgePrompt(base), knowledgePrompt(changed), "易变段必须随线索/公屏变化");
 });
 
 test("信息隔离红线：不携带他人剧本、DM 真相、凶手姓名", () => {
