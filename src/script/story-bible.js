@@ -876,7 +876,26 @@ function checkTimelineHealth(name, script) {
     issues.push({ code: "self_name_prefix", level: "warn", text: `${name} 的时间线条目带了自己的名字前缀：${h.line}`, evidence: [h.line] });
   }
 
-  return { ok: issues.filter(i => i.level === "error").length === 0, issues };
+  // ⑥ 去重：同一条消息只报一次。
+  //
+  // 为什么需要（真库实测，2026-10-17）：39 份角色剧本里 `timeline_duplicate_cross` 报了 **92 条**，
+  // 远超其它判据之和；而样本里出现**一字不差的重复输出**：
+  //   「赵守夜 里 21:30 的同一件事在小节间重复出现（时间线 + 别处，共同片段 7）」
+  //   「赵守夜 里 21:30 的同一件事在小节间重复出现（时间线 + 别处，共同片段 7）」
+  // 成因是双重循环按 (i, j) 对报，而消息里只带时刻与相似度、**不带是哪一个 j** ——
+  // 同一时刻有多条相近条目时，同一个 (时刻, 相似度) 就会被报多次，字数一样、内容无从区分。
+  // 这种重复对读者没有任何信息量（他看到的还是同一句话），只会把"提示级问题数量"顶上去，
+  // 让人误判判据的宽窄。所以按 `code|text` 折叠，证据取第一条。
+  const seenIssue = new Set();
+  const deduped = [];
+  for (const it of issues) {
+    const key = `${it.code || it.kind}|${it.text || ""}`;
+    if (seenIssue.has(key)) continue;
+    seenIssue.add(key);
+    deduped.push(it);
+  }
+
+  return { ok: deduped.filter(i => i.level === "error").length === 0, issues: deduped };
 }
 
 // ==================== 检查 7：线索计划对齐（确定性） ====================
