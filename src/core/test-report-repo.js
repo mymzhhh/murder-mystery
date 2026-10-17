@@ -7,6 +7,49 @@
 
 const { query } = require("./db");
 
+/**
+ * 同一个剧本只保留最新 N 条报告。
+ *
+ * 为什么需要：每开一次测试房就落一条报告，同一个剧本反复测（调参、改提示词、回归）
+ * 会把列表灌满 —— 用户原话是"同一个剧本的报告太多了"，实测一次会话内就堆了 22 条。
+ * 保留 3 条足够对比"最近几局"，更早的自动清掉。
+ */
+const KEEP_PER_SCRIPT = 3;
+
+/**
+ * 清掉同一剧本的旧报告，只留最新 KEEP_PER_SCRIPT 条。
+ *
+ * 两条边界：
+ *   1) script_id 为空时**不清理** —— 拿空串当"同一个剧本"会把所有没带标识的报告互相删掉；
+ *   2) 清理失败只告警，不影响"本次报告已入库"这个事实（存报告失败绝不能把测试流程搞挂）。
+ * @param {string} scriptId 剧本会话 id
+ * @returns {Promise<number>} 清掉的条数
+ */
+async function pruneOldReports(scriptId) {
+  const sid = String(scriptId || "").trim();
+  if (!sid) return 0;
+  try {
+    const res = await query(
+      `DELETE FROM test_reports
+        WHERE script_id = $1
+          AND id NOT IN (
+            SELECT id FROM test_reports
+             WHERE script_id = $1
+             ORDER BY created_at DESC, id DESC
+             LIMIT $2
+          )
+        RETURNING id`,
+      [sid, KEEP_PER_SCRIPT]
+    );
+    const n = (res.rows || []).length;
+    if (n) console.log(`[test-report] 同一剧本只保留最新 ${KEEP_PER_SCRIPT} 条，清掉 ${n} 条旧报告（script_id=${sid}）`);
+    return n;
+  } catch (e) {
+    console.warn("[test-report] 清理旧报告失败（本次报告已入库，不影响流程）:", e.message);
+    return 0;
+  }
+}
+
 /** 存一份报告；返回 id（PG 不可用时返回 null，不抛 —— 不能因为存报告失败把测试流程搞挂） */
 async function insertTestReport(report) {
   try {
@@ -29,7 +72,12 @@ async function insertTestReport(report) {
         JSON.stringify(r),
       ]
     );
-    return res.rows[0] ? res.rows[0].id : null;
+    if (res.rows[0]) {
+      // 先入库再清理：这样"这次刚落的这条"也在候选里，留下的才是真正最新的 N 条。
+      await pruneOldReports(r.scriptSessionId);
+      return res.rows[0].id;
+    }
+    return null;
   } catch (e) {
     console.warn("[test-report] 报告入库失败:", e.message);
     return null;
@@ -60,4 +108,4 @@ async function deleteTestReport(id) {
   return res.rows[0] ? res.rows[0].id : null;
 }
 
-module.exports = { insertTestReport, listTestReports, getTestReport, deleteTestReport };
+module.exports = { insertTestReport, listTestReports, getTestReport, deleteTestReport, pruneOldReports, KEEP_PER_SCRIPT };

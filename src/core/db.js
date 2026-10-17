@@ -108,6 +108,9 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_test_reports_created ON test_reports(created_at DESC);
+    -- 同一剧本只保留最新 N 条报告（清理逻辑见 core/test-report-repo.js 的 KEEP_PER_SCRIPT）：
+    -- 那条 DELETE 按 script_id 过滤、按 created_at 排序取前 N，没有复合索引就得全表扫。
+    CREATE INDEX IF NOT EXISTS idx_test_reports_script ON test_reports(script_id, created_at DESC);
     -- 剧本正文里引用的图片（!\[说明\](img:键名)）存 PG，不落 public/。
     -- 为什么：docker-compose 只给 redis / pg 挂了卷，app 的 public/ 没有卷 ——
     -- 图片写进容器文件系统，镜像一重建就没了；而 PG 是持久的。
