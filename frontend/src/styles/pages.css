@@ -1,0 +1,1155 @@
+/* =============================================================================
+   页面层：应用外壳 / 登录 / 大厅 / 对局 / 管理端
+   ============================================================================= */
+
+/* ===================== 应用外壳 ===================== */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: var(--s-4);
+  min-height: var(--header-h);
+  padding: 0 var(--s-6);
+  background: rgba(11, 13, 17, 0.9);
+  border-bottom: 1px solid var(--ink-600);
+  backdrop-filter: blur(14px) saturate(1.2);
+}
+/* 页眉底部一道金线：品牌感的来源，很克制 */
+.app-header::after {
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--brass-line) 12%, var(--brass-line) 88%, transparent);
+}
+.app-header h1 {
+  margin: 0;
+  font-size: var(--fs-lg);
+  letter-spacing: 0.2em;
+  color: var(--brass);
+  cursor: default;
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-3);
+  min-width: 0;
+}
+.app-header .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-serif);
+}
+/* 印章式品牌标记：纯 CSS，不引图片 */
+.app-header .brand::before {
+  content: "案";
+  display: grid;
+  place-items: center;
+  width: 26px; height: 26px;
+  border-radius: var(--r-xs);
+  background: var(--wax-deep);
+  border: 1px solid var(--wax-line);
+  color: #f0d9d9;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  letter-spacing: 0;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.app-header .user-info { font-size: var(--fs-sm); color: var(--text-dim); white-space: nowrap; }
+.app-header .header-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+}
+
+.main-content {
+  position: relative;
+  z-index: 1;
+  padding: var(--s-6);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  animation: fadeUp var(--dur-3) var(--ease-out);
+}
+
+/* 页面顶部标题区（管理端各页统一） */
+.page-head {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s-4);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-5);
+}
+.page-head h2 { margin: 0; font-size: var(--fs-xl); color: var(--text); }
+.page-head p { margin: 2px 0 0; font-size: var(--fs-sm); color: var(--text-muted); max-width: 62ch; }
+.page-head .page-head-actions { margin-left: auto; display: flex; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ===================== 导航页签 ===================== */
+.nav-tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.nav-tabs::-webkit-scrollbar { display: none; }
+.nav-tab {
+  position: relative;
+  padding: 9px 16px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-family: var(--font-ui);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  transition: color var(--dur-2) var(--ease-out), background var(--dur-2) var(--ease-out);
+}
+.nav-tab:hover:not(.active) { color: var(--text); background: var(--ink-800); }
+.nav-tab.active { color: var(--brass); background: var(--brass-tint); }
+.nav-tab.active::after {
+  content: "";
+  position: absolute;
+  left: 14px; right: 14px; bottom: 0;
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: var(--brass);
+}
+
+/* 兼容旧类 */
+.page { display: none; }
+.page.active { display: block; animation: fadeUp var(--dur-3) var(--ease-out); }
+
+/* ===================== 登录页 ===================== */
+.login-wrapper {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: var(--s-6);
+  overflow: hidden;
+}
+/* 背景就是那张雨夜书桌。左侧压一层暗幕，让人物/文案压在暗部，
+   右侧保留台灯与案卷的暖光 —— 而不是把整张图调亮再糊一层颜色。 */
+.login-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-image: url("../assets/art/login-desk.webp");
+  background-size: cover;
+  background-position: 50% 46%;
+  animation: fadeIn 1.4s var(--ease-out);
+}
+.login-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(100deg, rgba(7, 8, 11, 0.95) 0%, rgba(7, 8, 11, 0.82) 34%, rgba(7, 8, 11, 0.45) 62%, rgba(7, 8, 11, 0.7) 100%),
+    radial-gradient(120% 90% at 22% 50%, rgba(7, 8, 11, 0.6), transparent 70%);
+}
+
+.login-card {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 430px;
+  padding: var(--s-7);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--brass-line);
+  background: linear-gradient(180deg, rgba(21, 25, 34, 0.94), rgba(11, 13, 17, 0.96));
+  box-shadow: var(--shadow-3), 0 0 0 1px rgba(0, 0, 0, 0.5) inset;
+  backdrop-filter: blur(10px);
+  animation: fadeUp var(--dur-3) var(--ease-out);
+}
+.login-card .login-brand {
+  text-align: center;
+  margin-bottom: var(--s-6);
+}
+.login-card .login-seal {
+  display: grid;
+  place-items: center;
+  width: 52px; height: 52px;
+  margin: 0 auto var(--s-4);
+  border-radius: var(--r-sm);
+  background: var(--wax-deep);
+  border: 1px solid var(--wax-line);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4), 0 8px 24px -12px rgba(169, 44, 47, 0.9);
+  color: #f2dede;
+  font-family: var(--font-serif);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.login-card h1 {
+  font-size: var(--fs-3xl);
+  margin: 0 0 6px;
+  letter-spacing: 0.22em;
+  color: var(--brass);
+}
+.login-card .subtitle {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  letter-spacing: 0.34em;
+  margin: 0 0 var(--s-6);
+  font-family: var(--font-serif);
+}
+.login-card .tabs {
+  display: flex;
+  margin-bottom: var(--s-5);
+  padding: 3px;
+  gap: 3px;
+  border-radius: var(--r-sm);
+  background: var(--ink-900);
+  border: 1px solid var(--ink-600);
+}
+.login-card .tab {
+  flex: 1;
+  padding: 9px;
+  border: none;
+  border-radius: var(--r-xs);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  font-family: var(--font-ui);
+  letter-spacing: 0.16em;
+  transition: all var(--dur-2) var(--ease-out);
+}
+.login-card .tab:hover:not(.active) { color: var(--text); }
+.login-card .tab.active {
+  background: var(--brass-tint);
+  color: var(--brass-bright);
+  font-weight: 600;
+}
+.login-card .login-foot {
+  margin-top: var(--s-5);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--ink-650);
+  text-align: center;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  line-height: 1.8;
+}
+
+/* ===================== 英雄条（大厅 / 房间顶部） ===================== */
+.hero-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--ink-600);
+  margin-bottom: var(--s-5);
+  min-height: 196px;
+  display: flex;
+  align-items: flex-end;
+  padding: var(--s-6);
+  background-color: var(--ink-850);
+}
+/* 外滩夜景本身很暗（这是刻意的），所以这里只压左侧给文字留出对比，
+   右侧保留天际线与地平线上那条琥珀色晨光 —— 而不是整幅再压一层黑。 */
+.hero-band .hero-bg {
+  position: absolute;
+  inset: 0;
+  background-image: url("../assets/art/bund-night.webp");
+  background-size: cover;
+  /* 图片的亮部（地平线）在约 72% 高度，需要把它提进可视区，否则横幅是一片纯黑 */
+  background-position: 50% 76%;
+  filter: brightness(1.45) contrast(1.06) saturate(1.05);
+}
+.hero-band::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(7, 8, 11, 0.9) 0%, rgba(7, 8, 11, 0.55) 40%, rgba(7, 8, 11, 0.08) 100%),
+    linear-gradient(0deg, rgba(7, 8, 11, 0.86) 0%, rgba(7, 8, 11, 0.1) 55%, transparent 100%);
+}
+.hero-band .hero-inner { position: relative; z-index: 1; max-width: 70ch; }
+.hero-band h2 {
+  margin: 0 0 6px;
+  font-size: var(--fs-2xl);
+  letter-spacing: 0.16em;
+  color: var(--brass-bright);
+  text-shadow: 0 2px 20px rgba(0, 0, 0, 0.9);
+}
+.hero-band .hero-sub {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  font-family: var(--font-serif);
+  letter-spacing: 0.1em;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.9);
+}
+.hero-band .hero-actions { margin-top: var(--s-4); display: flex; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ===================== 阶段指示 ===================== */
+/* 改造前这段 CSS 定义了却从没被用上：玩家在对局中其实一直不知道自己处在哪个阶段，
+   只有页眉一行小字。现在把阶段做成一个"站点式"进度带，常驻在页眉下方。 */
+.phase-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 14px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  font-family: var(--font-serif);
+  border: 1px solid var(--ink-600);
+  background: var(--ink-800);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.phase-lobby         { background: var(--ink-750);   color: var(--text-dim);      border-color: var(--ink-550); }
+.phase-reading       { background: var(--brass-tint); color: var(--brass-bright); border-color: var(--brass-line); }
+.phase-investigation { background: var(--amber-tint); color: var(--amber-bright); border-color: var(--amber-line); }
+.phase-discussion    { background: var(--verd-tint);  color: var(--verd-bright);  border-color: var(--verd-line); }
+.phase-voting        { background: var(--wax-tint);   color: var(--wax-bright);   border-color: var(--wax-line); }
+.phase-intro         { background: var(--verd-tint);  color: var(--verd-bright);  border-color: var(--verd-line); }
+.phase-done          { background: var(--ink-750);    color: var(--text-dim);     border-color: var(--ink-550); }
+
+/* 阶段轨道：一排小圆点，标出"走到哪、还剩几步" */
+.phase-rail {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  flex-wrap: wrap;
+}
+.phase-rail .rail-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.phase-rail .rail-step.done { color: var(--text-dim); }
+.phase-rail .rail-step.current {
+  color: var(--brass-bright);
+  background: var(--brass-tint);
+  border-color: var(--brass-line);
+  font-weight: 600;
+}
+.phase-rail .rail-sep { color: var(--ink-550); font-size: var(--fs-xs); }
+
+/* ===================== 房号 ===================== */
+.room-code-lg {
+  display: inline-block;
+  padding: 8px 26px;
+  border-radius: var(--r);
+  background: var(--ink-1000);
+  color: var(--brass);
+  font-family: var(--font-mono);
+  font-size: var(--fs-3xl);
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  border: 1px solid var(--brass-line);
+  animation: glowPulse 3.4s ease-in-out infinite;
+}
+
+/* ===================== 纸面（剧本 / 线索 / 真相） =====================
+   内容用纸、操作用墨 —— 这是整套设计里最重要的一条分工。 */
+.paper-surface {
+  position: relative;
+  background-color: var(--paper);
+  background-image: url("../assets/art/paper.webp");
+  background-size: 420px 420px;
+  background-blend-mode: multiply;
+  color: var(--paper-ink);
+  border-radius: var(--r);
+  border: 1px solid rgba(90, 72, 40, 0.35);
+  box-shadow: var(--shadow-2), inset 0 0 60px rgba(139, 112, 62, 0.12);
+  padding: var(--s-6);
+  font-family: var(--font-serif);
+  line-height: 1.95;
+}
+.paper-surface h2, .paper-surface h3, .paper-surface h4 { color: #4a3a1e; }
+.paper-surface strong { color: #3a2c12; }
+.paper-surface a { color: #7a5320; }
+.paper-surface code {
+  background: rgba(90, 72, 40, 0.1);
+  border-color: rgba(90, 72, 40, 0.25);
+  color: #5a3f14;
+}
+.paper-surface hr { border-top-color: var(--paper-line); }
+.paper-surface .paper-dim { color: var(--paper-ink-dim); }
+
+/* ===================== 剧本阅读 ===================== */
+.script-reader {
+  /* 正文宽度收在 68ch 上下，行高 1.95：一屏能读完一段而不必左右摇头 */
+  max-width: 76ch;
+  margin: 0 auto;
+  font-size: var(--fs-base);
+}
+.script-reader .script-title {
+  font-size: var(--fs-xl);
+  color: #4a3a1e;
+  letter-spacing: 0.12em;
+  padding-bottom: var(--s-3);
+  margin-bottom: var(--s-4);
+  border-bottom: 2px solid var(--paper-line);
+  text-align: center;
+}
+.script-reader p { margin: 0 0 var(--s-3); }
+.script-reader .list-item { display: flex; gap: 8px; margin: 3px 0; }
+.script-reader .list-marker { color: #8a6a30; flex-shrink: 0; }
+
+.script-scroll {
+  height: 68vh;
+  overflow-y: auto;
+  padding: var(--s-6);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.28);
+  border: 1px solid var(--paper-line);
+  scrollbar-color: rgba(90, 72, 40, 0.45) transparent;
+}
+.script-scroll::-webkit-scrollbar-thumb { background: rgba(90, 72, 40, 0.4); background-clip: content-box; }
+.script-scroll::-webkit-scrollbar-thumb:hover { background: rgba(90, 72, 40, 0.6); background-clip: content-box; }
+
+/* 阅读进度条：纸面上的深色细线 */
+.read-progress {
+  height: 2px;
+  border-radius: var(--r-pill);
+  background: var(--paper-line);
+  overflow: hidden;
+  margin-top: var(--s-3);
+}
+.read-progress > i {
+  display: block;
+  height: 100%;
+  background: #8a6a30;
+  transition: width var(--dur-3) var(--ease-out);
+}
+
+/* ===================== 场景描述（房间大厅） =====================
+   改造前把整段场景描述直接铺在面板里，一屏 8 行密集小字，且没有行宽上限，
+   1680px 下每行 90+ 字，读起来非常累。这里限制行宽 + 首行缩进 + 可折叠。 */
+.scenario-text {
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+  line-height: 2;
+  color: var(--text-dim);
+  max-width: 68ch;
+  margin: 0 auto;
+}
+.scenario-text p { text-indent: 2em; margin-bottom: var(--s-3); }
+.scenario-text p:last-child { margin-bottom: 0; }
+.scenario-meta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--ink-650);
+}
+
+/* ===================== 玩家名册 ===================== */
+.roster { display: grid; gap: 6px; }
+.roster-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--ink-650);
+  background: var(--ink-750);
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur-2) var(--ease-out);
+}
+.roster-row:hover { border-color: var(--ink-550); }
+.roster-row .roster-seat {
+  width: 30px; height: 30px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-xs);
+  background: var(--ink-800);
+  border: 1px solid var(--ink-600);
+  font-family: var(--font-serif);
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.roster-row .roster-name { color: var(--text); font-weight: 600; }
+.roster-row .roster-char { color: var(--brass); font-family: var(--font-serif); }
+.roster-row .roster-role { margin-left: auto; flex-shrink: 0; }
+.roster-row.is-ai { border-style: dashed; }
+.roster-row.is-me { border-color: var(--brass-line); background: var(--brass-tint); }
+
+/* ===================== 角色选择 ===================== */
+.char-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: var(--s-2);
+}
+.char-pick {
+  position: relative;
+  padding: 12px 14px;
+  text-align: left;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--ink-600);
+  background: var(--ink-750);
+  color: var(--text);
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  transition: all var(--dur-2) var(--ease-out);
+}
+.char-pick:hover:not(:disabled) {
+  border-color: var(--brass);
+  background: var(--brass-tint);
+  color: var(--brass-bright);
+  transform: translateY(-2px);
+}
+.char-pick:disabled { opacity: 0.4; cursor: not-allowed; }
+.char-pick .char-sub {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-ui);
+  font-size: var(--fs-xs);
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+/* ===================== 对局：总布局 ===================== */
+.game-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: var(--s-4);
+  align-items: start;
+}
+.game-col-side { position: sticky; top: calc(var(--header-h) + var(--s-4)); }
+@media (max-width: 1100px) {
+  .game-shell { grid-template-columns: minmax(0, 1fr); }
+  .game-col-side { position: static; }
+}
+/* 兼容旧类名 */
+.game-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: var(--s-4); }
+.game-main { min-width: 0; }
+.game-sidebar { position: sticky; top: calc(var(--header-h) + var(--s-4)); align-self: start; }
+@media (max-width: 1100px) {
+  .game-layout { grid-template-columns: minmax(0, 1fr); }
+  .game-sidebar { position: static; }
+}
+
+/* ===================== 讨论区 ===================== */
+.discussion-log {
+  height: clamp(320px, 46vh, 520px);
+  overflow-y: auto;
+  padding: var(--s-3);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  border-radius: var(--r-sm);
+  background: var(--ink-900);
+  border: 1px solid var(--ink-650);
+}
+.discussion-log .chat-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--text-muted);
+  font-family: var(--font-serif);
+  letter-spacing: 0.2em;
+  font-size: var(--fs-sm);
+}
+.msg {
+  padding: 7px 11px;
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.035);
+  border-left: 2px solid var(--ink-550);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+  animation: slideUp var(--dur-2) var(--ease-out);
+  word-break: break-word;
+}
+.msg .msg-from {
+  color: var(--brass);
+  font-family: var(--font-serif);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin-right: 6px;
+}
+/* AI / NPC 的发言是"机器那一侧的证词"，用铜绿区分，而不是原来的紫色气泡 */
+.msg.is-ai { background: var(--verd-tint); border-left-color: var(--verd); }
+.msg.is-ai .msg-from { color: var(--verd-bright); }
+.msg.is-me { background: var(--brass-tint); border-left-color: var(--brass); }
+
+/* ===================== 线索（证物） ===================== */
+.evidence-panel { display: grid; gap: var(--s-2); }
+.clue-group {
+  border: 1px solid var(--ink-650);
+  border-radius: var(--r-sm);
+  background: var(--ink-750);
+  overflow: hidden;
+}
+.clue-group-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--brass);
+  transition: background var(--dur-2) var(--ease-out);
+}
+.clue-group-head:hover { background: rgba(201, 164, 95, 0.08); }
+.clue-group-head .clue-count { margin-left: auto; flex-shrink: 0; }
+.clue-group-body { padding: var(--s-2) var(--s-3) var(--s-3); }
+
+/* 单条线索：编号用等宽 + 左竖线，像证物标签 */
+.clue-item {
+  padding: 7px 0;
+  border-bottom: 1px dashed var(--ink-650);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+}
+.clue-item:last-child { border-bottom: none; }
+.clue-item .clue-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.clue-item .clue-id {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--brass);
+  letter-spacing: 0.08em;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  background: var(--brass-tint);
+  border: 1px solid var(--brass-line);
+}
+.clue-item .clue-body { color: var(--text); }
+
+/* ===================== 投票 ===================== */
+.vote-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: var(--s-3);
+}
+/* 指控卡：选中即"盖封蜡" */
+.vote-card {
+  position: relative;
+  padding: var(--s-5) var(--s-4);
+  text-align: center;
+  border-radius: var(--r);
+  border: 1px solid var(--ink-600);
+  background: linear-gradient(180deg, var(--ink-750), var(--ink-800));
+  color: var(--text);
+  cursor: pointer;
+  transition: all var(--dur-2) var(--ease-out);
+}
+.vote-card:hover:not(:disabled) {
+  border-color: var(--wax);
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px -16px rgba(169, 44, 47, 0.9);
+}
+.vote-card:disabled { opacity: 0.42; cursor: not-allowed; }
+.vote-card .vote-name {
+  /* 两个 span 默认是行内 —— 不改成块级，"指控为凶手"会和名字挤在同一行 */
+  display: block;
+  font-family: var(--font-serif);
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-indent: 0.16em;
+}
+.vote-card .vote-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.vote-card.voted {
+  border-color: var(--wax);
+  background: linear-gradient(180deg, rgba(169, 44, 47, 0.28), rgba(110, 26, 29, 0.16));
+  animation: pulse 2.4s ease-in-out infinite;
+}
+.vote-card.voted::after {
+  content: "已指控";
+  position: absolute;
+  top: 8px; right: 8px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--wax-bright);
+  border: 1px solid var(--wax-line);
+  border-radius: var(--r-xs);
+  padding: 0 5px;
+}
+
+/* ===================== 真相复盘（结案卷宗） ===================== */
+.verdict-band {
+  text-align: center;
+  padding: var(--s-6) var(--s-5);
+  border-radius: var(--r);
+  border: 1px solid var(--wax-line);
+  background: linear-gradient(180deg, rgba(169, 44, 47, 0.16), rgba(21, 25, 34, 0.5));
+  margin-bottom: var(--s-5);
+}
+.verdict-band .verdict-label {
+  font-family: var(--font-serif);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.5em;
+  color: var(--text-muted);
+  text-indent: 0.5em;
+}
+.verdict-band .verdict-name {
+  margin: var(--s-3) 0;
+  font-family: var(--font-serif);
+  font-size: var(--fs-4xl);
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  color: var(--wax-bright);
+  text-indent: 0.22em;
+  text-shadow: 0 0 40px rgba(169, 44, 47, 0.55);
+}
+.verdict-band .verdict-meta { font-size: var(--fs-sm); color: var(--text-dim); }
+
+/* 结算榜 */
+.score-row {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  border-bottom: 1px solid var(--ink-650);
+  font-size: var(--fs-sm);
+}
+.score-row:last-child { border-bottom: none; }
+.score-row .score-rank {
+  width: 22px;
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.score-row .score-name { min-width: 96px; font-weight: 600; }
+.score-row .score-detail { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--text-muted); }
+.score-row .score-total { font-family: var(--font-mono); font-weight: 700; color: var(--brass); }
+.score-row.is-winner { background: var(--brass-tint); }
+.score-row.is-winner .score-rank { color: var(--brass); }
+
+/* ===================== 便签面板 ===================== */
+.notes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: var(--s-3);
+}
+.note-card {
+  border: 1px solid var(--ink-650);
+  border-radius: var(--r-sm);
+  background: var(--ink-750);
+  padding: var(--s-3);
+}
+.note-card .note-head { display: flex; gap: 6px; margin-bottom: 6px; }
+.note-card textarea {
+  width: 100%;
+  resize: vertical;
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  font-family: var(--font-serif);
+}
+
+/* ===================== 管理端：流水线步骤 ===================== */
+.pipeline-steps {
+  display: flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r);
+  background: var(--ink-850);
+  border: 1px solid var(--ink-600);
+  margin-bottom: var(--s-4);
+  overflow-x: auto;
+}
+.pipe-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  transition: all var(--dur-2) var(--ease-out);
+}
+.pipe-step.active {
+  background: var(--brass-tint);
+  border-color: var(--brass-line);
+  color: var(--brass-bright);
+  font-weight: 600;
+}
+.pipe-step.done { color: var(--verd-bright); }
+.pipe-step.error { background: var(--wax-tint); border-color: var(--wax-line); color: var(--wax-bright); }
+
+.pipe-num {
+  display: inline-grid;
+  place-items: center;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  background: var(--ink-700);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.pipe-step.active .pipe-num { background: var(--brass); color: #241c0c; }
+.pipe-step.done .pipe-num { background: var(--verd); color: #06231e; }
+.pipe-step.error .pipe-num { background: var(--wax); color: #fff; }
+
+/* 步骤之间的连接线 */
+.pipe-arrow {
+  flex-shrink: 0;
+  width: 14px;
+  height: 1px;
+  background: var(--ink-600);
+  color: transparent;
+  font-size: 0;
+}
+.pipeline-buttons { display: flex; gap: var(--s-2); margin-top: var(--s-3); flex-wrap: wrap; }
+.pipeline-buttons .btn { width: auto; }
+
+/* ===================== 管理端：统计卡 ===================== */
+.stat-tile {
+  position: relative;
+  padding: var(--s-4) var(--s-5);
+  border-radius: var(--r);
+  border: 1px solid var(--ink-600);
+  background: linear-gradient(180deg, var(--ink-800), var(--ink-850));
+  overflow: hidden;
+}
+.stat-tile::after {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--brass);
+  opacity: 0.75;
+}
+.stat-tile .stat-value {
+  font-family: var(--font-serif);
+  font-size: var(--fs-2xl);
+  font-weight: 800;
+  color: var(--brass);
+  line-height: 1.15;
+}
+.stat-tile .stat-label {
+  margin-top: 2px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  letter-spacing: 0.12em;
+}
+
+/* 生成日志 */
+.log-view {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--s-3);
+  border-radius: var(--r-sm);
+  background: var(--ink-1000);
+  border: 1px solid var(--ink-650);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.85;
+}
+.log-view .log-line { padding: 1px 0; word-break: break-word; }
+
+/* ===================== 弹窗 ===================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-5);
+  background: rgba(4, 5, 8, 0.78);
+  backdrop-filter: blur(4px);
+  animation: fadeIn var(--dur-2) var(--ease-out);
+}
+.modal-card {
+  width: 100%;
+  max-width: 900px;
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--brass-line);
+  background: var(--ink-800);
+  box-shadow: var(--shadow-3);
+  animation: fadeInScale var(--dur-2) var(--ease-out);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--ink-650);
+  background: var(--ink-850);
+}
+.modal-head strong { color: var(--brass); font-family: var(--font-serif); letter-spacing: 0.1em; }
+.modal-body { padding: var(--s-4); overflow: auto; flex: 1; }
+.modal-body pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: var(--fs-sm);
+  line-height: 1.75;
+}
+
+/* ===================== 语音诊断面板 =====================
+   真机上"没声音"的原因很多（没授权 / 没收到远端音轨 / ICE 没连通 / 播放被拦），
+   这个面板把每一步的真实状态摊开。它是一块"仪表读数"，所以走等宽字体 + 深底，
+   状态点用设计令牌里的铜绿 / 赭黄，而不是改造前写死的 #4caf50 / #ffb300。 */
+.voice-diag {
+  max-width: 680px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--ink-650);
+  background: var(--ink-1000);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+}
+.voice-diag-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.voice-diag-mono { font-family: var(--font-mono); word-break: break-word; }
+.voice-diag-empty { margin-top: 4px; color: var(--text-muted); }
+.voice-peer { margin-top: 6px; }
+.voice-peer-dot.is-ok { color: var(--verd-bright); }
+.voice-peer-dot.is-warn { color: var(--amber-bright); }
+.voice-diag-sub { padding-left: 14px; color: var(--text-muted); }
+.voice-diag-sub.is-mono { font-family: var(--font-mono); word-break: break-all; }
+
+.voice-notice code { white-space: nowrap; }
+
+/* ===================== 大纲面板 ===================== */
+.outline-sec { margin-top: var(--s-5); }
+.outline-row {
+  padding: 4px 0;
+  font-size: var(--fs-sm);
+  line-height: 1.8;
+  border-bottom: 1px dashed var(--ink-650);
+}
+.outline-row:last-child { border-bottom: none; }
+/* 凶手的两条时间线必须一眼能分开：一条是事实（封蜡红），一条是编的（铜绿） */
+.timeline-card { border-left: 3px solid var(--ink-550); }
+.timeline-card.is-real { border-left-color: var(--wax); }
+.timeline-card.is-fake { border-left-color: var(--verd); }
+.timeline-card .timeline-label {
+  font-size: var(--fs-xs);
+  letter-spacing: 0.14em;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+.timeline-card.is-real .timeline-label { color: var(--wax-bright); }
+.timeline-card.is-fake .timeline-label { color: var(--verd-bright); }
+.timeline-card .timeline-body {
+  font-size: var(--fs-xs);
+  line-height: 1.85;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+
+/* ===================== 对局背景（ComfyUI 生成的暗场景） =====================
+   只放在对局视图（搜证 / 讨论 / 投票 / 复盘）。
+
+   设计取舍：这一页是高密度信息界面（发言流 + 线索列表 + 名册），
+   背景**不能**有可辨识的细节和对比度，否则正文可读性直接崩。
+   所以这张图本身就是按"九成画面是近黑阴影、中间留大片负空间"生成的，
+   叠上来之后再压一层强力暗幕，效果是"缝里透出来的氛围"，而不是一张壁纸。
+
+   z-index: 0 —— 低于 .main-content(1) 和 .app-header(100)，高于 body::before(-1)。
+   指针穿透，不影响任何交互。 */
+.game-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: url("../assets/art/game-hall.webp");
+  background-size: cover;
+  background-position: 50% 42%;
+  /* 生成出来的图本身就是"九成近黑"，直接用等于看不见。
+     这里只做一件事：把暗部拉起来，让墙面/地板变成可辨的暗灰。
+     用 brightness 而不是 contrast —— 画面近黑处本来就接近 0，乘一个系数后仍是 0（黑得下去），
+     而略高于 0 的墙体会被拉成可见的灰。contrast() 是绕 0.5 中灰转的，
+     对这么暗的图只会把暗部压得更死，方向相反。
+
+     数值是拿测量反推的：这张图在 1680 宽下，缝隙处的原始亮度约 0.012，
+     要提到 0.10 左右才"明显看得见"，所以系数取 5.2 上下。
+     压暗背景的活交给面板的 backdrop-filter（见下），这里只管让图可见。 */
+  filter: brightness(5.2) saturate(1.15);
+}
+.game-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  /* 只剩一层很轻的暗角。
+     ⚠ 这里踩过一个坑：原来叠了两层暗幕，透光率是相乘的（0.34×0.5≈0.17），
+     把 brightness 提上来的亮度又全吃回去了，实测缝隙仍是 0.012 = 没提亮。
+     现在只保留单层、且很轻，中段透光率约 0.82。 */
+  background:
+    radial-gradient(135% 105% at 50% 34%, rgba(7, 8, 11, 0.06) 0%, rgba(7, 8, 11, 0.22) 68%, rgba(7, 8, 11, 0.5) 100%),
+    linear-gradient(180deg, rgba(7, 8, 11, 0.22) 0%, rgba(7, 8, 11, 0.08) 45%, rgba(7, 8, 11, 0.3) 100%);
+}
+
+/* 对局页的墨阶改成半透明，让背景在面板底下也透得出来。
+   内层（卡片 / 讨论流 / 线索组）比面板更暗一点，保住"面板 > 卡片"的层级。
+   （已确认这几个令牌只被用作 background，不承载文字或描边颜色。） */
+.game-surface {
+  --ink-1000: rgba(7, 8, 11, 0.6);
+  --ink-900: rgba(11, 13, 17, 0.55);
+  --ink-850: rgba(16, 19, 26, 0.6);
+  --ink-800: rgba(21, 25, 34, 0.55);
+  --ink-750: rgba(27, 32, 43, 0.62);
+  --ink-700: rgba(35, 41, 54, 0.6);
+  --ink-650: rgba(43, 50, 64, 0.6);
+  --ink-600: rgba(52, 60, 76, 0.65);
+}
+
+/* 这里是整套做法的核心：面板用 backdrop-filter 里的 brightness() 把"背后的图"压暗。
+   于是同一张图出现两种待遇 —— 缝隙里是清晰的场景，面板底下是同一场景的暗化虚影。
+   blur 负责糊掉细节不让纹理和字形打架，brightness 负责拿回正文对比度，两者缺一不可。
+
+   0.42 / 0.4 这组值是按测量定的：面板背后实测 0.0079（对比度 12.2:1），
+   余量太大、图白白被压没了；放宽到 0.62 / 0.3 之后面板背后约 0.06，
+   对比度仍有 6~7:1，远高于 AA 的 4.5:1，但背景变得明确可见。
+
+   ⚠ 这里只写标准属性 backdrop-filter，**不要手写 -webkit- 前缀**。
+   构建用的 Lightning CSS 会把两者当同一个属性、以最后一条为准：
+   手写的前缀版放在标准属性之后，产物里标准属性就被丢掉了，只剩 -webkit-。
+   （实测过：产物变成 `.game-surface .panel{-webkit-backdrop-filter:...}`，
+   于是 getComputedStyle 读到的 backdropFilter 是 "none"，而面板看起来仍然"有半透明"——
+   那是 alpha 在起作用，模糊和压暗其实根本没生效。）
+   源码里其他几处（.app-header / .modal-overlay）都只写标准属性，构建会自动补前缀。 */
+.game-surface .panel {
+  background: rgba(21, 25, 34, 0.3);
+  backdrop-filter: blur(16px) brightness(0.62) saturate(1.1);
+}
+
+/* ===================== 我的剧本抽屉 =====================
+   对局期间随时可开的角色剧本。覆盖式而不是插进主列：
+   讨论是这一阶段的主场，把剧本插进去会把发言挤走；
+   而玩家的真实动作是"一边看别人说话、一边翻自己的本"。 */
+.script-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 299;
+  background: rgba(4, 5, 8, 0.55);
+  backdrop-filter: blur(2px);
+  animation: fadeIn var(--dur-2) var(--ease-out);
+}
+.script-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 300;
+  /* 640px 下正文约 35 个汉字一行，是中文比较舒服的行宽；
+     窄屏自动退到 94vw。 */
+  width: min(640px, 94vw);
+  display: flex;
+  flex-direction: column;
+  background: var(--ink-850);
+  border-left: 1px solid var(--brass-line);
+  box-shadow: var(--shadow-3);
+  animation: slideInRight var(--dur-2) var(--ease-out);
+}
+.script-drawer-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex-wrap: wrap;
+  padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--ink-650);
+  background: var(--ink-800);
+}
+.script-drawer-head strong { font-family: var(--font-serif); letter-spacing: 0.1em; color: var(--brass); }
+.script-jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: var(--s-2) var(--s-4);
+  border-bottom: 1px solid var(--ink-650);
+}
+.script-jump-label { font-size: var(--fs-xs); color: var(--text-muted); letter-spacing: 0.2em; }
+.script-drawer-body { flex: 1; overflow-y: auto; padding: var(--s-4); }
+.script-drawer-body section { scroll-margin-top: var(--s-4); }
+/* 抽屉里纸面的内边距收一点，宽度都留给正文 */
+.script-drawer .paper-surface { padding: var(--s-5) var(--s-4); box-shadow: none; }
+.script-drawer .script-reader { max-width: none; font-size: var(--fs-md); }
+
+/* ===================== 崩溃屏（顶层错误边界） =====================
+   React 渲染期抛异常时会卸载整棵树，不接住就是一块纯黑屏。
+   这一屏用封蜡红而不是黄铜：它是"出事了"，不是"品牌露出"。 */
+.crash {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: var(--s-6);
+}
+.crash-card {
+  width: 100%;
+  max-width: 720px;
+  padding: var(--s-6);
+  border-radius: var(--r-lg);
+  border: 1px solid var(--wax-line);
+  background: linear-gradient(180deg, rgba(169, 44, 47, 0.12), var(--ink-800));
+  box-shadow: var(--shadow-2);
+}
+.crash-card h2 { margin: 0 0 10px; color: var(--wax-bright); letter-spacing: 0.1em; }
+.crash-card p { color: var(--text-dim); font-size: var(--fs-sm); line-height: 1.9; margin: 0 0 var(--s-4); }
+.crash-msg {
+  background: var(--ink-1000);
+  border: 1px solid var(--ink-650);
+  border-radius: var(--r-sm);
+  padding: var(--s-3);
+  margin: 0 0 var(--s-4);
+  font-size: var(--fs-xs);
+  line-height: 1.75;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-x: auto;
+  max-height: 40vh;
+}
+
+/* ===================== 响应式 ===================== */
+@media (max-width: 900px) {
+  .main-content { padding: var(--s-4); }
+  .app-header { padding: 0 var(--s-4); min-height: 54px; }
+  .app-header h1 { font-size: var(--fs-base); letter-spacing: 0.1em; }
+  .hero-band { min-height: 132px; padding: var(--s-4); }
+  .hero-band h2 { font-size: var(--fs-xl); }
+  .login-card { padding: var(--s-5) var(--s-4); }
+  .paper-surface { padding: var(--s-4); }
+  .script-scroll { padding: var(--s-4); height: 62vh; }
+  .room-code-lg { font-size: var(--fs-xl); padding: 6px 16px; letter-spacing: 0.2em; }
+}

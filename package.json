@@ -2,11 +2,11 @@
   "name": "text-gen-agent",
   "version": "1.0.0",
   "description": "基于 DeepSeek API 的文本生成 Agent",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node --watch server.js",
-    "test": "node --test \"tests/*.test.js\" \"tests/*.test.mjs\"",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test --test-force-exit \"tests/unit/*.test.js\" \"tests/unit/*.test.mjs\"",
     "dev:web": "cd frontend && npx vite",
     "build:web": "cd frontend && npx vite build",
     "test:voice": "node tests/integration/voice-signaling.js",
@@ -17,7 +17,11 @@
     "audit:orphans": "node scripts/audit-orphans.js",
     "test:concurrency": "node tests/integration/concurrency.js",
     "test:ready": "node tests/integration/ready-advance.js",
-    "test:security": "node tests/integration/security-isolation.js"
+    "test:security": "node tests/integration/security-isolation.js",
+    "test:e2e": "node tests/manual/e2e-full-test.js",
+    "test:accept": "node tests/e2e/acceptance.mjs",
+    "test:race": "node tests/manual/race-test.js",
+    "test:stress": "node tests/manual/stress-test.js"
   },
   "dependencies": {
     "dotenv": "^16.4.0",

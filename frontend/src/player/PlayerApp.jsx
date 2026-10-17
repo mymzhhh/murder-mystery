@@ -117,96 +117,148 @@ export default function PlayerApp() {
   }
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+    <div>
       <header className="app-header">
-        <h1>剧本杀玩家端</h1>
-        {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
-        <span className="user-info" style={{ marginLeft: "auto", padding: "0 10px" }}>{user.username || ""}</span>
-        <button className="btn btn-outline btn-sm" onClick={logout}>退出</button>
+        <h1><span className="brand">剧本杀 · 玩家端</span></h1>
+        {!online && <span className="tag tag-danger">连接已断开，正在重连…</span>}
+        <div className="header-right">
+          <span className="user-info">{user.username || ""}</span>
+          <button className="btn btn-outline btn-sm" onClick={logout}>退出</button>
+        </div>
       </header>
 
-      <div className="main-content" style={{ padding: 20, maxWidth: 1100, margin: "0 auto" }}>
+      <div className="main-content">
         {notice && (
-          <div className="alert alert-danger" style={{ marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <span>{notice}</span>
+          <div className="alert alert-danger alert-row" style={{ marginBottom: 14 }}>
+            <span className="alert-body">{notice}</span>
             <button className="btn btn-outline btn-xs" onClick={() => setNotice("")}>关闭</button>
           </div>
         )}
         {lobbyError && (
-          <div className="alert alert-danger" style={{ marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-            <span>{lobbyError}</span>
+          <div className="alert alert-danger alert-row" style={{ marginBottom: 14 }}>
+            <span className="alert-body">{lobbyError}</span>
             <button className="btn btn-outline btn-xs" onClick={loadLobby}>重试</button>
           </div>
         )}
 
-        {/* 加入房间 */}
-        <div className="panel" style={{ padding: 16, marginBottom: 14 }}>
+        {/* 首屏横幅：先说清"这是什么"，再给入口。
+            改造前这里直接就是一排表单控件，没有任何产品说明。 */}
+        <div className="hero-band">
+          <div className="hero-bg" aria-hidden="true" />
+          <div className="hero-inner">
+            <h2>输入一句话，开一局谋杀悬疑</h2>
+            <p className="hero-sub">
+              AI 负责写本、切线索、扮演 NPC 与补位玩家，你只需要坐下来推理。
+            </p>
+          </div>
+        </div>
+
+        {/* 加入房间 —— 最高频的动作，所以放在最上面且只有一个输入框 */}
+        <div className="panel">
+          <div className="panel-head">
+            <strong>加入房间</strong>
+            <span className="text-xs text-dim">拿到房号就能进，无需等房主操作</span>
+          </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
             <input
-              className="form-input"
-              style={{ maxWidth: 200 }}
-              placeholder="房间码（如 T98YJB）"
+              className="form-input form-input-code"
+              style={{ maxWidth: 220 }}
+              placeholder="T98YJB"
+              aria-label="房间码"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
               onKeyDown={(e) => { if (e.key === "Enter") joinRoom(joinCode); }}
             />
-            <button className="btn btn-primary" onClick={() => joinRoom(joinCode)}>加入房间</button>
-            <button className="btn btn-outline" onClick={loadLobby}>刷新列表</button>
+            <button className="btn btn-primary btn-auto" onClick={() => joinRoom(joinCode)}>加入房间</button>
+            <button className="btn btn-outline btn-auto" onClick={loadLobby}>刷新列表</button>
             <span className="text-xs text-dim">想自己开局？在下方「可选剧本」里点「创建房间」</span>
           </div>
         </div>
 
-        {/* 剧本列表 */}
-        <div className="panel" style={{ padding: 16, marginBottom: 14 }}>
-          <strong style={{ color: "var(--gold)" }}>可选剧本</strong>
-          <div style={{ marginTop: 10 }}>
-            {scripts.length === 0 && <div className="state-empty">暂无可用剧本，请先在管理端生成并切分剧本</div>}
-            {scripts.map((s) => {
-              const sid = s.sessionId || s.id;
-              return (
-                <div key={sid} className="card card-static" style={{ marginBottom: 8, padding: 10 }}>
+        {/* 用 .auto-cols-wide 而不是内联 repeat(auto-fit, minmax(400px,1fr))：
+            内联那个下限写死 400px，在 390px 宽的手机上会把整页撑出横向滚动条。
+            类里的写法是 minmax(min(400px, 100%), 1fr)，窄屏时轨道自动缩到 100%。 */}
+        <div className="auto-cols-wide">
+          {/* 剧本列表 */}
+          <div className="panel">
+            <div className="panel-head">
+              <strong>可选剧本</strong>
+              {scripts.length > 0 && <span className="tag">{scripts.length} 个</span>}
+            </div>
+            <div className="stagger" style={{ display: "grid", gap: 8 }}>
+              {scripts.length === 0 && (
+                <div className="state-empty">
+                  暂无可用剧本
+                  <div className="text-xs" style={{ marginTop: 6, letterSpacing: 0 }}>
+                    需要先在管理端生成并切分剧本
+                  </div>
+                </div>
+              )}
+              {scripts.map((s) => {
+                const sid = s.sessionId || s.id;
+                return (
+                  <div key={sid} className="card card-static" style={{ padding: 14 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, letterSpacing: ".06em" }}>
+                          {s.title || s.topic || "未命名"}
+                        </div>
+                        <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                          {s.characterCount ? <span className="tag">{s.characterCount} 名玩家角色</span> : null}
+                          {s.npcCount ? <span className="tag tag-npc">{s.npcCount} NPC</span> : null}
+                          {/* era/location 后端存的是整段场景描述，这里只截取短预览，完整内容放 title 提示 */}
+                          {s.era ? (
+                            <span className="text-xs text-dim truncate" style={{ maxWidth: 260 }} title={s.era}>
+                              {String(s.era).slice(0, 28)}{String(s.era).length > 28 ? "…" : ""}
+                            </span>
+                          ) : null}
+                        </div>
+                      </div>
+                      <button className="btn btn-success btn-sm" disabled={busy} onClick={() => createRoom(s)}>创建房间</button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 活跃房间 */}
+          <div className="panel">
+            <div className="panel-head">
+              <strong>活跃房间</strong>
+              {rooms.length > 0 && <span className="tag tag-success">{rooms.length} 个可加入</span>}
+            </div>
+            <div className="stagger" style={{ display: "grid", gap: 8 }}>
+              {rooms.length === 0 && <div className="state-empty">暂无活跃房间</div>}
+              {rooms.map((r) => (
+                <div key={r.roomCode} className="card card-static" style={{ padding: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                     <div style={{ minWidth: 0 }}>
-                      <strong>{s.title || s.topic || "未命名"}</strong>
-                      {s.characterCount ? <span className="tag" style={{ marginLeft: 8 }}>{s.characterCount}名玩家角色{s.npcCount ? ` + ${s.npcCount} NPC` : ""}</span> : null}
-                      {/* era/location 后端存的是整段场景描述，这里只截取短预览，完整内容放 title 提示 */}
-                      {s.era ? (
-                        <span className="text-xs text-dim" style={{ marginLeft: 8 }} title={s.era}>
-                          {String(s.era).slice(0, 28)}{String(s.era).length > 28 ? "…" : ""}
-                        </span>
-                      ) : null}
+                      {/* 后端 /api/player/rooms 返回的是 title，不是 scriptTitle */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontFamily: "var(--font-serif)", fontSize: 16, letterSpacing: ".06em" }}>{r.title || "未命名"}</span>
+                        <span className="tag" style={{ fontFamily: "var(--font-mono)", letterSpacing: ".14em" }}>{r.roomCode}</span>
+                      </div>
+                      <div className="text-xs text-dim" style={{ marginTop: 4 }}>
+                        {r.playerCount || 0}/{r.maxPlayers || "?"} 人 ｜ {phaseText(r.phase || r.status)}
+                        {Array.isArray(r.availableCharacters) ? ` ｜ 余 ${r.availableCharacters.length} 个角色` : ""}
+                      </div>
                     </div>
-                    <button className="btn btn-success btn-sm" disabled={busy} onClick={() => createRoom(s)}>创建房间</button>
+                    <button className="btn btn-success btn-sm" onClick={() => joinRoom(r.roomCode)}>加入</button>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* 活跃房间 */}
-        <div className="panel" style={{ padding: 16 }}>
-          <strong style={{ color: "var(--gold)" }}>活跃房间</strong>
-          <div style={{ marginTop: 10 }}>
-            {rooms.length === 0 && <div className="state-empty">暂无活跃房间</div>}
-            {rooms.map((r) => (
-              <div key={r.roomCode} className="card card-static" style={{ marginBottom: 8, padding: 10 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                  <div>
-                    {/* 后端 /api/player/rooms 返回的是 title，不是 scriptTitle */}
-                    <strong>{r.title || "未命名"}</strong> <span className="tag">{r.roomCode}</span>
-                    <div className="text-xs text-dim">
-                      {r.playerCount || 0}/{r.maxPlayers || "?"}人 | {r.phase || r.status}
-                      {Array.isArray(r.availableCharacters) ? ` | 余 ${r.availableCharacters.length} 个角色` : ""}
-                    </div>
-                  </div>
-                  <button className="btn btn-success btn-sm" onClick={() => joinRoom(r.roomCode)}>加入</button>
-                </div>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+const PHASE_TEXT = {
+  lobby: "等待开局", reading: "阅读剧本", intro: "自我介绍",
+  round1: "第一轮搜证", round2: "第二轮搜证", voting: "投票指控",
+  truth_reveal: "真相复盘", finished: "已结束",
+};
+function phaseText(p) { return PHASE_TEXT[p] || p || ""; }

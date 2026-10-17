@@ -4,7 +4,7 @@
 /**
  * 读取 SSE 流并分发事件
  * @param {Response} res - fetch 返回的响应
- * @param {object} handlers - { onProgress(stage,msg), onPhase(phase,msg), onOutline(data), onComplete(data), onError(msg), onRawEvent(event,data) }
+ * @param {object} handlers - { onProgress(stage,msg), onPhase(phase,msg), onOutline(data), onTrick(data), onComplete(data), onError(msg), onRawEvent(event,data) }
  * @param {AbortSignal} [signal]
  */
 export async function readSSE(res, handlers = {}, signal) {
@@ -19,6 +19,7 @@ export async function readSSE(res, handlers = {}, signal) {
     if (eventType === "progress" && handlers.onProgress) handlers.onProgress(d.stage, d.message);
     else if (eventType === "phase" && handlers.onPhase) handlers.onPhase(d.phase, d.message, d);
     else if (eventType === "outline" && handlers.onOutline) handlers.onOutline(d);
+    else if (eventType === "trick" && handlers.onTrick) handlers.onTrick(d);
     else if (eventType === "complete" && handlers.onComplete) handlers.onComplete(d);
     else if (eventType === "error" && handlers.onError) handlers.onError(d && d.message ? d.message : "未知错误");
     if (handlers.onRawEvent) handlers.onRawEvent(eventType, d);

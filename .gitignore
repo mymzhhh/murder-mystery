@@ -3,18 +3,20 @@ data/
 node_modules
 frontend/node_modules
 frontend/dist
-淇敼璁板綍.md
-server.log
+
+# 杩愯鏃舵棩蹇椾笌鍘嬫祴/鍥炲綊浜х墿
 *.log
+_archive/
+
+# 鎵嬪伐/涓存椂鑴氭湰锛堟湰鍦颁繚鐣欙紝涓嶅叆搴擄級
+tests/manual/
+
+# 鏈畾绋跨殑璁捐鑽夌ǹ
+docs/浼樺寲鏂规.md
+docs/淇敼鏂规.md
+docs/淇敼璁板綍.md
+
 .DS_Store
-stress-report.txt
-race-report.txt
-e2e-report.txt
-full-test-report.txt
-memory-report.txt
-resilience-report.txt
-stress-test.js
-race-test.js
-e2e-full-test.js
-浼樺寲鏂规.md
-淇敼鏂规.md
+
+# 本地调试/验证产物（截图、数据库备份、一次性脚本），不入库
+_verify/

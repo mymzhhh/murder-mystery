@@ -69,7 +69,7 @@ const connectAndJoin = (code, token) => new Promise((resolve) => {
   const scripts = await req("GET", "/api/player/scripts", null, token);
   const sid = scripts.body.scripts[0].sessionId;
   const redis = new Redis(REDIS_URL);
-  const { MAX_LIFETIME_MS } = require("../../modules/room-lifecycle");
+  const { MAX_LIFETIME_MS } = require("../../src/game/room-lifecycle");
 
   console.log("【1】刚创建的房间可以正常进入");
   const room = await req("POST", "/api/player/rooms", { scriptSessionId: sid, maxPlayers: 4 }, token);
@@ -90,7 +90,7 @@ const connectAndJoin = (code, token) => new Promise((resolve) => {
   check("列表里没有这个过期房间", !(listed.body.rooms || []).some(r => r.roomCode === code));
 
   console.log("\n【4】扫描器能回收它");
-  const { sweepOnce } = require("../../modules/room-lifecycle");
+  const { sweepOnce } = require("../../src/game/room-lifecycle");
   const s = await sweepOnce();
   check("扫描器报告回收了过期房间", s.expired >= 1, `expired=${s.expired} freedKeys=${s.freedKeys}`);
   const stillThere = await redis.exists(`game:${code}`);
@@ -129,7 +129,7 @@ const connectAndJoin = (code, token) => new Promise((resolve) => {
   // 结果是 game:{code} 没了、game:{code}:chat 留下（每次跑回归测试都会漏一个 KHUMKA 这种）。
   // 现在写入方会在写完后复查房间主键，发现房间没了就把自己刚写的键撤掉。
   {
-    const gm = require("../../modules/game-manager");
+    const gm = require("../../src/game/game-manager");
     const code4 = "ZW" + Math.random().toString(36).slice(2, 6).toUpperCase();
     await redis.del(`game:${code4}`);
     await gm.addChatMessage(code4, "sys", "系统", "系统", "房间已经没了的消息", "lobby");

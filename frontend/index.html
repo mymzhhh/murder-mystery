@@ -4,6 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>剧本杀平台</title>
+  <meta name="description" content="AI 驱动的剧本杀生成与多人实时对局平台：一句话需求 → 剧本 → 线索 → 对局 → 复盘。" />
+  <meta name="theme-color" content="#0b0d11" />
+  <!--
+    图标内联成 data URI，不额外发请求。
+    之前没有任何 favicon，浏览器每次加载都会去要 /favicon.ico 拿一个 404 ——
+    服务端只从构建产物里托管 /assets，public/ 不在其中，所以放文件反而会继续 404。
+    服务端 CSP 是 img-src 'self' data:，data URI 允许。
+    图形沿用界面里的"封蜡印章"：墨底 + 封蜡红方块 + 案。
+  -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0d11'/%3E%3Crect x='5' y='5' width='22' height='22' rx='4' fill='%236e1a1d' stroke='%23a92c2f' stroke-width='1.5'/%3E%3Ctext x='16' y='22.5' font-size='15' font-weight='700' text-anchor='middle' fill='%23f2dede' font-family='Songti SC,SimSun,serif'%3E%E6%A1%88%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
   <div id="root"></div>

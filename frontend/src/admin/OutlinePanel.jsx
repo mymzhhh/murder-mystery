@@ -15,106 +15,123 @@ export default function OutlinePanel({ outline: o }) {
   }));
 
   return (
-    <div className="panel" style={{ marginTop: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h3 style={{ color: "var(--gold)", margin: 0 }}>🎭 剧本大纲</h3>
-        <span className="tag">{o.isPVE ? "PVE" : "PVP"} · {o.playerCount || "?"}玩家 + {(o.npcCount || 0)}NPC</span>
+    <div className="panel">
+      <div className="panel-head">
+        <strong>🎭 剧本大纲</strong>
+        <span className="tag tag-admin">{o.isPVE ? "PVE" : "PVP"}</span>
+        <span className="tag">{o.playerCount || "?"} 玩家</span>
+        <span className="tag tag-npc">{o.npcCount || 0} NPC</span>
       </div>
 
       {/* 标题 + 核心诡计 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 10, marginTop: 10 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12 }}>
         <div className="card card-static">
-          <div className="text-xs text-dim">剧本名</div>
-          <strong style={{ fontSize: 18 }}>{o.title || "未命名"}</strong>
-          <div className="text-xs mt-sm">{o.storyBackground || ""}</div>
+          <div className="text-xs text-muted">剧本名</div>
+          <div style={{ fontFamily: "var(--font-serif)", fontSize: 18, letterSpacing: ".06em", margin: "2px 0 8px" }}>
+            {o.title || "未命名"}
+          </div>
+          <div className="text-xs text-dim" style={{ lineHeight: 1.8 }}>{o.storyBackground || ""}</div>
         </div>
         <div className="card card-static">
-          <div className="text-xs text-dim">核心诡计</div>
-          <strong style={{ color: "var(--blood-light)" }}>{o.coreTrick || ""}</strong>
-          <div className="text-xs mt-sm">{ts.trick ? ts.trick + "·" : ""}{ts.type || ""}{ts.mechanism ? "｜" + ts.mechanism : ""}</div>
+          <div className="text-xs text-muted">核心诡计</div>
+          {/* 诡计是这份剧本最关键的一句话，给封蜡红 */}
+          <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, color: "var(--wax-bright)", margin: "2px 0 8px", letterSpacing: ".04em" }}>
+            {o.coreTrick || "—"}
+          </div>
+          <div className="text-xs text-dim">
+            {ts.trick ? ts.trick + "·" : ""}{ts.type || ""}{ts.mechanism ? "｜" + ts.mechanism : ""}
+          </div>
         </div>
       </div>
 
       {/* 死者 + 凶手 */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 10, marginTop: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 12, marginTop: 12 }}>
         <div className="card card-static">
-          <div className="text-xs text-dim">死者</div>
-          <strong>{v.name || "?"}</strong>
-          <div className="text-xs mt-sm">{[v.identity, v.causeOfDeath, v.deathPlace].filter(Boolean).join(" · ")}</div>
+          <div className="text-xs text-muted">死者</div>
+          <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, margin: "2px 0 6px" }}>{v.name || "?"}</div>
+          <div className="text-xs text-dim">{[v.identity, v.causeOfDeath, v.deathPlace].filter(Boolean).join(" · ")}</div>
         </div>
         <div className="card card-static">
-          <div className="text-xs text-dim">凶手</div>
-          <strong style={{ color: "var(--danger)" }}>{m.name || "?"}</strong>
-          <div className="text-xs mt-sm">动机：{m.motive || ""}</div>
+          <div className="text-xs text-muted">凶手</div>
+          <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, color: "var(--wax-bright)", margin: "2px 0 6px" }}>
+            {m.name || "?"}
+          </div>
+          <div className="text-xs text-dim" style={{ lineHeight: 1.8 }}>动机：{m.motive || "—"}</div>
         </div>
       </div>
 
       {/* 人物卡 */}
       {chars.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div className="text-xs text-dim mb-sm">人物</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(180px,1fr))", gap: 8 }}>
+        <section className="outline-sec">
+          <div className="kicker" style={{ marginBottom: 10 }}><span style={{ flex: "0 0 auto" }}>人物</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(184px,1fr))", gap: 8 }}>
             {chars.map((c) => (
-              <div key={c.name} className="card card-static" style={{ padding: "8px 10px" }}>
-                <strong>{c.name}</strong> <span className={`tag ${c.clazz}`}>{c.tag}</span>
-                <div className="text-xs text-dim mt-sm">{c.meta}</div>
+              <div key={c.name} className="card card-static" style={{ padding: "10px 12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                  <strong style={{ fontFamily: "var(--font-serif)", letterSpacing: ".06em" }}>{c.name}</strong>
+                  <span className={`tag ${c.clazz}`}>{c.tag}</span>
+                </div>
+                <div className="text-xs text-muted mt-sm" style={{ lineHeight: 1.7 }}>{c.meta}</div>
               </div>
             ))}
           </div>
-        </div>
+        </section>
       )}
 
       {/* 关系网 */}
       {o.relations && o.relations.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div className="text-xs text-dim mb-sm">人物关系网</div>
+        <section className="outline-sec">
+          <div className="kicker" style={{ marginBottom: 8 }}><span style={{ flex: "0 0 auto" }}>人物关系网</span></div>
           {(o.relations || []).map((r, i) => (
-            <div key={i} style={{ fontSize: 12, padding: "3px 0", borderBottom: "1px solid var(--border)" }}>
-              {r.a} ↔ {r.b}：<span className="text-dim">{r.link || ""}</span> <span style={{ color: "var(--warning)" }}>{r.tension || ""}</span>
+            <div key={i} className="outline-row">
+              <strong>{r.a}</strong> <span className="text-muted">↔</span> <strong>{r.b}</strong>
+              <span className="text-dim">：{r.link || ""}</span>
+              {r.tension ? <span className="tag tag-warning" style={{ marginLeft: 8 }}>{r.tension}</span> : null}
             </div>
           ))}
-        </div>
+        </section>
       )}
 
       {/* 凶手双时间线 */}
       {m.realLine && m.fakeLine && (
-        <div style={{ marginTop: 10 }}>
-          <div className="text-xs text-dim mb-sm">凶手双时间线</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 8 }}>
-            <div className="card card-static" style={{ borderLeft: "3px solid var(--danger)" }}>
-              <div className="text-xs" style={{ color: "var(--danger)" }}>真实时间线</div>
-              <div style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{m.realLine}</div>
+        <section className="outline-sec">
+          <div className="kicker" style={{ marginBottom: 10 }}><span style={{ flex: "0 0 auto" }}>凶手双时间线</span></div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 10 }}>
+            <div className="card card-static timeline-card is-real">
+              <div className="timeline-label">真实时间线</div>
+              <div className="timeline-body">{m.realLine}</div>
             </div>
-            <div className="card card-static" style={{ borderLeft: "3px solid var(--mystic-light)" }}>
-              <div className="text-xs" style={{ color: "var(--mystic-light)" }}>对外宣称</div>
-              <div style={{ fontSize: 12, whiteSpace: "pre-wrap" }}>{m.fakeLine}</div>
+            <div className="card card-static timeline-card is-fake">
+              <div className="timeline-label">对外宣称</div>
+              <div className="timeline-body">{m.fakeLine}</div>
             </div>
           </div>
-        </div>
+        </section>
       )}
 
       {/* 时间线骨架 */}
       {o.timeline && o.timeline.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div className="text-xs text-dim mb-sm">时间线骨架</div>
+        <section className="outline-sec">
+          <div className="kicker" style={{ marginBottom: 8 }}><span style={{ flex: "0 0 auto" }}>时间线骨架</span></div>
           {(o.timeline || []).map((t, i) => (
-            <div key={i} style={{ fontSize: 12, padding: "2px 0" }}>
-              <strong style={{ color: "var(--gold)" }}>{t.time}</strong> {t.desc}
+            <div key={i} className="outline-row">
+              <strong style={{ color: "var(--brass)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{t.time}</strong>
+              <span style={{ marginLeft: 8 }}>{t.desc}</span>
             </div>
           ))}
-        </div>
+        </section>
       )}
 
       {/* 布局 */}
       {o.layout && o.layout.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <div className="text-xs text-dim mb-sm">场景布局</div>
+        <section className="outline-sec">
+          <div className="kicker" style={{ marginBottom: 10 }}><span style={{ flex: "0 0 auto" }}>场景布局</span></div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
             {(o.layout || []).map((p, i) => (
-              <span key={i} className="tag" style={{ padding: "4px 10px" }}>{p}</span>
+              <span key={i} className="tag" style={{ padding: "3px 10px", fontFamily: "var(--font-serif)" }}>{p}</span>
             ))}
           </div>
-        </div>
+        </section>
       )}
     </div>
   );

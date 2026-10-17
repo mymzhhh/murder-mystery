@@ -106,75 +106,104 @@ export default function ModelsPage() {
   }
 
   return (
-    <div style={{ maxWidth: 1100, margin: "0 auto" }}>
-      <div className="panel" style={{ padding: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-          <strong style={{ color: "var(--gold)" }}>模型管理</strong>
+    <div>
+      <div className="page-head">
+        <div>
+          <h2>模型管理</h2>
+          <p>生成通道与推理通道可分别指定生效模型，切换即时生效、无需重启。留空 API Key 则回落到环境变量。</p>
+        </div>
+        <div className="page-head-actions">
           <button className="btn btn-outline btn-sm" onClick={load}>↻ 刷新</button>
         </div>
-        <p className="text-sm text-dim" style={{ marginTop: 0 }}>
-          配置剧本生成使用的大模型。生成通道与推理通道可分别选择生效模型，切换即时生效，无需重启。
-        </p>
+      </div>
 
-        {CHANNELS.map((ch) => {
-          const models = (data && data[ch.key]) || [];
-          return (
-            <div key={ch.key} className="card card-static" style={{ marginBottom: 12, padding: 14 }}>
-              <h4 style={{ margin: "0 0 10px", color: "var(--gold)" }}>{ch.label} <span className="text-xs text-dim">{ch.desc}</span></h4>
+      {CHANNELS.map((ch) => {
+        const models = (data && data[ch.key]) || [];
+        return (
+          <div key={ch.key} className="panel">
+            <div className="panel-head">
+              <strong>{ch.label}</strong>
+              <span className="text-xs text-dim">{ch.desc}</span>
+              {models.some((m) => m.active) && <span className="tag tag-success" style={{ marginLeft: 4 }}>已生效</span>}
+            </div>
 
-              {models.length === 0 && <p className="text-xs text-dim">（未配置模型，使用环境变量默认值）</p>}
-              {models.map((m) => (
-                <div key={m.name} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid var(--border)", gap: 8 }}>
-                  <div>
-                    <span style={{ fontWeight: 600 }}>
-                      {m.name}
-                    </span>{" "}
-                    {m.active && <span className="tag tag-success">当前生效</span>}
-                    <div className="text-xs text-dim">
-                      模型: {m.model || ""}{m.baseUrl ? " | " + m.baseUrl : ""}
-                      {m.apiKey ? " | key: " + m.apiKey : " | key: (环境)"}
-                      {m.source === "env" ? " | 来源: 环境变量" : " | 来源: 手动添加"}
-                    </div>
-                    {m.extraHeaders && Object.keys(m.extraHeaders).length > 0 && (
-                      <div className="text-xs text-dim">
-                        额外请求头: {Object.entries(m.extraHeaders).map(([k, v]) => `${k}=${v}`).join(", ")}
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-                    {!m.active && <button className="btn btn-outline btn-xs" onClick={() => setActive(ch.key, m.name)}>设为生效</button>}
-                    {m.source !== "env" && <button className="btn btn-outline btn-xs" onClick={() => delModel(ch.key, m.name)}>删除</button>}
-                  </div>
-                </div>
-              ))}
+            {models.length === 0 && (
+              <div className="state-empty">未配置模型，当前使用环境变量默认值</div>
+            )}
 
-              {testResult[ch.key] && (
-                <div className="alert alert-success" style={{ marginTop: 10 }}>{testResult[ch.key]}</div>
-              )}
+            {models.length > 0 && (
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>模型 / 地址</th>
+                    <th style={{ width: 150 }}>来源</th>
+                    <th style={{ width: 170 }}>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {models.map((m) => (
+                    <tr key={m.name}>
+                      <td>
+                        <span style={{ fontWeight: 600 }}>{m.name}</span>
+                        {m.active && <span className="tag tag-success" style={{ marginLeft: 8 }}>当前生效</span>}
+                      </td>
+                      <td>
+                        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, wordBreak: "break-all" }}>{m.model || "—"}</div>
+                        <div className="text-xs text-muted" style={{ wordBreak: "break-all" }}>
+                          {m.baseUrl || "默认地址"} ｜ key：{m.apiKey || "（环境变量）"}
+                        </div>
+                        {m.extraHeaders && Object.keys(m.extraHeaders).length > 0 && (
+                          <div className="text-xs text-muted">
+                            额外请求头：{Object.entries(m.extraHeaders).map(([k, v]) => `${k}=${v}`).join(", ")}
+                          </div>
+                        )}
+                      </td>
+                      <td>
+                        <span className={`tag ${m.source === "env" ? "" : "tag-admin"}`}>
+                          {m.source === "env" ? "环境变量" : "手动添加"}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: "flex", gap: 6 }}>
+                          {!m.active && <button className="btn btn-outline btn-xs" onClick={() => setActive(ch.key, m.name)}>设为生效</button>}
+                          {m.source !== "env" && <button className="btn btn-danger btn-xs" onClick={() => delModel(ch.key, m.name)}>删除</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
 
-              {/* 添加表单 */}
-              <div style={{ marginTop: 12, padding: 10, border: "1px dashed var(--border)", borderRadius: 8 }}>
-                <div style={{ fontSize: 12, color: "var(--gold-light)", marginBottom: 8 }}>✚ 添加模型</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))", gap: 8, marginBottom: 8 }}>
-                  <input id={`mdlName_${ch.key}`} className="form-input" placeholder="名称（如 deepseek-v4-flash）" />
-                  <input id={`mdlModel_${ch.key}`} className="form-input" placeholder="模型名（如 deepseek-v4-flash）" />
-                </div>
-                <input id={`mdlUrl_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} placeholder="API Base URL（如 https://api.deepseek.com）" />
-                <input id={`mdlKey_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} type="password" placeholder="API Key（留空则用环境变量）" />
-                <input id={`mdlHeaders_${ch.key}`} className="form-input" style={{ marginBottom: 8 }} placeholder='额外请求头 JSON（可留空，如 {"x-opencode-session":"abc123"}）' />
-                <div style={{ display: "flex", gap: 8 }}>
-                  <button className="btn btn-primary btn-sm" disabled={busy[ch.key] === "add"} onClick={() => addModel(ch.key)}>
-                    {busy[ch.key] === "add" ? "添加中..." : "添加并生效"}
-                  </button>
-                  <button className="btn btn-outline btn-sm" disabled={busy[ch.key] === "test"} onClick={() => testModel(ch.key)}>
-                    {busy[ch.key] === "test" ? "测试中..." : "测试连通"}
-                  </button>
-                </div>
+            {testResult[ch.key] && (
+              <div className={`alert ${testResult[ch.key].startsWith("❌") ? "alert-danger" : "alert-success"}`} style={{ marginTop: 12 }}>
+                <span className="alert-body">{testResult[ch.key]}</span>
+              </div>
+            )}
+
+            {/* 添加表单 */}
+            <div style={{ marginTop: 16, padding: 16, border: "1px dashed var(--ink-600)", borderRadius: "var(--r)" }}>
+              <div className="text-xs" style={{ color: "var(--brass)", letterSpacing: ".14em", marginBottom: 12 }}>✚ 添加模型</div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10, marginBottom: 10 }}>
+                <input id={`mdlName_${ch.key}`} className="form-input form-input-sm" placeholder="名称（如 deepseek-v4-flash）" aria-label="模型名称" />
+                <input id={`mdlModel_${ch.key}`} className="form-input form-input-sm" placeholder="模型名（如 deepseek-v4-flash）" aria-label="模型标识" />
+              </div>
+              <input id={`mdlUrl_${ch.key}`} className="form-input form-input-sm" style={{ marginBottom: 10 }} placeholder="API Base URL（如 https://api.deepseek.com）" aria-label="API 地址" />
+              <input id={`mdlKey_${ch.key}`} className="form-input form-input-sm" style={{ marginBottom: 10 }} type="password" placeholder="API Key（留空则用环境变量）" aria-label="API Key" />
+              <input id={`mdlHeaders_${ch.key}`} className="form-input form-input-sm" style={{ marginBottom: 12 }} placeholder='额外请求头 JSON（可留空，如 {"x-opencode-session":"abc123"}）' aria-label="额外请求头" />
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button className="btn btn-primary btn-sm btn-auto" disabled={busy[ch.key] === "add"} onClick={() => addModel(ch.key)}>
+                  {busy[ch.key] === "add" ? "添加中…" : "添加并生效"}
+                </button>
+                <button className="btn btn-outline btn-sm btn-auto" disabled={busy[ch.key] === "test"} onClick={() => testModel(ch.key)}>
+                  {busy[ch.key] === "test" ? "测试中…" : "测试连通"}
+                </button>
               </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

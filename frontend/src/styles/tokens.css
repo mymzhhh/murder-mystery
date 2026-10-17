@@ -1,0 +1,203 @@
+/* =============================================================================
+   设计令牌 —— 「卷宗」主题
+   =============================================================================
+
+   这个产品是什么：把一句自然语言需求，变成一份剧本杀（谋杀悬疑）剧本，
+   再切成玩家剧本 / 线索 / DM 手册，然后开一局真人对局，最后复盘真相。
+   它自己的产物就是**卷宗**：需求 → 大纲 → 剧本 → 线索 → 对局 → 复盘。
+
+   所以界面隐喻是「深夜书桌上的一份案卷」：
+     墨（ink）   —— 应用外壳与背景：夜里那张书桌。
+     纸（paper） —— 阅读面：剧本正文、线索、真相。内容用纸，操作用墨。
+     黄铜（brass）—— 唯一的结构色与主操作色（台灯的光）。
+     封蜡红（wax）—— 凶手 / 真相 / 危险 / 指控。**只在真的表示"这是谋杀相关"时出现。**
+     铜绿（verd）—— AI / NPC / 机器的那一侧声音，兼作成功态。
+
+   ⚠ 反面教材（改造前就是这样）：金色 + 神秘紫 + 血红 + 绿 + 蓝 + 橙 六个色相
+   同时出现在按钮、标签、表格行里，每个都只是"看起来还行"的独立渐变，
+   没有一个是**有含义**的 —— 紫被当作面板底色大面积铺开，于是整个界面发灰发浑。
+   现在色相收窄到 4 个，且每个都有明确职责：不再新增色相，需要新语义就用现有色相的深浅。
+
+   兼容性：下面保留了旧变量名（--gold / --mystic / --blood / --bg / --surface …）
+   作为别名，指向新的令牌。这样漏改的旧样式不会突然失效。
+   ============================================================================= */
+
+:root {
+  /* ---------- 墨：中性色阶（暖调蓝黑，不是纯黑，也不是冷灰） ---------- */
+  --ink-1000: #07080b;
+  --ink-900: #0b0d11;   /* 页面底色 */
+  --ink-850: #10131a;
+  --ink-800: #151922;   /* 面板 */
+  --ink-750: #1b202b;   /* 卡片 */
+  --ink-700: #232936;   /* 悬停 / 三级面 */
+  --ink-650: #2b3240;
+  --ink-600: #343c4c;   /* 描边 */
+  --ink-550: #414a5c;   /* 强描边 */
+
+  /* ---------- 字色（暖白，避免纯白刺眼） ---------- */
+  --text: #ddd8cd;
+  --text-dim: #9ba2ae;
+  --text-muted: #6a7280;
+
+  /* ---------- 黄铜：品牌与主操作 ---------- */
+  --brass: #c9a45f;
+  --brass-bright: #e6c98a;
+  --brass-deep: #8b6f31;
+  --brass-tint: rgba(201, 164, 95, 0.12);
+  --brass-line: rgba(201, 164, 95, 0.28);
+
+  /* ---------- 封蜡红：凶手 / 真相 / 危险 / 指控 ---------- */
+  --wax: #a92c2f;
+  --wax-bright: #d64d50;
+  --wax-deep: #6e1a1d;
+  --wax-tint: rgba(169, 44, 47, 0.14);
+  --wax-line: rgba(169, 44, 47, 0.38);
+
+  /* ---------- 铜绿：AI / NPC / 成功 ---------- */
+  --verd: #4f9d8d;
+  --verd-bright: #79c6b5;
+  --verd-deep: #2e6a5f;
+  --verd-tint: rgba(79, 157, 141, 0.13);
+  --verd-line: rgba(79, 157, 141, 0.34);
+
+  /* ---------- 赭黄：警告 / 搜证 ---------- */
+  --amber: #d29a44;
+  --amber-bright: #eebf74;
+  --amber-tint: rgba(210, 154, 68, 0.13);
+  --amber-line: rgba(210, 154, 68, 0.34);
+
+  /* ---------- 纸：阅读面 ---------- */
+  --paper: #e7ddc6;
+  --paper-2: #dcd0b4;
+  --paper-3: #cfc2a2;
+  --paper-line: rgba(90, 72, 40, 0.22);
+  --paper-ink: #2b251a;
+  --paper-ink-dim: #5d5340;
+
+  /* ---------- 语义别名（不引入新色相） ---------- */
+  --primary: var(--brass);
+  --primary-light: var(--brass-bright);
+  --success: var(--verd);
+  --success-light: var(--verd-bright);
+  --success-tint: var(--verd-tint);
+  --danger: var(--wax);
+  --danger-light: var(--wax-bright);
+  --danger-tint: var(--wax-tint);
+  --warning: var(--amber);
+  --warning-light: var(--amber-bright);
+  --warning-tint: var(--amber-tint);
+  --info: var(--verd);
+  --info-light: var(--verd-bright);
+  --info-tint: var(--verd-tint);
+
+  /* ---------- 圆角 ---------- */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+  --r-pill: 999px;
+
+  /* ---------- 阴影（墨底上的深阴影，柔和而非硬边） ---------- */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 10px 28px -10px rgba(0, 0, 0, 0.75);
+  --shadow-3: 0 28px 70px -24px rgba(0, 0, 0, 0.9);
+  --ring: 0 0 0 3px rgba(201, 164, 95, 0.18);
+  --glow-brass: 0 0 0 1px var(--brass-line), 0 12px 32px -14px rgba(201, 164, 95, 0.45);
+
+  /* ---------- 间距 ---------- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 28px;
+  --s-7: 40px;
+  --s-8: 56px;
+
+  /* ---------- 字号 ---------- */
+  --fs-xs: 12px;
+  --fs-sm: 13px;
+  --fs-md: 14px;
+  --fs-base: 15px;
+  --fs-lg: 17px;
+  --fs-xl: 20px;
+  --fs-2xl: 26px;
+  --fs-3xl: 34px;
+  --fs-4xl: 44px;
+
+  /* ---------- 字体 ----------
+     CSP 是 font-src 'self' 且不引任何外部资源，所以只能用系统字体：
+     正文用宋体系（民国印刷品的手感），界面用无衬线，数字/编号用等宽。 */
+  --font: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun", Georgia, "Times New Roman", serif;
+  --font-serif: var(--font);
+  --font-ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  /* ---------- markdown 正文的强调色（由所在 surface 覆盖） ----------
+     同一个正文渲染器同时用在墨底（DM 叙述）和纸面（剧本 / 真相）上。
+     黄铜压米色纸的对比度明显不够，所以颜色不写死在渲染器里，交给 surface 决定：
+     这里是"墨底"的默认值，.paper-surface 里换成深墨色。 */
+  --md-strong: var(--brass-bright);
+  --md-rule: var(--brass);
+
+  /* ---------- 动效 ---------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-1: 0.15s;
+  --dur-2: 0.25s;
+  --dur-3: 0.45s;
+  /* 旧名别名 */
+  --duration-fast: var(--dur-1);
+  --duration: var(--dur-2);
+  --duration-slow: var(--dur-3);
+
+  /* ---------- 版面 ---------- */
+  --header-h: 60px;
+  --content-max: 1360px;
+
+  /* =========================================================================
+     旧变量名兼容别名 —— 改造前被大量内联样式引用，保留以免漏改处失效。
+     新代码请直接用上面的令牌。
+     ========================================================================= */
+  --bg: var(--ink-900);
+  --bg2: var(--ink-850);
+  --surface: var(--ink-800);
+  --surface2: var(--ink-750);
+  --surface3: var(--ink-700);
+  --border: var(--ink-600);
+  --border-light: var(--ink-550);
+
+  --gold: var(--brass);
+  --gold-light: var(--brass-bright);
+  --gold-dark: var(--brass-deep);
+  --gold-glass: var(--brass-tint);
+
+  /* 旧的"神秘紫"整体并入铜绿：紫色是原来界面发浑的主因，不再保留色相。 */
+  --mystic: var(--verd);
+  --mystic-light: var(--verd-bright);
+  --mystic-glass: var(--verd-tint);
+
+  --blood: var(--wax-deep);
+  --blood-light: var(--wax);
+  --blood-glass: var(--wax-tint);
+
+  --success-glass: var(--verd-tint);
+  --danger-glass: var(--wax-tint);
+  --warning-glass: var(--amber-tint);
+  --info-glass: var(--verd-tint);
+
+  --text2: var(--text-dim);
+  --glow-gold: var(--glow-brass);
+  --glow-mystic: 0 0 0 1px var(--verd-line);
+
+  --radius-sm: var(--r-sm);
+  --radius: var(--r);
+  --radius-lg: var(--r-lg);
+  --radius-xl: var(--r-xl);
+  --radius-2xl: var(--r-xl);
+
+  --shadow-sm: var(--shadow-1);
+  --shadow: var(--shadow-2);
+  --shadow-lg: var(--shadow-3);
+}

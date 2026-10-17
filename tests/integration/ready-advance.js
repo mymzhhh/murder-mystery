@@ -221,8 +221,8 @@ function waitPhase(sock, phase, ms = 40000) {
 
     // 直接把"断线计时器"的等待时间缩短：测试里不可能真等 5 分钟，
     // 改为直接调用清理逻辑——用模块函数复现定时器到点后做的事。
-    const { removePlayer, getPlayers, updatePlayer, getRoom, updateRoom, addChatMessage } = require("../../modules/game-manager");
-    const { syncAiFillers } = require("../../modules/ai-player");
+    const { removePlayer, getPlayers, updatePlayer, getRoom, updateRoom, addChatMessage } = require("../../src/game/game-manager");
+    const { syncAiFillers } = require("../../src/game/ai-player");
     const before = await getPlayers(code);
     const meB = before.find(p => p.playerName === "voicetest_b");
     check("B 已被标记为未连接", !!meB && meB.connected === false, meB ? `connected=${meB.connected}` : "未找到 B");

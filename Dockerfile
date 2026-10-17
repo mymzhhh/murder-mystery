@@ -23,12 +23,8 @@ ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
-# 复制源码
-COPY server.js ./
-COPY modules/ ./modules/
-COPY templates/ ./templates/
-COPY routes/ ./routes/
-COPY socket/ ./socket/
+# 复制源码（全部运行时代码在 src/ 下）
+COPY src/ ./src/
 COPY public/ ./public/
 # 运维/数据脚本（如模型注册），随镜像分发以便在容器内直接执行
 COPY scripts/ ./scripts/
@@ -47,4 +43,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/api/health',r=>{process.exit(r.statusCode===200?0:1)})"
 
-CMD ["node", "server.js"]
+CMD ["node", "src/server.js"]

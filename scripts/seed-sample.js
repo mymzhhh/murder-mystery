@@ -44,7 +44,7 @@ async function main() {
   if (splitIds.length) {
     // 注入环境变量供 pg-sync/db 使用（宿主运行时）
     process.env.REDIS_URL = REDIS_URL;
-    const { syncOne } = require("../modules/pg-sync");
+    const { syncOne } = require("../src/core/pg-sync");
     let ok = 0;
     for (const id of splitIds) {
       try { await syncOne(id); ok++; }

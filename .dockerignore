@@ -8,9 +8,8 @@ data/sessions/*
 .git
 *.md
 *.log
-stress-test.js
-race-test.js
-e2e-full-test.js
+tests/
+_archive/
 *-report.txt
 Dockerfile
 docker-compose.yml

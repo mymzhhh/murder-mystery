@@ -1,0 +1,250 @@
+/* =============================================================================
+   基底：重置、页面背景、排版、通用工具类、动画
+   ============================================================================= */
+
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  line-height: 1.65;
+  color: var(--text);
+  background-color: var(--ink-900);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 桌面质感：墨底纹理 + **一盏台灯**。
+   改造前是紫 / 金 / 红三层不同色相的径向渐变叠在一起，互相中和成一片浑浊的灰紫；
+   现在只留一束暖光（黄铜）从左上落下，其余交给墨色本身，层次靠明度而不是色相。 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image:
+    radial-gradient(1200px 800px at 12% -6%, rgba(201, 164, 95, 0.10), transparent 62%),
+    radial-gradient(900px 700px at 100% 8%, rgba(79, 157, 141, 0.05), transparent 60%),
+    url("../assets/art/ink.webp");
+  background-size: auto, auto, 512px 512px;
+  background-repeat: no-repeat, no-repeat, repeat;
+  background-blend-mode: normal, normal, overlay;
+}
+
+/* 极细的暗角，把视线收回中间 */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: radial-gradient(140% 100% at 50% 40%, transparent 55%, rgba(0, 0, 0, 0.55) 100%);
+}
+
+::selection { background: rgba(201, 164, 95, 0.28); color: #fff; }
+
+/* ===================== 排版 ===================== */
+h1, h2, h3, h4, h5 {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  line-height: 1.35;
+  color: var(--text);
+}
+h1 { font-size: var(--fs-2xl); letter-spacing: 0.14em; }
+h2 { font-size: var(--fs-xl); letter-spacing: 0.10em; }
+h3 { font-size: var(--fs-lg); letter-spacing: 0.08em; }
+h4 { font-size: var(--fs-base); letter-spacing: 0.06em; }
+
+a { color: var(--brass); text-decoration: none; }
+a:hover { color: var(--brass-bright); text-decoration: underline; }
+
+code, kbd, samp, pre { font-family: var(--font-mono); }
+code {
+  font-size: 0.92em;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--ink-650);
+  color: var(--brass-bright);
+}
+strong { font-weight: 700; }
+hr { border: 0; border-top: 1px solid var(--ink-600); margin: var(--s-4) 0; }
+
+/* ===================== 文字工具类 ===================== */
+.text-gold    { color: var(--brass); }
+.text-dim     { color: var(--text-dim); }
+.text-muted   { color: var(--text-muted); }
+.text-success { color: var(--verd-bright); }
+.text-danger  { color: var(--wax-bright); }
+.text-warning { color: var(--amber-bright); }
+.text-center  { text-align: center; }
+.text-sm      { font-size: var(--fs-sm); }
+.text-xs      { font-size: var(--fs-xs); }
+.font-ui      { font-family: var(--font-ui); }
+
+/* 章节标题那种"烫金"效果：只用在真正的标题上，不再到处铺渐变 */
+.gradient-gold {
+  background: linear-gradient(100deg, var(--brass-deep), var(--brass-bright) 45%, var(--brass));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: var(--brass);
+}
+
+/* 一行小字的"案卷抬头"：中文小标题 + 两侧细线，用来分段 */
+.kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  font-family: var(--font-serif);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.3em;
+  color: var(--text-muted);
+  text-transform: none;
+}
+.kicker::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--ink-600), transparent);
+}
+
+/* ===================== 布局工具类 ===================== */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-5); }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-4); }
+.grid-4 { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s-3); }
+.flex-between { display: flex; justify-content: space-between; align-items: center; }
+.flex-center  { display: flex; align-items: center; justify-content: center; }
+.flex-wrap    { flex-wrap: wrap; }
+.gap-sm { gap: var(--s-2); }
+.gap    { gap: var(--s-3); }
+.gap-lg { gap: var(--s-5); }
+
+.mt-sm  { margin-top: var(--s-2); }
+.mt     { margin-top: var(--s-3); }
+.mt-lg  { margin-top: var(--s-5); }
+.mb-sm  { margin-bottom: var(--s-2); }
+.mb     { margin-bottom: var(--s-3); }
+.mb-lg  { margin-bottom: var(--s-5); }
+.mx-auto { margin-left: auto; margin-right: auto; }
+
+.hidden { display: none !important; }
+.flex-1 { flex: 1; }
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cursor-pointer { cursor: pointer; }
+.select-none { user-select: none; }
+
+/* ===================== 动画 ===================== */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.97); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.65; }
+  50%      { opacity: 1; }
+}
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes skeloton {
+  0%   { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+}
+/* 只留一个"光晕呼吸"，用在房间号这种需要被注意的地方 */
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 0 1px var(--brass-line), 0 0 18px -6px rgba(201, 164, 95, 0.35); }
+  50%      { box-shadow: 0 0 0 1px var(--brass-line), 0 0 34px -6px rgba(201, 164, 95, 0.6); }
+}
+
+/* 列表错峰入场：用 nth-child 上限 11 个，再多就不延迟了（避免长列表最后一项等到天荒地老）。
+ *
+ * ⚠ 这里刻意**不写 `opacity: 0`**，而是用 `animation-fill-mode: backwards`。
+ *   写 `opacity: 0` + `forwards` 会踩一个很隐蔽的坑：子元素如果自己声明了 `animation`
+ *   （.state-empty / .state-loading 都有），它的 animation 会把 `.stagger > *` 的
+ *   fadeUp 整个覆盖掉，而它自己的 animation 没有 forwards —— 播完就回到基础样式，
+ *   也就是 `opacity: 0`，于是这块内容**永远看不见**（DOM 里在、屏幕上没有）。
+ *   `backwards` 只在延迟期间套用起始帧，播完自然回到元素本身的透明度，不依赖任何基础值。 */
+.stagger > * { animation: fadeUp var(--dur-3) var(--ease-out) backwards; }
+.stagger > *:nth-child(1) { animation-delay: 0.03s; }
+.stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.stagger > *:nth-child(3) { animation-delay: 0.09s; }
+.stagger > *:nth-child(4) { animation-delay: 0.12s; }
+.stagger > *:nth-child(5) { animation-delay: 0.15s; }
+.stagger > *:nth-child(6) { animation-delay: 0.18s; }
+.stagger > *:nth-child(7) { animation-delay: 0.21s; }
+.stagger > *:nth-child(8) { animation-delay: 0.24s; }
+.stagger > *:nth-child(9) { animation-delay: 0.27s; }
+.stagger > *:nth-child(10) { animation-delay: 0.3s; }
+.stagger > *:nth-child(n+11) { animation-delay: 0.33s; }
+
+/* 尊重系统的"减少动态效果" */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ===================== 滚动条 ===================== */
+* { scrollbar-width: thin; scrollbar-color: var(--ink-600) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--ink-650);
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--ink-550); background-clip: content-box; }
+
+/* ===================== 响应式 ===================== */
+@media (max-width: 1024px) {
+  .grid-3 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 768px) {
+  body { font-size: var(--fs-md); }
+  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .grid-4 { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 480px) {
+  .grid-4 { grid-template-columns: 1fr; }
+}
+
+/* ===================== 打印 ===================== */
+@media print {
+  body { background: #fff; color: #000; }
+  body::before, body::after { display: none; }
+  .app-header, .app-nav, .no-print { display: none !important; }
+}

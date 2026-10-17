@@ -1,9 +1,9 @@
 // 端到端验证：4 个新注册的 opencode 模型在【两个通道】的真实代码路径上都能调通
 // 做法：逐个设为生效 → 走真实调用路径打一次 → 最后恢复原来的生效模型
-const { setActive, getActiveConfig, listModels } = require("../modules/model-manager");
-const { getRedis } = require("../modules/redis-client");
-const agnes = require("../modules/agnes-client");
-const { generate } = require("../modules/generator");
+const { setActive, getActiveConfig, listModels } = require("../src/llm/model-manager");
+const { getRedis } = require("../src/core/redis-client");
+const agnes = require("../src/llm/agnes-client");
+const { generate } = require("../src/llm/generator");
 
 const MODELS = ["opencode-glm-5.3-flash", "opencode-omen-alpha", "opencode-deepseek-flash", "opencode-deepseek-v4.1-flash"];
 

@@ -5,8 +5,8 @@
 //
 // 用法：node scripts/register-opencode-models.js [--activate=glm-5.3-flash]
 // 默认只注册、不改动"当前生效模型"（避免悄悄切走线上正在用的模型）。
-const { upsertModel, listModels, setActive } = require("../modules/model-manager");
-const { getRedis } = require("../modules/redis-client");
+const { upsertModel, listModels, setActive } = require("../src/llm/model-manager");
+const { getRedis } = require("../src/core/redis-client");
 
 const BASE_URL = "https://opencode.ai/zen/go/v1";
 
@@ -18,6 +18,7 @@ const SESSIONS = {
   "omen-alpha": "mm-omenalpha-2c58d4",
   "deepseek-flash": "mm-dsflash-b61e07",
   "deepseek-v4.1-flash": "mm-ds41flash-4a92ce",
+  "mimo-v2.6-flash": "mm-mimo26flash-9d4b17",
 };
 
 const MODELS = [
@@ -25,6 +26,11 @@ const MODELS = [
   { id: "omen-alpha", note: "OpenCode Go · omen-alpha · 实测 1.9s（最快）· 价格/额度官方未公布", in: null, out: null, quota: null },
   { id: "deepseek-flash", note: "OpenCode Go · deepseek-flash · 实测 2.4s · 价格/额度官方未公布", in: null, out: null, quota: null },
   { id: "deepseek-v4.1-flash", note: "OpenCode Go · DeepSeek V4.1 Flash · 实测 2.5s · $0.15/$0.60 · 月$15", in: 0.15, out: 0.60, quota: 15 },
+  // MiMo-V2.6-Flash：$0.14/$0.28、月额度 $60、约 15 万次/月，官方标注不用于训练且零留存。
+  // ⚠️ 它是推理型模型：实测在「故事框架」这种超长散文任务上会把 max_tokens 整个烧在
+  // reasoning 上、finish_reason=length 且正文为空（16384 预算下实测 0 字符正文）。
+  // 注册可用，但用作 generative 主通道前请先跑 _verify/test-model.js 确认预算足够。
+  { id: "mimo-v2.6-flash", note: "OpenCode Go · MiMo-V2.6-Flash · $0.14/$0.28 · 月$60 · 推理型（长文需大预算）", in: 0.14, out: 0.28, quota: 60 },
 ];
 
 /** 从已有注册项里取 opencode 的密钥（不新增密钥来源，避免密钥散落多处） */

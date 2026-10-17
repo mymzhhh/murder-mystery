@@ -1,0 +1,517 @@
+/* =============================================================================
+   组件库：面板 / 卡片 / 按钮 / 表单 / 提示 / 标签 / 表格 / 状态
+   ============================================================================= */
+
+/* ===================== 面板 ===================== */
+.panel {
+  position: relative;
+  background: var(--ink-800);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--r);
+  padding: var(--s-5);
+  margin-bottom: var(--s-4);
+  box-shadow: var(--shadow-1);
+}
+/* 面板顶部一道极细的金线：让"一块内容"有边界，又不用整块描金 */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  border-radius: var(--r) var(--r) 0 0;
+  background: linear-gradient(90deg, transparent, var(--brass-line) 18%, var(--brass-line) 82%, transparent);
+  opacity: 0.75;
+  pointer-events: none;
+}
+.panel > h3, .panel > h4 { margin-bottom: var(--s-4); }
+.panel > h3 { color: var(--brass); }
+.panel-flat::before { display: none; }
+
+/* 面板标题栏：标题 + 右侧操作，一个可复用的结构 */
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--s-3);
+}
+.panel-head > strong, .panel-head > h3, .panel-head > h4 { margin: 0; color: var(--brass); }
+.panel-head .panel-actions { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+
+/* ===================== 卡片 ===================== */
+.card {
+  position: relative;
+  background: var(--ink-750);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--r);
+  padding: var(--s-4);
+  transition: border-color var(--dur-2) var(--ease-out),
+              transform var(--dur-2) var(--ease-out),
+              box-shadow var(--dur-2) var(--ease-out);
+}
+.card:hover {
+  border-color: var(--brass-line);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+/* 不可点的卡片：不要有"能点"的暗示 */
+.card-static { cursor: default; }
+.card-static:hover { transform: none; box-shadow: none; border-color: var(--ink-600); }
+
+/* 数字卡：仪表盘用 */
+.card-num { font-family: var(--font-serif); font-size: var(--fs-2xl); font-weight: 700; color: var(--brass); line-height: 1.15; }
+.card-label { margin-top: var(--s-1); color: var(--text-dim); font-size: var(--fs-xs); letter-spacing: 0.08em; }
+
+/* ===================== 按钮 =====================
+   一套几何（同高同圆角同内边距），只有"填充程度"和"色相"在变：
+     primary  = 实心黄铜，整页只留一个主操作
+     success/danger/warning = 同色系浅底 + 同色描边 + 同色字（不是四种互不相干的深色渐变）
+     outline  = 墨底描边，次要操作
+     ghost    = 无底无边，放在密集区里
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  width: 100%;
+  padding: 11px 20px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-md);
+  font-weight: 600;
+  font-family: var(--font-ui);
+  letter-spacing: 0.06em;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  transition: background-color var(--dur-2) var(--ease-out),
+              border-color var(--dur-2) var(--ease-out),
+              color var(--dur-2) var(--ease-out),
+              box-shadow var(--dur-2) var(--ease-out),
+              transform var(--dur-1) var(--ease-out);
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:focus-visible { outline: none; box-shadow: var(--ring); }
+.btn:disabled { opacity: 0.42; cursor: not-allowed; transform: none !important; }
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--brass-bright), var(--brass));
+  color: #241c0c;
+  border-color: var(--brass-bright);
+  box-shadow: 0 6px 18px -8px rgba(201, 164, 95, 0.7);
+}
+.btn-primary:hover:not(:disabled) { filter: brightness(1.07); box-shadow: 0 10px 26px -10px rgba(201, 164, 95, 0.85); }
+
+.btn-success {
+  background: var(--verd-tint);
+  color: var(--verd-bright);
+  border-color: var(--verd-line);
+}
+.btn-success:hover:not(:disabled) { background: rgba(79, 157, 141, 0.22); border-color: var(--verd); }
+
+.btn-danger {
+  background: var(--wax-tint);
+  color: var(--wax-bright);
+  border-color: var(--wax-line);
+}
+.btn-danger:hover:not(:disabled) { background: rgba(169, 44, 47, 0.24); border-color: var(--wax); }
+
+.btn-warning {
+  background: var(--amber-tint);
+  color: var(--amber-bright);
+  border-color: var(--amber-line);
+}
+.btn-warning:hover:not(:disabled) { background: rgba(210, 154, 68, 0.22); border-color: var(--amber); }
+
+.btn-outline {
+  background: rgba(255, 255, 255, 0.02);
+  border-color: var(--ink-600);
+  color: var(--text-dim);
+}
+.btn-outline:hover:not(:disabled) { border-color: var(--brass-line); color: var(--brass-bright); background: var(--brass-tint); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+.btn-ghost:hover:not(:disabled) { color: var(--text); background: var(--ink-700); }
+
+/* 尺寸 */
+.btn-sm { padding: 7px 14px; font-size: var(--fs-sm); width: auto; border-radius: var(--r-sm); }
+.btn-xs { padding: 4px 10px; font-size: var(--fs-xs); width: auto; border-radius: var(--r-xs); letter-spacing: 0.04em; }
+.btn-auto { width: auto; }
+
+/* 加载态：文字隐藏，中间转圈 */
+.btn-loading { pointer-events: none; color: transparent !important; }
+.btn-loading::after {
+  content: "";
+  position: absolute;
+  width: 15px; height: 15px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  color: var(--brass-bright);
+}
+.btn-primary.btn-loading::after { color: #241c0c; }
+
+/* ===================== 表单 ===================== */
+.form-group { margin-bottom: var(--s-4); }
+.form-group > label {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  margin-bottom: var(--s-2);
+  letter-spacing: 0.14em;
+}
+
+.form-input,
+.form-select,
+.form-textarea {
+  width: 100%;
+  padding: 11px 14px;
+  background: var(--ink-900);
+  border: 1px solid var(--ink-600);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font-size: var(--fs-md);
+  font-family: var(--font-ui);
+  line-height: 1.5;
+  outline: none;
+  transition: border-color var(--dur-2) var(--ease-out), box-shadow var(--dur-2) var(--ease-out);
+}
+.form-input:hover:not(:focus),
+.form-select:hover:not(:focus),
+.form-textarea:hover:not(:focus) { border-color: var(--ink-550); }
+.form-input:focus,
+.form-select:focus,
+.form-textarea:focus { border-color: var(--brass); box-shadow: var(--ring); }
+.form-input::placeholder,
+.form-textarea::placeholder { color: var(--text-muted); }
+.form-input:disabled,
+.form-textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.form-input-sm { padding: 8px 12px; font-size: var(--fs-sm); }
+.form-input-lg { padding: 14px 18px; font-size: var(--fs-lg); }
+
+.form-select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 8.5L1.2 3.7l.9-.9L6 6.7l3.9-3.9.9.9z' fill='%239ba2ae'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 34px;
+  cursor: pointer;
+}
+.form-select option { background: var(--ink-800); color: var(--text); }
+
+.form-textarea {
+  resize: vertical;
+  min-height: 104px;
+  line-height: 1.75;
+  font-family: var(--font-serif);
+  font-size: var(--fs-md);
+}
+
+/* 房号输入：等宽、居中、加大字距，像在抄案卷编号 */
+.form-input-code {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xl);
+  text-align: center;
+  letter-spacing: 0.42em;
+  text-transform: uppercase;
+}
+
+.form-inline { display: flex; align-items: center; gap: var(--s-2); }
+.form-inline > label { margin-bottom: 0; white-space: nowrap; }
+
+.form-hint { margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--text-muted); }
+
+/* ===================== 提示条 =====================
+   统一形状：左侧 3px 语义色条 + 同色浅底。不再每种提示一个形状。 */
+.alert {
+  position: relative;
+  padding: 10px 14px 10px 16px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  border: 1px solid var(--ink-600);
+  background: var(--ink-750);
+  color: var(--text);
+  animation: slideDown var(--dur-2) var(--ease-out);
+}
+.alert::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 3px;
+  border-radius: var(--r-sm) 0 0 var(--r-sm);
+  background: currentColor;
+  opacity: 0.85;
+}
+.alert-info    { color: var(--verd-bright);  background: var(--verd-tint);  border-color: var(--verd-line); }
+.alert-success { color: var(--verd-bright);  background: var(--verd-tint);  border-color: var(--verd-line); }
+.alert-warning { color: var(--amber-bright); background: var(--amber-tint); border-color: var(--amber-line); }
+.alert-danger  { color: var(--wax-bright);   background: var(--wax-tint);   border-color: var(--wax-line); }
+.alert .alert-body { color: var(--text); }
+
+/* "一段说明 + 一个关闭按钮"的提示条。改造前这种条在 6 个地方各写一遍同样的
+   内联 flex 样式，任何一次调整都要改 6 处。 */
+.alert-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-3);
+}
+.alert-row > .alert-body { flex: 1; min-width: 0; }
+
+/* 旧版独立错误行（登录页等） */
+.error-msg {
+  color: var(--wax-bright);
+  font-size: var(--fs-sm);
+  text-align: center;
+  margin-top: var(--s-3);
+  padding: 10px 14px;
+  background: var(--wax-tint);
+  border: 1px solid var(--wax-line);
+  border-radius: var(--r-sm);
+  animation: slideDown var(--dur-2) var(--ease-out);
+}
+
+/* ===================== 状态占位 ===================== */
+.state-loading,
+.state-empty,
+.state-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 空的占位不要撑出大片空白：改造前是 40px 上下内边距，
+     一屏里两个空面板各占 200px，看起来像页面没加载完。 */
+  padding: var(--s-5) var(--s-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  gap: var(--s-3);
+  animation: fadeIn var(--dur-3) var(--ease-out);
+}
+.state-loading::before {
+  content: "";
+  width: 26px; height: 26px;
+  border: 2px solid var(--ink-650);
+  border-top-color: var(--brass);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.state-empty { font-family: var(--font-serif); letter-spacing: 0.14em; }
+.state-error {
+  color: var(--wax-bright);
+  background: var(--wax-tint);
+  border: 1px solid var(--wax-line);
+  border-radius: var(--r);
+  max-width: 520px;
+  margin: 0 auto;
+}
+
+/* 骨架屏 */
+.skeleton {
+  background: linear-gradient(90deg, var(--ink-750) 0px, var(--ink-700) 40px, var(--ink-750) 80px);
+  background-size: 200px 100%;
+  animation: skeloton 1.5s ease-in-out infinite;
+  border-radius: var(--r-xs);
+}
+.skeleton-line { height: 12px; margin-bottom: var(--s-2); }
+.skeleton-line:last-child { width: 60%; }
+.skeleton-block { height: 76px; border-radius: var(--r-sm); }
+
+/* ===================== 标签（印章感） ===================== */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 9px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--ink-550);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  line-height: 1.7;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.tag-admin  { background: var(--brass-tint); color: var(--brass-bright); border-color: var(--brass-line); }
+.tag-player { background: var(--verd-tint);  color: var(--verd-bright); border-color: var(--verd-line); }
+.tag-npc    { background: var(--verd-tint);  color: var(--verd-bright); border-color: var(--verd-line); }
+.tag-active { background: var(--brass-tint); color: var(--brass-bright); border-color: var(--brass-line); }
+.tag-done   { background: rgba(255, 255, 255, 0.05); color: var(--text-dim); }
+/* 补上改造前缺失的三个语义标签 —— 之前 tag-danger / tag-success 被 JSX 用了却根本没定义，
+   于是"连接已断开"和"当前生效"看起来和普通文字一样。 */
+.tag-danger { background: var(--wax-tint);   color: var(--wax-bright);   border-color: var(--wax-line); }
+.tag-success{ background: var(--verd-tint);  color: var(--verd-bright); border-color: var(--verd-line); }
+.tag-warning{ background: var(--amber-tint); color: var(--amber-bright); border-color: var(--amber-line); }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r-pill);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  background: var(--ink-700);
+  color: var(--text-dim);
+  border: 1px solid var(--ink-600);
+}
+.badge-gold { background: var(--brass); color: #241c0c; border-color: var(--brass-bright); }
+
+/* ===================== 筛选按钮 ===================== */
+/* 线索面板的类别筛选。之所以用一排小圆角按钮而不是下拉框：
+   下拉框展开后一屏几十个选项，反而比滚动还慢；四五个按钮常驻更省事。 */
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chip {
+  padding: 3px 11px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--ink-600);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-family: var(--font-ui);
+  line-height: 1.6;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all var(--dur-2) var(--ease-out);
+}
+.chip:hover { border-color: var(--brass-line); color: var(--brass-bright); }
+.chip.active {
+  background: var(--brass-tint);
+  border-color: var(--brass);
+  color: var(--brass-bright);
+  font-weight: 600;
+}
+
+/* ===================== 表格 ===================== */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-sm);
+}
+.table th {
+  text-align: left;
+  padding: 10px 14px;
+  color: var(--brass);
+  font-weight: 600;
+  font-family: var(--font-serif);
+  letter-spacing: 0.12em;
+  font-size: var(--fs-xs);
+  border-bottom: 1px solid var(--brass-line);
+  background: rgba(255, 255, 255, 0.015);
+}
+.table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--ink-650);
+  vertical-align: middle;
+}
+.table tbody tr { transition: background var(--dur-1) var(--ease-out); }
+.table tbody tr:hover { background: rgba(201, 164, 95, 0.045); }
+.table tbody tr:last-child td { border-bottom: none; }
+
+/* ===================== 进度条 ===================== */
+.progress-bar {
+  height: 3px;
+  background: var(--ink-700);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.progress-fill {
+  height: 100%;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--brass-deep), var(--brass-bright));
+  transition: width var(--dur-3) var(--ease-out);
+}
+.progress-steps {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  max-height: 320px;
+  overflow-y: auto;
+}
+.progress-container { margin: var(--s-3) 0; }
+
+/* ===================== 分节 / 定义行 ===================== */
+/* "键：值"的一行，用于详情面板 */
+.field-row {
+  display: flex;
+  gap: var(--s-3);
+  padding: 5px 0;
+  font-size: var(--fs-sm);
+  border-bottom: 1px dashed var(--ink-650);
+}
+.field-row:last-child { border-bottom: none; }
+.field-row > .field-key { flex-shrink: 0; color: var(--text-muted); min-width: 4.5em; }
+.field-row > .field-val { color: var(--text); min-width: 0; }
+
+/* ===================== 自适应双栏 =====================
+   这几个栅格原来都是内联的 `repeat(auto-fit, minmax(400px, 1fr))`。
+   问题在于 minmax 的**下限是硬性的**：视口只有 390px 时轨道最小仍是 400px，
+   整页就被撑出 26px 的横向滚动条（实测 scrollWidth 416 / clientWidth 390）。
+   `min(400px, 100%)` 让下限在窄屏时退化为 100%，一行一列，不再溢出。 */
+.auto-cols,
+.auto-cols-wide,
+.auto-cols-narrow {
+  display: grid;
+  gap: var(--s-4);
+  align-items: start;
+}
+.auto-cols        { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
+.auto-cols-wide   { grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); }
+.auto-cols-narrow { grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); }
+
+/* ===================== markdown 正文块 =====================
+   ScriptBody 把剧本/复盘正文渲染成这些类。强调色**不写在这里**，
+   而是取 --md-strong / --md-rule，由所在 surface 覆盖：
+   同一段文字在墨底上是黄铜色，在纸面上必须换成深墨色，
+   否则浅金压米色纸几乎看不清（这是改版中实际踩到的问题）。 */
+.md-blank { height: 6px; }
+.md-h {
+  font-family: var(--font-serif);
+  font-weight: 700;
+  color: var(--md-strong);
+  margin: 14px 0 6px;
+  letter-spacing: 0.06em;
+  line-height: 1.5;
+}
+.md-h.md-l1 { font-size: var(--fs-xl); }
+.md-h.md-l2 { font-size: var(--fs-lg); }
+.md-h.md-l3 { font-size: var(--fs-base); }
+.md-h.md-l4 { font-size: var(--fs-md); }
+.md-sub {
+  font-family: var(--font-serif);
+  font-size: var(--fs-base);
+  font-weight: 700;
+  color: var(--md-strong);
+  margin: 12px 0 4px;
+  letter-spacing: 0.04em;
+}
+.md-p { margin: 6px 0; }
+.md-list { display: flex; gap: 6px; margin: 3px 0 3px 4px; }
+.md-list > .md-marker { color: var(--md-rule); flex-shrink: 0; }
+.md-strong { color: var(--md-strong); font-weight: 700; }
+
+/* 纸面上换成深墨色。用变量覆盖而不是后代选择器，
+   这样任何嵌在纸面里的正文块（包括以后新增的）都自动跟着变。 */
+.paper-surface {
+  --md-strong: #3a2c12;
+  --md-rule: #8a6a30;
+}

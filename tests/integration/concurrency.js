@@ -203,20 +203,25 @@ async function joinRoom(code, token) {
     await pr;
     console.log("    （已推进到 round1）");
 
-    // 收集线索发放事件。
-    // ⚠ clue_received 是广播给全房的事件，不能用"哪个客户端收到"来归属，
-    //    那会误判成同一条线索发给了所有人。必须直接查 Redis 里每条线索的 foundBy。
+    // 搜证协议已变更：必须带 location（改造前是打字猜关键词 searchQuery）。
+    // 另外 clue_received 已由"广播全房"改为**只发给发现者本人**（线索私有化），
+    // 但归属仍以 Redis 里的 foundBy 为权威数据，不靠事件推断。
+    // 每轮次数受 SEARCH_MAX_PER_ROUND 限制（默认 3），所以这里只打 3 轮。
+    const locRes = await req("GET", `/api/player/rooms/${code}/locations`, null, tokens[0]);
+    const locations = (locRes.body && locRes.body.locations) || [];
+    if (!locations.length) throw new Error("房间没有可搜证的地点，无法进行并发搜证测试");
+
     for (const cl of [a, b, c]) cl.sock.on("clue_received", () => {});
-    // 三人同时搜证（多轮，制造竞争）
-    for (let round = 0; round < 4; round++) {
-      a.sock.emit("investigate", { roomCode: code, query: "" });
-      b.sock.emit("investigate", { roomCode: code, query: "" });
-      c.sock.emit("investigate", { roomCode: code, query: "" });
+    // 三人同时搜同一地点 —— 这正是要制造"抢同一条线索"的竞态
+    for (let round = 0; round < 3; round++) {
+      a.sock.emit("investigate", { roomCode: code, location: locations[0] });
+      b.sock.emit("investigate", { roomCode: code, location: locations[0] });
+      c.sock.emit("investigate", { roomCode: code, location: locations[0] });
       await sleep(1200);
     }
     await sleep(1500);
 
-    const { getClues } = require("../../modules/game-manager");
+    const { getClues } = require("../../src/game/game-manager");
     const finalClues = await getClues(code);
     const dupes = finalClues.filter(c => (c.foundBy || []).length > 1)
       .map(c => c.id + "→" + c.foundBy.length + "人");
@@ -231,7 +236,7 @@ async function joinRoom(code, token) {
   console.log("\n【D】抢线索必须是原子的：并发 N 人抢同一条只能有一个成功");
   {
     const code = await newRoom();
-    const { loadClues, getClues, assignClue, claimClue } = require("../../modules/game-manager");
+    const { loadClues, getClues, assignClue, claimClue } = require("../../src/game/game-manager");
     await redis.hset(`game:${code}`, { phase: "round1" });
     await loadClues(code, [{ id: "T1", content: "测试线索一", location: "书房", round: 1 }]);
 
@@ -256,7 +261,7 @@ async function joinRoom(code, token) {
   console.log("\n【E】角色占位：并发抢角只有一个成功，换角/离房要能释放");
   {
     const code = await newRoom();
-    const { claimCharacter, releaseCharacterClaim, releaseCharacterClaims, addPlayer, getPlayers } = require("../../modules/game-manager");
+    const { claimCharacter, releaseCharacterClaim, releaseCharacterClaims, addPlayer, getPlayers } = require("../../src/game/game-manager");
     const results = await Promise.all(Array.from({ length: 10 }, (_, i) => claimCharacter(code, "角色甲", "h" + i)));
     check("10 路并发抢同一角色，只有 1 个成功", results.filter(Boolean).length === 1, `成功 ${results.filter(Boolean).length} 个`);
 

@@ -81,19 +81,39 @@ export function paginate(text, budget = 1000) {
   return pages.length ? pages : [""];
 }
 
-/** 极简 markdown 行内处理：只认 **加粗**，其余原样 */
+/** 把一段纯文本收进 segments，并清掉"配不成对"的 markdown 标记字符。
+ *
+ *  模型经常漏写闭合的 `**` —— 例如真相复盘里的 `作案手法**（详细过程）：`，
+ *  正则配不到这一对，于是 `**` 被原样显示，看起来像界面坏了。
+ *  这里统一收尾：成对的标记已经被上面的正则吃掉了，还会剩下来的基本只有
+ *  长度 ≥2 的星号串（** / ***）；单个 `*` 只在紧贴两端时才清，
+ *  免得误伤正文里偶尔出现的数学记号。
+ */
+function pushText(out, raw) {
+  const v = String(raw)
+    .replace(/\*{2,}/g, "")
+    .replace(/^\*+|\*+$/g, "")
+    .replace(/_{2,}/g, "");
+  if (v) out.push({ t: "text", v });
+}
+
+/** 极简 markdown 行内处理：认 **加粗** 与 *斜体* / _斜体_，其余原样。
+ *  斜体段用 t:"italic" 返回，渲染层可以照常显示成普通文字 ——
+ *  中文正文里"斜体"没有排版意义，重要的是别再让星号漏到屏幕上。 */
 export function parseInline(line) {
+  const src = String(line === null || line === undefined ? "" : line);
   const out = [];
-  const re = /\*\*(.+?)\*\*/g;
+  const re = /\*\*(.+?)\*\*|\*([^*\n]+?)\*|__([^_\n]+?)__|_([^_\n]+?)_/g;
   let last = 0;
   let m;
-  while ((m = re.exec(line)) !== null) {
-    if (m.index > last) out.push({ t: "text", v: line.slice(last, m.index) });
-    out.push({ t: "bold", v: m[1] });
+  while ((m = re.exec(src)) !== null) {
+    if (m.index > last) pushText(out, src.slice(last, m.index));
+    if (m[1] !== undefined) out.push({ t: "bold", v: m[1] });
+    else out.push({ t: "italic", v: m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]) });
     last = m.index + m[0].length;
   }
-  if (last < line.length) out.push({ t: "text", v: line.slice(last) });
-  return out.length ? out : [{ t: "text", v: line }];
+  if (last < src.length) pushText(out, src.slice(last));
+  return out.length ? out : [{ t: "text", v: "" }];
 }
 
 /**
@@ -110,6 +130,10 @@ export function classifyLine(line) {
   // 整行只有加粗内容 → 当成小标题（模板里 "**一、案发背景**" 就是这种）
   const boldOnly = t.match(/^\*\*(.+?)\*\*[：:]?\s*$/);
   if (boldOnly) return { kind: "subheading", text: boldOnly[1].trim() };
+  // 整行只有斜体内容 → 也是小标题。模型写小节名时常写成 "*准备工作：*"，
+  // 旧实现认不出来，星号就跟着正文一起打了出来。
+  const italicOnly = t.match(/^\*([^*]+?)\*[：:]?\s*$/);
+  if (italicOnly) return { kind: "subheading", text: italicOnly[1].trim().replace(/[：:]\s*$/, "") };
   const li = t.match(/^[-*]\s+(.*)$/);
   if (li) return { kind: "list", text: li[1].trim() };
   const ol = t.match(/^(\d+)[.、]\s+(.*)$/);

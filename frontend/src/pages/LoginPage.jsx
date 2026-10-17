@@ -1,6 +1,11 @@
 import React, { useState } from "react";
-import { api, apiJson, setAuth } from "../lib/api.js";
+import { apiJson, setAuth } from "../lib/api.js";
 
+/** 登录 / 注册。
+ *
+ *  这是产品的门面，所以用整幅场景图（本地 ComfyUI 生成的雨夜书桌）打底 +
+ *  左侧压暗，卡片压在暗部上 —— 而不是把图调亮再糊一层颜色。
+ *  表单沿用全局 .form-input，不再写内联样式。 */
 export default function LoginPage({ onLogin }) {
   const [mode, setMode] = useState("login"); // login | register
   const [username, setUsername] = useState("");
@@ -28,29 +33,39 @@ export default function LoginPage({ onLogin }) {
       } else {
         setError(d && d.error ? d.error : "登录失败，请重试");
       }
-    } catch (e) {
-      setError(e.message);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)", padding: 20 }}>
-      <div className="card card-static" style={{ width: 360, padding: 28 }}>
-        <h2 style={{ margin: "0 0 20px", color: "var(--gold)", textAlign: "center" }}>🎭 剧本杀平台</h2>
+    <div className="login-wrapper">
+      <div className="login-bg" aria-hidden="true" />
 
-        <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+      <div className="login-card">
+        <div className="login-brand">
+          <div className="login-seal" aria-hidden="true">案</div>
+          <h1>剧本杀</h1>
+          <p className="subtitle">MURDER MYSTERY STUDIO</p>
+        </div>
+
+        <div className="tabs" role="tablist">
           <button
-            className={`btn ${mode === "login" ? "btn-primary" : "btn-outline"}`}
-            style={{ flex: 1 }}
+            type="button"
+            role="tab"
+            aria-selected={mode === "login"}
+            className={`tab ${mode === "login" ? "active" : ""}`}
             onClick={() => { setMode("login"); setError(""); }}
           >
             登录
           </button>
           <button
-            className={`btn ${mode === "register" ? "btn-primary" : "btn-outline"}`}
-            style={{ flex: 1 }}
+            type="button"
+            role="tab"
+            aria-selected={mode === "register"}
+            className={`tab ${mode === "register" ? "active" : ""}`}
             onClick={() => { setMode("register"); setError(""); }}
           >
             注册
@@ -59,34 +74,40 @@ export default function LoginPage({ onLogin }) {
 
         <form onSubmit={submit}>
           <div className="form-group">
-            <label>用户名</label>
+            <label htmlFor="login-username">用户名</label>
             <input
+              id="login-username"
               className="form-input"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="请输入用户名"
+              autoComplete="username"
               autoFocus
             />
           </div>
           <div className="form-group">
-            <label>密码</label>
+            <label htmlFor="login-password">密码</label>
             <input
+              id="login-password"
               className="form-input"
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="请输入密码"
+              autoComplete={mode === "login" ? "current-password" : "new-password"}
             />
           </div>
-          {error && <div className="alert alert-danger" style={{ marginBottom: 12 }}>{error}</div>}
-          <button className="btn btn-primary" style={{ width: "100%" }} disabled={loading}>
-            {loading ? "处理中..." : (mode === "login" ? "登 录" : "注 册")}
+
+          {error && <div className="alert alert-danger" style={{ marginBottom: 14 }}>{error}</div>}
+
+          <button className={`btn btn-primary ${loading ? "btn-loading" : ""}`} disabled={loading}>
+            {loading ? "处理中" : (mode === "login" ? "登 录" : "注 册")}
           </button>
         </form>
 
-        <div style={{ marginTop: 16, textAlign: "center", fontSize: 12, color: "var(--dim)" }}>
+        <p className="login-foot">
           管理员登录后进入管理端，普通玩家自动进入玩家端
-        </div>
+        </p>
       </div>
     </div>
   );

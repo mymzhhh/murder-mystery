@@ -2,7 +2,9 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallba
 import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
 import { createVoice } from "../lib/voice.js";
+import { groupCluesByPlace, clueCategoryStats } from "../lib/clue-place.mjs";
 import { paginate, estimateBudget, classifyLine, parseInline } from "../lib/paginate.mjs";
+import { votablePlayers, canVoteFor } from "../lib/vote.mjs";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
 //
@@ -11,10 +13,20 @@ import { paginate, estimateBudget, classifyLine, parseInline } from "../lib/pagi
 //     并以 room_state 对账，避免断线期间漏掉事件后状态停旧。
 //   - 聊天、线索：首次用 room_state 的 chatMessages / myClues 播种，之后靠增量事件追加。
 export default function GameView({ game, socket, user, onLeave, online = true }) {
+  // ⚠ room / ownerId 必须在**所有** hook 之前声明。
+  // useCallback / useEffect / useMemo 的依赖数组是渲染时**立即求值**的，
+  // 如果把它们写在 room 声明之前，求值就会命中 TDZ，抛
+  // "Cannot access 'room' before initialization"，React 随即卸载整棵树 ——
+  // 表现是整个页面一块黑屏。这个错误 vite build 不报、单测也测不到，只在浏览器里才暴露。
+  const room = game.room || {};
+  const ownerId = game.ownerId || room.ownerId;
+
   const [players, setPlayers] = useState(game.players || []);
   const [phase, setPhase] = useState(game.phase || "lobby");
   const [chats, setChats] = useState([]);
   const [myClues, setMyClues] = useState([]);
+  // 私聊：只含与我有关的收发消息，服务端已按参与者过滤
+  const [whispers, setWhispers] = useState([]);
   const [myChar, setMyChar] = useState(game.myCharacter || null);
   const [myScript, setMyScript] = useState(null);
   const [availChars, setAvailChars] = useState([]);
@@ -23,6 +35,18 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [readyInfo, setReadyInfo] = useState({ count: 0, total: 0, countdown: null, force: false, reason: "", mode: "", last: "" });
   const [iAmReady, setIAmReady] = useState(false);
   const [review, setReview] = useState(null);
+  // 个性化复盘：只给本人看的局后点评（含"你的秘密""你哪里想错了"），按需生成
+  const [myReview, setMyReview] = useState(null);
+  const [myReviewState, setMyReviewState] = useState("idle"); // idle | loading | error
+  // 搜证：地点列表 + 本轮剩余次数。服务端才是权威（investigate 时会重新校验），这里只是视图。
+  // 必须定义在下面订阅 socket 事件的 effect 之前，否则依赖数组求值时会命中 TDZ。
+  const [searchInfo, setSearchInfo] = useState(null);
+  const loadSearchInfo = useCallback(() => {
+    if (!room.roomCode) return;
+    apiJson(`/api/player/rooms/${encodeURIComponent(room.roomCode)}/locations`)
+      .then(setSearchInfo)
+      .catch(() => {});
+  }, [room.roomCode]);
   const [notice, setNotice] = useState("");
   const [sidebarTab, setSidebarTab] = useState("clues");
   const chatBoxRef = useRef(null);
@@ -37,13 +61,21 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   const [processingOn, setProcessingOn] = useState(true); // 回声消除/降噪是否开启
   const [notes, setNotes] = useState([]);              // 私人便签（仅本人可见）
   const [showNotes, setShowNotes] = useState(false);
+  // 我的剧本抽屉。为什么需要它：剧本在挂载时就取到了（含「你的秘密」），
+  // 但改造前**只有阅读阶段**把它渲染出来 —— 一进搜证阶段就再也打不开，
+  // 于是别人问"你那天几点在哪、跟谁见过面"时，玩家只能凭记忆答，
+  // 或者干脆被怀疑"你这本是不是没看"。做成覆盖式抽屉而不是把内容塞回主列，
+  // 是为了讨论区不被挤走：一边看别人的发言，一边翻自己的本。
+  const [showScript, setShowScript] = useState(false);
   const [notesSaving, setNotesSaving] = useState("");  // "" | "saving" | "saved" | "error"
   const notesTimer = useRef(null);
   const voiceRef = useRef(null);
 
-  const room = game.room || {};
-  const ownerId = game.ownerId || room.ownerId;
   const isOwner = !!ownerId && ownerId === game.playerId;
+  // 准备进度的人数口径必须与服务端一致：服务端 humanCount = allPlayers.filter(p => !p.isNPC && p.connected)
+  // （AI 补位的角色同时带 isNPC+isAI，所以 !isNPC 正好把真人之外的都排掉）。
+  // 口径不一致会出现"所有人都准备了但进度条永远差一个"。
+  const readyTotal = players.filter((p) => p && !p.isNPC && p.connected).length;
 
   function normalizeChat(m) {
     return {
@@ -62,10 +94,16 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     if (game.phase) setPhase(game.phase);
     // myCharacter 只做兜底填充：一旦拿到含 isMurderer 的更完整版本就不再被覆盖
     if (game.myCharacter) setMyChar((cur) => cur || game.myCharacter);
+    // 房主点「开始游戏」时，服务端把开场叙述放在 game_started 的 d.narrative 上，
+    // PlayerApp 存成了 game._narrative —— 但之前**没有任何地方读它**，于是按开始的那个人
+    // 进阅读阶段时看不到 DM 的开场白（其他人靠 narrative_ready 事件能收到）。
+    // 这里兜底播种一次，不覆盖后续 narrative_ready 推来的完整版本。
+    if (game._narrative) setNarrative((cur) => cur || game._narrative);
 
     if (!seededRef.current) {
       if (Array.isArray(game.chatMessages)) setChats(game.chatMessages.map(normalizeChat));
       if (Array.isArray(game.myClues)) setMyClues(game.myClues);
+      if (Array.isArray(game.whispers)) setWhispers(game.whispers);
       seededRef.current = true;
     }
   }, [game]);
@@ -90,8 +128,17 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         setChats((c) => [...c, normalizeChat(d)]);
         setTimeout(() => chatBoxRef.current?.scrollTo(0, 99999), 60);
       }),
+      // 线索现在一搜到就由服务端自动公开，所以这个事件是**广播**的：全场都会收到。
+      // 不再有"私有/公开/单独给某人"的概念，因此也去掉了 clue_revealed / clue_shared
+      // 两个监听器（服务端的可见性机制仍在，只是策略固定为"发现即公开"）。
       onSocket("clue_received", (d) => {
-        if (d.clue) setMyClues((c) => (c.some((x) => x.id && x.id === d.clue.id) ? c : [...c, d.clue]));
+        if (!d.clue) return;
+        setMyClues((c) => (c.some((x) => x.id && x.id === d.clue.id)
+          ? c
+          : [...c, { ...d.clue, visibility: "public", foundByName: d.foundBy }]));
+      }),
+      onSocket("whisper_message", (d) => {
+        setWhispers((w) => [...w, d]);
       }),
       onSocket("character_selected", (d) => {
         if (d.character) setMyChar({ ...d.character, isMurderer: !!d.isMurderer });
@@ -120,6 +167,12 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       // 服务端已经把 AI 的回答写成了持久化的 chat_message，若此处再追加一次，
       // 同一个回答会显示两遍（和 intro_statement 是同一类重复）。
       onSocket("truth_revealed", (d) => setNarrative(d.text || JSON.stringify(d).substring(0, 500))),
+      // 搜证结果：空手而归/次数用尽都要明确告诉玩家，否则"点了没反应"会被当成卡了
+      onSocket("investigate_failed", (d) => {
+        setNotice(d?.message || "搜证失败");
+        loadSearchInfo(); // 次数已消耗，刷新剩余次数
+      }),
+      onSocket("investigate_ok", () => loadSearchInfo()),
       // 注意：这里刻意不监听 intro_statement。
       // 服务端已经为自我介绍写入了一条持久化的 chat_message（带 📣 前缀），
       // 若此处再把它追加进聊天列表，同一次发言会显示两遍。
@@ -170,6 +223,11 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     return () => { cancelled = true; };
   }, [myChar?.name, room.roomCode]);
 
+  // 进入搜证阶段时拉取地点列表与剩余次数
+  useEffect(() => {
+    if (phase === "round1" || phase === "round2") loadSearchInfo();
+  }, [phase, loadSearchInfo]);
+
   // 复盘数据：后端 /api/player/review/:code 已提供凶手/真相/投票分布/线索，此前前端从未调用
   useEffect(() => {
     if (!room.roomCode) return;
@@ -179,6 +237,17 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       .then(setReview)
       .catch(() => {});
   }, [phase, room.roomCode, review]);
+
+  // ===== 个性化复盘：按需生成 =====
+  // 刻意不做"进入 truth_reveal 就自动拉取"：那一刻全桌人同时到达，
+  // 一局 6 人会瞬间打出 6 个并发 LLM 调用。改成点按钮触发，生成后由 Redis 缓存复用。
+  const loadMyReview = useCallback(() => {
+    if (!room.roomCode) return;
+    setMyReviewState("loading");
+    apiJson(`/api/player/review/${encodeURIComponent(room.roomCode)}/me`)
+      .then((d) => { setMyReview(d); setMyReviewState("idle"); })
+      .catch(() => setMyReviewState("error"));
+  }, [room.roomCode]);
 
   // ===== 语音聊天生命周期 =====
   useEffect(() => {
@@ -276,10 +345,14 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     if (!content.trim()) return;
     emit("chat", { content });
   }
-  function investigate(query) { emit("investigate", { query }); }
+  // 搜证 = 随机翻一条。不传 location 表示"从本轮剩下的线索里随机给一条"（服务端实现）。
+  // location 参数保留：AI 路径与需要按地点搜的场景仍然可用。
+  function investigate(location) {
+    emit("investigate", location ? { location } : {});
+  }
   function askNpc(npcName, q) { emit("ask_npc", { npcName, question: q }); }
   function askAiPlayer(characterName, q) { emit("ask_ai_player", { characterName, question: q }); }
-  function submitIntro(text) { emit("intro_statement", { content: text }); }
+  function sendWhisper(targetPlayerId, content) { emit("whisper", { targetPlayerId, content }); }
   function vote(target) { emit("vote", { targetCharacterName: target }); }
   function doReady() {
     if (iAmReady) return;
@@ -294,75 +367,132 @@ export default function GameView({ game, socket, user, onLeave, online = true })
     const canStart = humanPlayers.length >= 1 && assignedCount >= humanPlayers.length;
     const parsed = game.scriptSummary || {};
 
+    const settingText = [parsed.setting?.era, parsed.setting?.location].filter(Boolean).join(" ｜ ");
+    const aiCount = players.filter((p) => p.isAI).length;
     return (
-      <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+      <div>
         <header className="app-header">
-          <h1>房间 {room.roomCode}</h1>
-          {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <h1><span className="brand">剧本杀 · 房间 {room.roomCode}</span></h1>
+          <span className="phase-indicator phase-lobby">等待开局</span>
+          {!online && <span className="tag tag-danger">连接已断开，正在重连…</span>}
+          <div className="header-right">
             <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} processingOn={processingOn} onToggleProcessing={toggleProcessing} />
             <span className="user-info">{user.username || ""}</span>
             <button className="btn btn-outline btn-sm" onClick={onLeave}>离开房间</button>
           </div>
         </header>
-        <div className="main-content" style={{ padding: 20, maxWidth: 900, margin: "0 auto" }}>
+
+        <div className="main-content" style={{ maxWidth: 1040 }}>
           {notice && (
-            <div className="alert alert-danger" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 10 }}>
-              <span>{notice}</span>
+            <div className="alert alert-danger alert-row" style={{ marginBottom: 12 }}>
+              <span className="alert-body">{notice}</span>
               <button className="btn btn-outline btn-xs" onClick={() => setNotice("")}>关闭</button>
             </div>
           )}
           {voiceError && (
-            <div className="alert alert-danger" style={{ marginBottom: 12, display: "flex", justifyContent: "space-between", gap: 10 }}>
-              <span>语音：{voiceError}</span>
+            <div className="alert alert-danger alert-row" style={{ marginBottom: 12 }}>
+              <span className="alert-body">语音：{voiceError}</span>
               <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
             </div>
           )}
           <InsecureVoiceNotice />
-          <div className="panel" style={{ padding: 16 }}>
-            <div className="text-center" style={{ margin: "10px 0 20px" }}>
-              <h3 style={{ margin: 0 }}>{parsed.title || "剧本杀"}</h3>
-              <p className="text-sm text-dim">{parsed.setting?.era || ""} | {parsed.setting?.location || ""}</p>
-              <p className="text-xs" style={{ color: "var(--gold)" }}>
-                {humanPlayers.length}/{game.totalSlots || "?"}人 | {assignedCount}人已选角色
-                {players.filter((p) => p.isAI).length > 0 ? ` | 🤖 AI补位 ${players.filter((p) => p.isAI).length}人` : ""}
-              </p>
+
+          {/* 房间头部：房号要最大最好找（玩家此刻最需要把它发给朋友），剧本名次之，
+              场景描述再次之。改造前这三样挤在同一段小字里，房号只有 13px。 */}
+          <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            <div style={{ padding: "26px 24px 22px", textAlign: "center", borderBottom: settingText ? "1px solid var(--ink-650)" : "none" }}>
+              <div className="kicker" style={{ justifyContent: "center", marginBottom: 14 }}>
+                <span style={{ flex: "0 0 auto" }}>房间号</span>
+              </div>
+              <div className="room-code-lg">{room.roomCode}</div>
+              <h2 style={{ margin: "18px 0 0", fontFamily: "var(--font-serif)", letterSpacing: ".14em", color: "var(--text)" }}>
+                {parsed.title || "剧本杀"}
+              </h2>
+              <div style={{ display: "flex", justifyContent: "center", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+                <span className="tag tag-admin">{humanPlayers.length}/{game.totalSlots || "?"} 人</span>
+                <span className="tag">{assignedCount} 人已选角色</span>
+                {aiCount > 0 && <span className="tag tag-npc">AI 补位 {aiCount} 人</span>}
+              </div>
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 14 }}>
-              <div>
-                <h4>玩家列表</h4>
-                {players.map((p) => (
-                  <div key={p.playerId || p.playerName} className="card card-static" style={{ marginBottom: 4, padding: 10 }}>
-                    {/* 皇冠由 ownerId 计算：getPlayers() 不带 isOwner，room_updated 后原写法会丢 */
-                    }{p.isAI ? "🤖 " : (p.playerId && p.playerId === ownerId) ? "👑 " : ""}{p.playerName}
-                    {p.characterName ? ` → ${p.characterName}` : " (未选角色)"}
-                    {!p.isAI && !p.isNPC && <VoiceTag playerId={p.playerId} voice={remoteVoice} speaking={speaking} />}
+            {settingText && (
+              <div style={{ padding: "20px 24px" }}>
+                <ScenarioText text={settingText} />
+              </div>
+            )}
+          </div>
+
+          <div className="auto-cols">
+            {/* 玩家名册 */}
+            <div className="panel">
+              <div className="panel-head">
+                <strong>玩家名册</strong>
+                <span className="text-xs text-dim">{players.length} 人入座</span>
+              </div>
+              <div className="roster stagger">
+                {players.map((p, i) => {
+                  // 皇冠由 ownerId 计算：getPlayers() 不带 isOwner，room_updated 后原写法会丢
+                  const isOwnerRow = !!p.playerId && p.playerId === ownerId;
+                  return (
+                    <div
+                      key={p.playerId || p.playerName}
+                      className={`roster-row${p.isAI ? " is-ai" : ""}${isOwnerRow ? " is-me" : ""}`}
+                    >
+                      <span className="roster-seat">{i + 1}</span>
+                      <span className="roster-name">
+                        {isOwnerRow && <span title="房主">👑 </span>}
+                        {p.playerName}
+                      </span>
+                      {p.characterName
+                        ? <span className="roster-char">→ {p.characterName}</span>
+                        : <span className="text-xs text-muted">未选角色</span>}
+                      <span className="roster-role">
+                        {p.isAI && <span className="tag tag-npc">AI</span>}
+                        {!p.isAI && !p.isNPC && <VoiceTag playerId={p.playerId} voice={remoteVoice} speaking={speaking} />}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 角色选择 */}
+            <div className="panel">
+              <div className="panel-head">
+                <strong>选择你的角色</strong>
+                <span className="text-xs text-dim">选完等房主开局</span>
+              </div>
+              {availChars.length === 0
+                ? <div className="state-empty">暂无可选角色</div>
+                : (
+                  <div className="char-grid stagger">
+                    {availChars.map((c) => (
+                      <button
+                        key={c}
+                        className="char-pick"
+                        disabled={c === myChar?.name}
+                        onClick={() => selectChar(c)}
+                      >
+                        {c}
+                        <span className="char-sub">{c === myChar?.name ? "已选择" : "点击选择"}</span>
+                      </button>
+                    ))}
                   </div>
-                ))}
-              </div>
-              <div>
-                <h4>选择你的角色</h4>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                  {availChars.map((c) => (
-                    <button key={c} className="btn btn-outline btn-auto" style={{ margin: 2 }} onClick={() => selectChar(c)}>
-                      {c}
-                    </button>
-                  ))}
-                  {availChars.length === 0 && <span className="text-dim">暂无可选角色</span>}
-                </div>
-              </div>
-            </div>
+                )}
 
-            <div className="text-center" style={{ marginTop: 20 }}>
-              {isOwner ? (
-                <button className="btn btn-success btn-auto" disabled={!canStart} onClick={startGame}
-                  style={canStart ? {} : { opacity: 0.5 }}>
-                  {canStart ? "开始游戏（AI DM主持）" : humanPlayers.length < 1 ? "等待玩家加入..." : "等待所有人选择角色..."}
-                </button>
-              ) : (
-                <span className="text-sm text-dim">等待房主开始游戏...</span>
-              )}
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--ink-650)", textAlign: "center" }}>
+                {isOwner ? (
+                  <button className="btn btn-primary btn-auto" disabled={!canStart} onClick={startGame}>
+                    {canStart
+                      ? "开始游戏（AI DM 主持）"
+                      : humanPlayers.length < 1
+                        ? "等待玩家加入…"
+                        : "等待所有人选择角色…"}
+                  </button>
+                ) : (
+                  <span className="text-sm text-dim">等待房主开始游戏…</span>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -371,37 +501,69 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   }
 
   // 游戏进行中
-  const showPhaseBar = ["reading", "intro", "round1", "round2"].includes(phase);
+  //
+  // ⚠ voting 必须在这里面。改造前是 ["reading","intro","round1","round2"]，
+  //   而 VotingView 自身没有任何推进入口 —— 服务端 socket 的 ready 处理明确允许
+  //   voting 阶段（只挡 truth_reveal / finished / lobby），但前端从不渲染那个按钮，
+  //   于是全场投完票之后**没有任何办法进入真相复盘**，只能干等 10 分钟的兜底超时。
+  //   实测复现：投票 6/6 后卡在投票页 150 秒无变化。
+  const showPhaseBar = ["reading", "intro", "round1", "round2", "voting"].includes(phase);
 
   return (
-    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-      <header className="app-header" style={{ flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 18 }}>{room.roomCode} · {phaseLabel(phase)}</h1>
-        {!online && <span className="tag tag-danger" style={{ marginLeft: 10 }}>连接已断开，正在重连…</span>}
-        <div style={{ display: "flex", gap: 8, marginLeft: "auto", alignItems: "center", flexWrap: "wrap" }}>
+    <div>
+      {/* 对局背景：一张极暗的场景图（本地 ComfyUI 生成），只从面板之间的缝隙里透出来。
+          刻意不放在面板之下当"内容底" —— 这一页是 19 条发言 + 线索列表的高密度界面，
+          背景一旦有对比度就会直接吃掉正文的可读性。 */}
+      <div className="game-bg" aria-hidden="true" />
+      <header className="app-header">
+        {/* 标题用剧本名 —— 玩家关心的是"我在玩哪个本"，房号是邀请用的次要信息。
+            房号仍保留成小号灰字（没有它就没法在对局中把房号发给朋友）。 */}
+        <h1>
+          <span className="brand">{game.scriptSummary?.title || "剧本杀"}</span>
+          {room.roomCode ? <span className="text-dim" style={{ fontSize: 12, fontWeight: 400, letterSpacing: 0 }}>房间 {room.roomCode}</span> : null}
+        </h1>
+        <span className={`phase-indicator phase-${phaseClass(phase)}`}>{phaseLabel(phase)}</span>
+        {!online && <span className="tag tag-danger">连接已断开，正在重连…</span>}
+        <div className="header-right">
+          <button
+            className={`btn btn-sm ${showScript ? "btn-primary" : "btn-outline"}`}
+            onClick={() => setShowScript((v) => !v)}
+            title="随时翻看你自己的角色剧本（含只有你能看到的「你的秘密」）。别人问到细节时可以边看讨论边查。"
+          >
+            📖 我的剧本
+          </button>
           <button className="btn btn-outline btn-sm" onClick={() => setShowNotes((v) => !v)} title="私人便签：记录线索、疑点、时间线。只有你自己能看到">
             📝 便签{notes.length > 0 ? ` ${notes.length}` : ""}
           </button>
           <VoiceBar micOn={micOn} listenOn={listenOn} peerCount={voicePeers} onMic={toggleMic} onListen={toggleListen} getDiag={getVoiceDiag} processingOn={processingOn} onToggleProcessing={toggleProcessing} />
-          {myChar && <span className="tag" style={{ color: "var(--gold)" }}>{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
+          {myChar && <span className="tag tag-admin">{myChar.name}{myChar.isMurderer ? " 🔪" : ""}</span>}
           <button className="btn btn-outline btn-sm" onClick={onLeave}>退出</button>
         </div>
       </header>
 
-      <div className="main-content" style={{ padding: 14, maxWidth: 1200, margin: "0 auto" }}>
+      <div className="main-content game-surface" style={{ maxWidth: 1320 }}>
+        {/* 阶段轨道：玩家在任何时刻都能一眼看到"走到哪一步、还剩几步" */}
+        <PhaseRail phase={phase} />
+
         {notice && (
-          <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
-            <span>{notice}</span>
+          <div className="alert alert-danger alert-row" style={{ marginBottom: 10 }}>
+            <span className="alert-body">{notice}</span>
             <button className="btn btn-outline btn-xs" onClick={() => setNotice("")}>关闭</button>
           </div>
         )}
         {voiceError && (
-          <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10 }}>
-            <span>语音：{voiceError}</span>
+          <div className="alert alert-danger alert-row" style={{ marginBottom: 10 }}>
+            <span className="alert-body">语音：{voiceError}</span>
             <button className="btn btn-outline btn-xs" onClick={() => setVoiceError("")}>关闭</button>
           </div>
         )}
         <InsecureVoiceNotice />
+
+        {/* 我的剧本抽屉：整个对局期间（搜证 / 讨论 / 投票 / 复盘）都在，
+            不只在阅读阶段。 */}
+        {showScript && (
+          <ScriptDrawer script={myScript} char={myChar} onClose={() => setShowScript(false)} />
+        )}
 
         {showNotes && (
           <NotesPanel
@@ -414,22 +576,27 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         )}
 
         {/* 阶段推进条：原先只有 ReadingView 有"准备就绪"按钮，
-            intro/round1/round2 完全没有推进入口，只能干等 10 分钟超时 */}
+            intro/round1/round2/voting 完全没有推进入口，只能干等 10 分钟超时 */}
         {showPhaseBar && (
-          <PhaseBar readyInfo={readyInfo} iAmReady={iAmReady} onReady={doReady} />
+          <PhaseBar readyInfo={readyInfo} readyTotal={readyTotal} iAmReady={iAmReady} onReady={doReady} phase={phase} />
         )}
 
+        {/* DM 叙述。改造前这里直接把字符串塞进 div，模型输出的 **加粗** 会原样打出来
+            （真相复盘里满屏 "**（详细过程）"）。统一走 ScriptBody 渲染 markdown。 */}
         {narrative && (
-          <div className="panel" style={{ padding: 12, marginBottom: 10, borderLeft: "3px solid var(--gold)" }}>
-            <div style={{ fontSize: 14, lineHeight: 1.6 }}>{narrative}</div>
+          <div className="panel narrative-panel" style={{ padding: "16px 18px", marginBottom: 14, borderLeft: "2px solid var(--brass)" }}>
+            <div className="kicker" style={{ marginBottom: 10 }}><span style={{ flex: "0 0 auto" }}>DM 叙述</span></div>
+            <div style={{ fontSize: 14, lineHeight: 1.95, fontFamily: "var(--font-serif)", color: "var(--text)" }}>
+              <ScriptBody text={narrative} />
+            </div>
           </div>
         )}
 
-        {phase === "reading" && (
+        {/* 自我介绍阶段已取消：玩家不会认真填那个表单，自我介绍本来就该在讨论阶段由各人自己开口。
+            仍保留 intro 分支是为了兼容部署瞬间还停在旧阶段的房间 ——
+            没有它这些房间会渲染成一片空白，只能干等超时。 */}
+        {(phase === "reading" || phase === "intro") && (
           <ReadingView script={myScript} char={myChar} iAmReady={iAmReady} onReady={doReady} />
-        )}
-        {phase === "intro" && (
-          <IntroView onSubmit={submitIntro} />
         )}
         {(phase === "round1" || phase === "round2") && (
           <CombinedRoundView
@@ -440,6 +607,9 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             chatRef={chatBoxRef}
             onSendChat={sendChat}
             onInvestigate={investigate}
+            searchInfo={searchInfo}
+            whispers={whispers}
+            onWhisper={sendWhisper}
             onAskNpc={askNpc}
             onAskAi={askAiPlayer}
             players={players}
@@ -460,9 +630,51 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           />
         )}
         {(phase === "truth_reveal" || phase === "finished") && (
-          <TruthView narrative={narrative} review={review} finished={phase === "finished"} />
+          <TruthView
+            narrative={narrative}
+            review={review}
+            finished={phase === "finished"}
+            myReview={myReview}
+            myReviewState={myReviewState}
+            onLoadMyReview={loadMyReview}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+/** 阶段 → CSS 类后缀。审问/搜证走 amber，讨论走铜绿，投票走封蜡红。 */
+function phaseClass(p) {
+  return {
+    lobby: "lobby", reading: "reading", intro: "intro",
+    round1: "investigation", round2: "investigation",
+    voting: "voting", truth_reveal: "discussion", finished: "done",
+  }[p] || "lobby";
+}
+
+const PHASE_STEPS = [
+  { key: "reading", label: "读本" },
+  { key: "round1", label: "一轮搜证" },
+  { key: "round2", label: "二轮搜证" },
+  { key: "voting", label: "投票" },
+  { key: "truth_reveal", label: "复盘" },
+];
+
+/** 阶段轨道：当前阶段高亮，之前的置灰为"已走过"。
+ *  玩家在整个对局里最常问的两个问题是"现在干嘛"和"还有多久"，这个条同时回答。 */
+function PhaseRail({ phase }) {
+  const norm = phase === "intro" ? "reading" : phase === "finished" ? "truth_reveal" : phase;
+  const idx = PHASE_STEPS.findIndex((s) => s.key === norm);
+  if (idx < 0) return null;
+  return (
+    <div className="phase-rail" style={{ marginBottom: 14 }}>
+      {PHASE_STEPS.map((s, i) => (
+        <React.Fragment key={s.key}>
+          {i > 0 && <span className="rail-sep">›</span>}
+          <span className={`rail-step ${i < idx ? "done" : i === idx ? "current" : ""}`}>{s.label}</span>
+        </React.Fragment>
+      ))}
     </div>
   );
 }
@@ -550,34 +762,30 @@ function VoiceBar({ micOn, listenOn, peerCount, onMic, onListen, getDiag, proces
 
 /** 诊断明细：直接展示每一步的真实状态，用于区分"没在通话"和"在通话但没声音" */
 function VoiceDiagPanel({ diag }) {
-  const box = { fontSize: 11, lineHeight: 1.7, background: "rgba(0,0,0,.25)", border: "1px solid rgba(255,255,255,.12)", borderRadius: 6, padding: "8px 10px", maxWidth: 640 };
-  const mono = { fontFamily: "ui-monospace, Consolas, monospace" };
   const yn = (b) => (b ? "是" : "否");
-  if (!diag) return <div style={box}>诊断信息读取中…</div>;
+  if (!diag) return <div className="voice-diag">诊断信息读取中…</div>;
   return (
-    <div style={box}>
-      <div style={{ marginBottom: 4 }}>
-        <a href="/voice-check.html" target="_blank" rel="noreferrer" style={{ color: "var(--gold)" }}>
-          打开语音自检页
-        </a>
+    <div className="voice-diag">
+      <div className="voice-diag-head">
+        <a href="/voice-check.html" target="_blank" rel="noreferrer">打开语音自检页</a>
         <span className="text-xs text-dim">（测麦克风、扬声器、WebRTC 通路是否可用）</span>
       </div>
-      <div style={mono}>
+      <div className="voice-diag-mono">
         本机：已加入={yn(diag.joined)} 麦克风={yn(diag.micOn)} 收听={yn(diag.listenOn)}
         {" | "}采集流={yn(diag.localStream)}
         {diag.localTracks.length > 0 && diag.localTracks.map((t, i) => ` [轨${i}: ${t.readyState} enabled=${yn(t.enabled)} muted=${yn(t.muted)}]`).join("")}
         {" | "}音频上下文={diag.audioCtx}
       </div>
       {diag.peers.length === 0
-        ? <div style={{ marginTop: 4 }}>还没有其他玩家加入语音。</div>
+        ? <div className="voice-diag-empty">还没有其他玩家加入语音。</div>
         : diag.peers.map((p) => {
             // 判定这条连接是否"应该能听到声音"
             const healthy = p.connectionState === "connected" && p.gotRemoteTrack && !p.playbackMuted && !p.playbackPaused;
             return (
-              <div key={p.playerId} style={{ marginTop: 4 }}>
-                <span style={{ color: healthy ? "#4caf50" : "#ffb300" }}>{healthy ? "●" : "○"}</span>{" "}
+              <div key={p.playerId} className="voice-peer">
+                <span className={`voice-peer-dot ${healthy ? "is-ok" : "is-warn"}`} aria-hidden="true">{healthy ? "●" : "○"}</span>{" "}
                 <b>{p.playerName}</b>{" "}
-                <span style={mono}>
+                <span className="voice-diag-mono">
                   连接={p.connectionState} ICE={p.iceConnectionState} 信令={p.signalingState}
                   {" | "}收到远端音轨={yn(p.gotRemoteTrack)}
                   {p.gotRemoteTrack && ` (muted=${p.remoteTrackMuted} ${p.remoteTrackState})`}
@@ -585,12 +793,12 @@ function VoiceDiagPanel({ diag }) {
                   {p.pendingIce > 0 && ` | 待处理候选=${p.pendingIce}`}
                 </span>
                 {p.opus && (
-                  <div className="text-xs text-dim" style={{ paddingLeft: 14, ...mono, wordBreak: "break-all" }}>
+                  <div className="voice-diag-sub is-mono">
                     编码：{p.opus.fmtp}　发送端上限={p.opus.senderBitrate}
                   </div>
                 )}
                 {!healthy && (
-                  <div className="text-xs text-dim" style={{ paddingLeft: 14 }}>
+                  <div className="voice-diag-sub">
                     {p.connectionState !== "connected" && "→ 连接没建立：等几秒，或让对方也点一次语音按钮重新协商。 "}
                     {p.connectionState === "connected" && !p.gotRemoteTrack && "→ 连上了但没收到音轨：对方可能还没开麦克风。 "}
                     {p.gotRemoteTrack && p.playbackMuted && "→ 你已经收到对方的音轨，但本地播放被自己关掉了（检查「收听」开关）。 "}
@@ -612,7 +820,7 @@ function InsecureVoiceNotice() {
   const [dismissed, setDismissed] = React.useState(false);
   if (dismissed || micSupported()) return null;
   return (
-    <div className="alert alert-danger" style={{ marginBottom: 10, display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+    <div className="alert alert-danger alert-row voice-notice" style={{ marginBottom: 10 }}>
       <span className="text-xs" style={{ lineHeight: 1.6 }}>
         <b>当前页面无法使用麦克风。</b>
         浏览器只允许在安全页面（HTTPS 或 <code>http://localhost</code>）申请麦克风权限，
@@ -649,12 +857,6 @@ function VoiceTag({ playerId, voice, speaking }) {
  *  内容存在服务端并只按登录用户名存取，别人（包括其他玩家和 AI）看不到。
  *  设计上刻意保持简单：多条便签 + 标题 + 正文，输入即自动保存，不需要"保存"按钮。 */
 function NotesPanel({ notes, onChange, onClose, saving, myClues }) {
-  const box = {
-    background: "var(--panel, #1c1f25)", border: "1px solid var(--border, #2b2f38)",
-    borderRadius: 8, padding: 12, marginBottom: 10,
-  };
-  const inputStyle = { width: "100%", marginBottom: 6 };
-
   function addNote(title = "", content = "") {
     const id = "n" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     onChange([...notes, { id, title, content }]);
@@ -680,12 +882,12 @@ function NotesPanel({ notes, onChange, onClose, saving, myClues }) {
   const status = saving === "saving" ? "保存中…" : saving === "saved" ? "已保存" : saving === "error" ? "保存失败（内容仍在本地）" : "";
 
   return (
-    <div style={box}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-        <strong style={{ color: "var(--gold)" }}>📝 我的便签</strong>
+    <div className="panel" style={{ marginBottom: 14 }}>
+      <div className="panel-head">
+        <strong>📝 我的便签</strong>
         <span className="text-xs text-dim">只有你自己能看到</span>
-        <span className="text-xs" style={{ color: saving === "error" ? "var(--danger, #e57373)" : "var(--dim)" }}>{status}</span>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+        <span className="text-xs" style={{ color: saving === "error" ? "var(--wax-bright)" : "var(--text-muted)" }}>{status}</span>
+        <div className="panel-actions">
           <button className="btn btn-outline btn-xs" onClick={() => addNote()}>＋ 新建</button>
           <button className="btn btn-outline btn-xs" onClick={importClues}>导入我的线索</button>
           <button className="btn btn-outline btn-xs" onClick={onClose}>收起</button>
@@ -693,27 +895,28 @@ function NotesPanel({ notes, onChange, onClose, saving, myClues }) {
       </div>
 
       {notes.length === 0 && (
-        <div className="text-xs text-dim">
+        <div className="text-xs text-muted" style={{ lineHeight: 1.9 }}>
           还没有便签。可以记：谁的时间线有矛盾、哪条线索指向谁、接下来要问谁什么。
           打字会自动保存，刷新或断线重连都不会丢。
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 8 }}>
+      <div className="notes-grid">
         {notes.map((n) => (
-          <div key={n.id} className="card card-static" style={{ padding: 8 }}>
-            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+          <div key={n.id} className="note-card">
+            <div className="note-head">
               <input
-                className="form-input" style={inputStyle}
+                className="form-input form-input-sm"
                 placeholder="标题（如「张三的时间线」）"
+                aria-label="便签标题"
                 value={n.title || ""}
                 onChange={(e) => patch(n.id, "title", e.target.value)}
               />
-              <button className="btn btn-outline btn-xs" onClick={() => remove(n.id)} title="删除这条便签">✕</button>
+              <button className="btn btn-outline btn-xs btn-auto" onClick={() => remove(n.id)} title="删除这条便签">✕</button>
             </div>
             <textarea
               className="form-input" rows={6}
-              style={{ width: "100%", resize: "vertical", fontSize: 12, lineHeight: 1.6 }}
+              aria-label="便签内容"
               placeholder="记录内容…（自动保存）"
               value={n.content || ""}
               onChange={(e) => patch(n.id, "content", e.target.value)}
@@ -732,17 +935,37 @@ function phaseLabel(p) {
   }[p] || p;
 }
 
+/** 场景描述。后端存的是整段散文（年代 + 地点连在一起），
+ *  原来直接铺在面板里：1680px 屏宽下每行 90+ 字，一屏 8 行密集小字，非常难读。
+ *  这里限制到 68ch 行宽、加首行缩进，并把"｜"分隔的两段拆成两段。 */
+function ScenarioText({ text }) {
+  const parts = String(text || "").split(/\s*｜\s*|\n+/).map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+  return (
+    <div className="scenario-text">
+      {parts.map((p, i) => <p key={i}>{p}</p>)}
+    </div>
+  );
+}
+
 // ===== 阶段推进条（全员共识） =====
-function PhaseBar({ readyInfo, iAmReady, onReady }) {
+function PhaseBar({ readyInfo, readyTotal = 0, iAmReady, onReady, phase }) {
   const counting = readyInfo.countdown !== null;
   // "只差一人"的倒计时不能锁住准备按钮：服务端支持在倒计时途中升级成 10 秒全员倒计时，
   // 若前端在这里把按钮置灰，最后一个人就只能干看着 60 秒走完。
   const partialWait = counting && readyInfo.mode === "partial";
   const canReady = !iAmReady && (!counting || partialWait);
+  // 服务端只在**有人按下准备之后**才带上权威的 totalCount；
+  // 在那之前 readyInfo.total 是 0，分母没得显示，界面只能退化成 "0/?"。
+  // 这里用本地按同一口径（只算在线真人）算出的人数补上，让人一进来就有确定的分母。
+  const total = readyInfo.total || readyTotal;
+  // 投票阶段这一步之后是复盘，写"进入下一阶段"太含糊 —— 玩家在投票页最需要确认的是
+  // "我投完这一票，什么时候能看到真相"。
+  const readyLabel = phase === "voting" ? "提交并查看真相" : "进入下一阶段";
   return (
-    <div className="panel" style={{ padding: "10px 14px", marginBottom: 10, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+    <div className="panel panel-flat" style={{ padding: "10px 16px", marginBottom: 14, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
       <span className="text-sm">
-        已准备 <strong style={{ color: "var(--gold)" }}>{readyInfo.count}/{readyInfo.total || "?"}</strong>
+        已准备 <strong style={{ color: "var(--brass)" }}>{readyInfo.count}/{total || 0}</strong>
         {readyInfo.last && !counting ? <span className="text-dim">（{readyInfo.last} 刚准备好）</span> : null}
       </span>
       {counting && (
@@ -750,22 +973,22 @@ function PhaseBar({ readyInfo, iAmReady, onReady }) {
           {readyInfo.reason || (readyInfo.force ? "等待超时" : "全员就绪")}，{readyInfo.countdown} 秒后自动进入下一阶段…
         </span>
       )}
-      {!counting && readyInfo.total > 0 && readyInfo.count >= readyInfo.total && (
+      {!counting && total > 0 && readyInfo.count >= total && (
         <span className="tag tag-success">全员已准备</span>
       )}
       {partialWait && !iAmReady && (
-        <span className="text-xs" style={{ color: "var(--warn, #ffb300)" }}>
+        <span className="text-xs" style={{ color: "var(--amber-bright)" }}>
           还没准备的话现在也来得及：人一齐就会换成短倒计时
         </span>
       )}
-      {!counting && !partialWait && readyInfo.total > 1 && readyInfo.count === readyInfo.total - 1 && (
-        <span className="text-xs" style={{ color: "var(--warn, #ffb300)" }}>
+      {!counting && !partialWait && total > 1 && readyInfo.count === total - 1 && (
+        <span className="text-xs" style={{ color: "var(--amber-bright)" }}>
           还差 1 人，再等一会儿会自动推进
         </span>
       )}
       <div style={{ marginLeft: "auto" }}>
-        <button className="btn btn-success btn-sm" disabled={!canReady} onClick={onReady} style={canReady ? {} : { opacity: 0.55 }}>
-          {iAmReady ? "已准备，等待其他人…" : counting && !partialWait ? "即将推进…" : "进入下一阶段"}
+        <button className="btn btn-primary btn-sm btn-auto" disabled={!canReady} onClick={onReady}>
+          {iAmReady ? "已准备，等待其他人…" : counting && !partialWait ? "即将推进…" : readyLabel}
         </button>
       </div>
     </div>
@@ -784,31 +1007,26 @@ function ScriptBody({ text }) {
     <>
       {lines.map((line, i) => {
         const c = classifyLine(line);
-        if (c.kind === "blank") return <div key={i} style={{ height: 6 }} />;
+        if (c.kind === "blank") return <div key={i} className="md-blank" />;
         if (c.kind === "heading") {
-          const size = c.level <= 2 ? 17 : c.level === 3 ? 16 : 15;
-          return (
-            <div key={i} style={{ fontSize: size, fontWeight: 700, color: "var(--gold)", margin: "10px 0 6px" }}>
-              {c.text}
-            </div>
-          );
+          // 标题色走 CSS 变量而不是内联色值：同一个渲染器既用在墨底（DM 叙述）上，
+          // 也用在纸面（剧本正文 / 真相）上，而黄铜压米色纸的对比度明显不够。
+          // 让 surface 决定颜色，渲染器只负责结构。
+          const lvl = Math.min(4, Math.max(1, c.level));
+          return <div key={i} className={`md-h md-l${lvl}`}>{c.text}</div>;
         }
         if (c.kind === "subheading") {
-          return (
-            <div key={i} style={{ fontSize: 15, fontWeight: 700, margin: "12px 0 4px", color: "var(--gold-light, #e8d9a0)" }}>
-              {c.text}
-            </div>
-          );
+          return <div key={i} className="md-sub">{c.text}</div>;
         }
         if (c.kind === "list" || c.kind === "ordered") {
           return (
-            <div key={i} style={{ display: "flex", gap: 6, margin: "3px 0 3px 4px" }}>
-              <span style={{ color: "var(--gold)", flexShrink: 0 }}>{c.kind === "ordered" ? c.index + "." : "•"}</span>
+            <div key={i} className="md-list">
+              <span className="md-marker">{c.kind === "ordered" ? c.index + "." : "•"}</span>
               <span>{inlineNodes(c.text)}</span>
             </div>
           );
         }
-        return <p key={i} style={{ margin: "6px 0" }}>{inlineNodes(c.text)}</p>;
+        return <p key={i} className="md-p">{inlineNodes(c.text)}</p>;
       })}
     </>
   );
@@ -817,8 +1035,95 @@ function ScriptBody({ text }) {
 function inlineNodes(text) {
   return parseInline(text).map((seg, i) =>
     seg.t === "bold"
-      ? <strong key={i} style={{ color: "var(--gold-light, #e8d9a0)" }}>{seg.v}</strong>
+      ? <strong key={i} className="md-strong">{seg.v}</strong>
       : <React.Fragment key={i}>{seg.v}</React.Fragment>
+  );
+}
+
+/** 剧本正文归一：服务端曾经把角色 script 直接返回成对象，拼进模板串就是满屏 "[object Object]"。
+ *  阅读视图和「我的剧本」抽屉共用同一道兜底，避免两处口径不一致。 */
+function normalizeScript(script) {
+  if (typeof script === "string") return script;
+  if (script && typeof script === "object") return script.fullScript || script.story || script.playerScript || "";
+  return "";
+}
+
+/** 按标题把小节切出来，供抽屉顶部的跳转条使用。
+ *  一局剧本四五千字，光靠滚动找一个名字很慢 —— 别人问到某人某事时，
+ *  先点小节名跳过去，比从头翻快得多。标题的判定复用 classifyLine。 */
+function splitSections(text) {
+  const lines = String(text || "").split(/\r?\n/);
+  const out = [];
+  let cur = { title: "", lines: [] };
+  for (const line of lines) {
+    const c = classifyLine(line);
+    if (c.kind === "heading" || c.kind === "subheading") {
+      if (cur.lines.some((l) => l.trim())) out.push(cur);
+      cur = { title: c.text, lines: [line] };
+    } else {
+      cur.lines.push(line);
+    }
+  }
+  if (cur.title || cur.lines.some((l) => l.trim())) out.push(cur);
+  return out.filter((s) => s.lines.some((l) => l.trim()));
+}
+
+/** 「我的剧本」抽屉。
+ *  为什么是覆盖式抽屉而不是主列里的一块：讨论才是这一阶段的主场，
+ *  把剧本插进主列会把发言挤走；而玩家的真实动作是"一边看别人说话、一边翻自己的本"，
+ *  所以让它浮在右侧，宽度够容纳一行 35 字左右（中文的舒适行宽）。 */
+function ScriptDrawer({ script, char, onClose }) {
+  const bodyRef = useRef(null);
+  const raw = normalizeScript(script) || (char ? "（剧本正在生成中，请稍候…）" : "（尚未分配角色，请先在房间内选择角色）");
+  const sections = useMemo(() => splitSections(raw), [raw]);
+
+  // Esc 关闭：抽屉盖住了右侧，不给键盘出口会让人以为卡住了
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function jump(i) {
+    const el = bodyRef.current && bodyRef.current.querySelector("#sec-" + i);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  return (
+    <React.Fragment>
+      <div className="script-drawer-scrim" onClick={onClose} aria-hidden="true" />
+      <aside className="script-drawer" role="dialog" aria-modal="false" aria-label="我的剧本">
+        <div className="script-drawer-head">
+          <strong>📖 {char?.name ? `${char.name} 的剧本` : "我的剧本"}</strong>
+          {char?.isMurderer ? <span className="tag tag-danger">凶手</span> : null}
+          <span className="text-xs text-dim">只有你能看到</span>
+          <button className="btn btn-outline btn-xs" style={{ marginLeft: "auto" }} onClick={onClose}>✕ 关闭（Esc）</button>
+        </div>
+
+        {sections.length > 1 && (
+          <div className="script-jump">
+            <span className="script-jump-label">跳到</span>
+            {sections.map((s, i) => (
+              s.title
+                ? <button key={i} type="button" className="chip" onClick={() => jump(i)}>{s.title}</button>
+                : null
+            ))}
+          </div>
+        )}
+
+        <div className="script-drawer-body" ref={bodyRef}>
+          <div className="paper-surface">
+            <div className="script-reader">
+              {sections.map((s, i) => (
+                <section key={i} id={"sec-" + i}>
+                  <ScriptBody text={s.lines.join("\n")} />
+                </section>
+              ))}
+            </div>
+          </div>
+        </div>
+      </aside>
+    </React.Fragment>
   );
 }
 
@@ -829,14 +1134,7 @@ function ReadingView({ script, char, iAmReady, onReady }) {
   const [fullScroll, setFullScroll] = useState(true);
   const [progress, setProgress] = useState(0); // 整篇模式下的阅读进度
   const boxRef = useRef(null);
-  // 兜底：剧本正文必须是字符串。服务端曾经把角色 script 对象直接返回，
-  // 拼进模板串就成了满屏 "[object Object]"——这里再挡一道，宁可显示提示也不要显示乱码。
-  const safeScript = typeof script === "string"
-    ? script
-    : (script && typeof script === "object"
-      ? (script.fullScript || script.story || script.playerScript || "")
-      : "");
-  const text = safeScript || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
+  const text = normalizeScript(script) || (char ? "（等待剧本下发...）" : "（尚未分配角色，请先在房间内选择角色）");
 
   // 每页容量按容器实际尺寸估算（仅分页模式用）。
   // 原来固定 360 字：在 2149px 宽的窗口里一页只填约三分之一，而且 360 是硬切，
@@ -877,11 +1175,11 @@ function ReadingView({ script, char, iAmReady, onReady }) {
   }
 
   return (
-    <div className="panel" style={{ padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-        <strong style={{ color: "var(--gold)" }}>📖 {char?.name || ""} 的剧本</strong>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="text-xs" style={{ color: readAll ? "var(--success, #4caf50)" : "var(--dim)" }}>
+    <div className="panel">
+      <div className="panel-head">
+        <strong>📖 {char?.name || ""} 的剧本</strong>
+        <div className="panel-actions">
+          <span className="text-xs" style={{ color: readAll ? "var(--verd-bright)" : "var(--text-muted)" }}>
             {fullScroll
               ? (readAll ? `已读到末尾 · 全文 ${text.length} 字` : `已读 ${progress}% · 全文 ${text.length} 字`)
               : `第 ${page + 1}/${pages.length} 页 · 每页约 ${budget} 字`}
@@ -892,33 +1190,45 @@ function ReadingView({ script, char, iAmReady, onReady }) {
           </button>
         </div>
       </div>
-      <div
-        ref={boxRef}
-        onScroll={fullScroll ? onScroll : undefined}
-        style={{
-          fontSize: 15, lineHeight: 1.85, background: "rgba(255,255,255,.04)",
-          padding: 16, borderRadius: 8,
-          // 固定高度 + 可滚动：内容永远不会被裁掉半行 —— 这是"被截断"这个反馈的直接兜底。
-          // 整篇模式下给足高度（68vh），一次能看到更多内容。
-          height: fullScroll ? "68vh" : undefined,
-          maxHeight: fullScroll ? undefined : "62vh",
-          overflowY: "auto",
-        }}
-      >
-        <ScriptBody text={pages[page] || ""} />
+
+      {/* 剧本正文是这份产品真正的"内容"，所以给它纸面 ——
+          应用外壳是墨，阅读面是纸，这条分工贯穿整套设计。 */}
+      <div className="paper-surface" style={{ padding: 0 }}>
+        <div
+          className="script-scroll"
+          ref={boxRef}
+          onScroll={fullScroll ? onScroll : undefined}
+          style={{
+            // 固定高度 + 可滚动：内容永远不会被裁掉半行 —— 这是"被截断"这个反馈的直接兜底。
+            // 整篇模式下给足高度（68vh），一次能看到更多内容。
+            height: fullScroll ? "68vh" : undefined,
+            maxHeight: fullScroll ? undefined : "62vh",
+          }}
+        >
+          <div className="script-reader">
+            <ScriptBody text={pages[page] || ""} />
+          </div>
+        </div>
       </div>
-      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 12, gap: 8 }}>
+
+      {fullScroll && (
+        <div className="read-progress" title={`已读 ${progress}%`}>
+          <i style={{ width: `${progress}%` }} />
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "center", alignItems: "center", marginTop: 16, gap: 8 }}>
         {!fullScroll && (
-          <button className="btn btn-outline" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
+          <button className="btn btn-outline btn-auto" disabled={page <= 0} onClick={() => setPage((p) => p - 1)}>← 上一页</button>
         )}
-        <button className="btn btn-success" disabled={iAmReady} onClick={onReady} style={iAmReady ? { opacity: 0.55 } : {}}>
+        <button className="btn btn-primary btn-auto" disabled={iAmReady} onClick={onReady}>
           {iAmReady ? "已准备，等待其他人…" : "我已读完，准备就绪"}
         </button>
         {!fullScroll && (
-          <button className="btn btn-outline" disabled={onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
+          <button className="btn btn-outline btn-auto" disabled={onLast} onClick={() => setPage((p) => p + 1)}>下一页 →</button>
         )}
       </div>
-      <div className="text-xs text-dim" style={{ textAlign: "center", marginTop: 6 }}>
+      <div className="text-xs text-dim" style={{ textAlign: "center", marginTop: 8 }}>
         {fullScroll
           ? (readAll ? "已滚到末尾，可以点「我已读完」了" : "上下滚动即可阅读全文，滚到末尾会提示")
           : `还有 ${Math.max(0, pages.length - page - 1)} 页`}
@@ -927,101 +1237,238 @@ function ReadingView({ script, char, iAmReady, onReady }) {
   );
 }
 
-// ===== 自我介绍 =====
-function IntroView({ onSubmit }) {
-  const [text, setText] = useState("");
-  const [sent, setSent] = useState(false);
-  return (
-    <div className="panel" style={{ padding: 16 }}>
-      <h4 style={{ color: "var(--gold)" }}>自我介绍</h4>
-      <p className="text-sm text-dim">向众人介绍你的角色（背景、来此目的、你对死者/其他人的了解）。提交后本阶段用上方「进入下一阶段」推进。</p>
-      <textarea className="form-textarea" rows="4" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} placeholder="大家好，我是..." />
-      <button className="btn btn-primary" style={{ marginTop: 8 }} onClick={() => { onSubmit(text); setSent(true); }}>
-        {sent ? "再次提交" : "提交介绍"}
-      </button>
-      {sent && <span className="text-xs text-dim" style={{ marginLeft: 10 }}>已提交，可继续补充</span>}
-    </div>
-  );
-}
-
 // ===== 搜证 + 讨论（合并阶段） =====
-function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking }) {
+// 布局：左侧（宽）全屋讨论 + 在场玩家；右侧（窄）搜证 / 审讯 / 私聊 / 线索。
+// 之所以把讨论放主列：讨论是这一阶段真正的主场，需要横向空间读长发言；
+// 而线索列表是短行文本，窄列反而更易扫读。
+function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper }) {
   const [msg, setMsg] = useState("");
-  const [query, setQuery] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
+  // 私聊：与公屏完全分开，服务端按参与者过滤后才下发
+  const [whisperTo, setWhisperTo] = useState("");
+  const [whisperText, setWhisperText] = useState("");
+  // 发言筛选："" = 全部；否则只显示该角色的发言。
+  // 人多时逐条翻聊天很难对齐时间线，"某人到底说过什么"是最常需要的视图。
+  const [speakerFilter, setSpeakerFilter] = useState("");
+
   // AI 补位玩家的标记是 isNPC:true + isAI:true，两个条件同时成立。
   // 原写法 npcs/ais 都包含 AI 玩家 → 下拉框重复项，且点击时被 npcs 先命中而路由到 ask_npc，
   // 而服务端 ask_npc 只认 roleType==="npc" 的角色 → 审讯 AI 必然报"未找到该NPC"。
   const ais = players.filter((p) => p.isAI && p.characterName);
   const npcs = players.filter((p) => p.isNPC && !p.isAI && p.characterName);
 
+  const quota = (searchInfo && searchInfo.quota) || { used: 0, max: 0, remaining: 0, unlimited: true };
+  const canSearch = !!(searchInfo && searchInfo.canSearch);
+  // 不限次数时（默认）不显示计数、也不因次数禁用按钮
+  const outOfQuota = !quota.unlimited && quota.remaining <= 0;
+
+  const speakers = Array.from(new Set((chats || []).map((c) => c.from).filter(Boolean)));
+  const shownChats = speakerFilter ? (chats || []).filter((c) => c.from === speakerFilter) : (chats || []);
+
   function doChat() { if (msg.trim()) { onSendChat(msg); setMsg(""); } }
 
+  // 私聊：self 由服务端标注，据此就能算出每条消息的"对方"是谁，客户端不需要知道自己的 playerId
+  const partnerOf = (m) => (m.self ? m.to : m.from);
+  const thread = (whispers || []).filter((m) => partnerOf(m) === whisperTo);
+  function doWhisper() {
+    if (!whisperTo || !whisperText.trim()) return;
+    onWhisper(whisperTo, whisperText.trim());
+    setWhisperText("");
+  }
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 12 }} className="combined-round">
-      {/* 左侧：线索 + 搜证 + 审讯 */}
-      <div>
-        <div className="panel" style={{ padding: 14, marginBottom: 10 }}>
-          <h4 style={{ color: "var(--gold)", margin: "0 0 10px" }}>🔍 {phase === "round1" ? "第一轮" : "第二轮"} 搜证</h4>
-          <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-            <input className="form-input" placeholder="搜索线索：例如 搜索书房 / 查看尸体 / 调查毒药..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { onInvestigate(query); setQuery(""); } }} />
-            <button className="btn btn-primary btn-sm" onClick={() => { onInvestigate(query); setQuery(""); }}>搜证</button>
-          </div>
-          {/* 审讯 NPC / AI */}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            <select className="form-select" style={{ maxWidth: 180 }} value={ask.npc} onChange={(e) => setAsk({ ...ask, npc: e.target.value })}>
-              <option value="">审讯对象...</option>
-              {npcs.map((n) => <option key={"npc-" + n.characterName} value={n.characterName}>{n.characterName} (NPC)</option>)}
-              {ais.map((n) => <option key={"ai-" + n.characterName} value={n.characterName}>{n.characterName} (AI)</option>)}
+    <div className="game-shell">
+      {/* ============ 左列（宽）：全屋讨论 ============ */}
+      <div style={{ minWidth: 0 }}>
+        <div className="panel">
+          <div className="panel-head">
+            <strong>全屋讨论</strong>
+            <span className="text-xs text-dim">
+              {chats.length} 条发言
+              {speakerFilter ? ` ｜ 只看 ${speakerFilter}` : ""}
+            </span>
+            <select
+              className="form-select"
+              style={{ maxWidth: 190, marginLeft: "auto" }}
+              value={speakerFilter}
+              onChange={(e) => setSpeakerFilter(e.target.value)}
+              title="只看某位玩家的发言"
+              aria-label="按发言者筛选"
+            >
+              <option value="">全部发言（{chats.length}）</option>
+              {speakers.map((s) => (
+                <option key={s} value={s}>{s}（{chats.filter((c) => c.from === s).length}）</option>
+              ))}
             </select>
-            <input className="form-input" style={{ flex: 1 }} placeholder="问什么..." value={ask.q} onChange={(e) => setAsk({ ...ask, q: e.target.value })} onKeyDown={(e) => {
-              if (e.key !== "Enter") return;
-              if (!ask.npc || !ask.q.trim()) return;
-              if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
-              setAsk({ ...ask, q: "" });
-            }} />
-            <button className="btn btn-outline btn-sm" onClick={() => {
+          </div>
+
+          <div className="discussion-log" ref={chatRef}>
+            {shownChats.map((c, i) => (
+              <div
+                key={i}
+                className={`msg${c.ai ? " is-ai" : ""}${!c.ai && myChar?.name && c.from === myChar.name ? " is-me" : ""}`}
+              >
+                <span className="msg-from">{c.from}</span>
+                {c.content}
+              </div>
+            ))}
+            {shownChats.length === 0 && (
+              <div className="chat-empty">
+                {speakerFilter ? `${speakerFilter} 还没有发过言` : "还没有人开口"}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <input
+              className="form-input"
+              value={msg}
+              onChange={(e) => setMsg(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") doChat(); }}
+              placeholder={myChar?.name ? `以 ${myChar.name} 的身份发言…` : "发言…"}
+              aria-label="发言内容"
+            />
+            <button className="btn btn-primary btn-auto" onClick={doChat}>发送</button>
+          </div>
+        </div>
+
+        <div className="panel">
+          <div className="panel-head">
+            <strong>在场玩家</strong>
+            <span className="text-xs text-dim">{players.length} 人</span>
+          </div>
+          <div className="roster">
+            {players.map((p, i) => (
+              <div key={p.playerId || p.playerName} className={`roster-row${p.isAI || p.isNPC ? " is-ai" : ""}`}>
+                <span className="roster-seat">{i + 1}</span>
+                <span className="roster-name">{p.characterName || p.playerName}</span>
+                {p.isNPC ? <span className="tag tag-npc">NPC</span>
+                  : p.isAI ? <span className="tag tag-npc">AI</span>
+                    : null}
+                <span className="roster-role">
+                  {!p.isNPC && !p.isAI && <VoiceTag playerId={p.playerId} voice={voice} speaking={speaking} />}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* ============ 右列（窄）：搜证 / 证物 / 审讯 / 私聊 ============ */}
+      <div className="game-col-side">
+        {/* 搜证与证物合成一块：搜到的线索马上就在下面出现，不用滚动到别处找 */}
+        <div className="panel">
+          <div className="panel-head">
+            <strong>🔍 {phase === "round1" ? "第一轮" : "第二轮"} 搜证</strong>
+            {!quota.unlimited && quota.max > 0 && (
+              <span className="text-xs text-dim" style={{ marginLeft: "auto" }}>
+                剩余 {quota.remaining} / {quota.max} 次
+              </span>
+            )}
+          </div>
+          {/* 随机搜证：点一次翻出一条还没被找到的线索。线索一搜到就自动公开给全场。 */}
+          <p className="text-xs text-dim" style={{ marginBottom: 10, lineHeight: 1.7 }}>
+            点一次搜证，随机翻出一条本轮还没被找到的线索。搜到什么由不得你 ——
+            拿到之后怎么用才是博弈。
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button className="btn btn-primary btn-sm btn-auto" disabled={!canSearch || outOfQuota} onClick={() => onInvestigate()}>
+              随机搜证
+            </button>
+            {outOfQuota && <span className="text-xs" style={{ color: "var(--wax-bright)" }}>本轮次数已用完</span>}
+          </div>
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
+            <div className="panel-head" style={{ marginBottom: 8 }}>
+              <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>已发现的线索</strong>
+              {myClues.length > 0 && <span className="tag" style={{ marginLeft: "auto" }}>{myClues.length} 条</span>}
+            </div>
+            {myClues.length === 0
+              ? (
+                <div className="text-xs text-muted" style={{ lineHeight: 1.7 }}>
+                  还没有线索被发现。线索一被搜到就会自动公开给全场。
+                </div>
+              )
+              : <GroupedClues clues={myClues} />}
+          </div>
+        </div>
+
+        {/* 审讯 + 私聊 */}
+        <div className="panel">
+          <div className="panel-head">
+            <strong>审讯</strong>
+            <span className="text-xs text-dim">NPC 与 AI 玩家</span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <select className="form-select" style={{ maxWidth: 200 }} value={ask.npc} onChange={(e) => setAsk({ ...ask, npc: e.target.value })} aria-label="审讯对象">
+              <option value="">选择审讯对象…</option>
+              {npcs.map((n) => <option key={"npc-" + n.characterName} value={n.characterName}>{n.characterName}（NPC）</option>)}
+              {ais.map((n) => <option key={"ai-" + n.characterName} value={n.characterName}>{n.characterName}（AI）</option>)}
+            </select>
+            <input
+              className="form-input"
+              style={{ flex: 1, minWidth: 130 }}
+              placeholder="问什么…"
+              aria-label="审讯问题"
+              value={ask.q}
+              onChange={(e) => setAsk({ ...ask, q: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                if (!ask.npc || !ask.q.trim()) return;
+                if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
+                setAsk({ ...ask, q: "" });
+              }}
+            />
+            <button className="btn btn-outline btn-sm btn-auto" onClick={() => {
               if (!ask.npc || !ask.q.trim()) return;
               if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
               setAsk({ ...ask, q: "" });
             }}>询问</button>
           </div>
 
-          {/* 我的线索（三分类） */}
-          <div>
-            <div className="text-xs text-dim mb-sm">我的线索</div>
-            {myClues.length === 0 && <div className="text-dim" style={{ fontSize: 12 }}>尚未获得线索（线索会按地点/证词/搜身物自动分组显示）</div>}
-            <GroupedClues clues={myClues} />
-          </div>
-        </div>
-      </div>
-
-      {/* 右侧：聊天 + 玩家列表 */}
-      <div>
-        <div className="panel" style={{ padding: 12 }}>
-          <strong style={{ color: "var(--gold)" }}>全屋讨论</strong>
-          <div ref={chatRef} style={{ height: 300, overflowY: "auto", margin: "8px 0", fontSize: 13, display: "flex", flexDirection: "column", gap: 4 }}>
-            {chats.map((c, i) => (
-              <div key={i} style={{ padding: "4px 8px", background: c.ai ? "rgba(147,112,219,.15)" : "rgba(255,255,255,.06)", borderRadius: 6 }}>
-                <strong style={{ color: c.ai ? "var(--mystic-light)" : "inherit" }}>{c.from}:</strong> {c.content}
-              </div>
-            ))}
-            {chats.length === 0 && <div className="text-dim" style={{ fontSize: 12 }}>暂无消息</div>}
-          </div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <input className="form-input" value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") doChat(); }} placeholder="发言..." />
-            <button className="btn btn-primary btn-sm" onClick={doChat}>发送</button>
-          </div>
-        </div>
-        <div className="panel" style={{ padding: 12, marginTop: 10 }}>
-          <strong className="text-sm">在场玩家</strong>
-          <div style={{ marginTop: 6, fontSize: 12 }}>
-            {players.map((p) => (
-              <div key={p.playerId || p.playerName} style={{ padding: "3px 0" }}>
-                {p.isNPC ? "🤖NPC" : p.isAI ? "🤖AI" : ""} {p.characterName || p.playerName}
-                {!p.isNPC && !p.isAI && <VoiceTag playerId={p.playerId} voice={voice} speaking={speaking} />}
-              </div>
-            ))}
+          {/* 私聊：只有收发双方能看到。公屏发言会进 AI 的上下文，私聊不会 —— 所以这里是真正"见不得光"的渠道 */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
+            <div className="panel-head" style={{ marginBottom: 8 }}>
+              <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>私聊</strong>
+              <span className="text-xs text-dim">仅你和对方可见</span>
+            </div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+              <select
+                className="form-select"
+                style={{ maxWidth: 160 }}
+                value={whisperTo}
+                onChange={(e) => setWhisperTo(e.target.value)}
+                aria-label="私聊对象"
+              >
+                <option value="">选择对象…</option>
+                {(players || [])
+                  .filter((p) => (p.characterName || p.playerName) && p.characterName !== myChar?.name)
+                  .map((p) => (
+                    <option key={p.playerId} value={p.playerId}>
+                      {p.characterName || p.playerName}{p.isAI ? "（AI）" : ""}
+                    </option>
+                  ))}
+              </select>
+              <input
+                className="form-input"
+                style={{ flex: 1, minWidth: 120 }}
+                placeholder="悄悄说一句…"
+                aria-label="私聊内容"
+                value={whisperText}
+                onChange={(e) => setWhisperText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") doWhisper(); }}
+              />
+              <button className="btn btn-outline btn-sm btn-auto" disabled={!whisperTo || !whisperText.trim()} onClick={doWhisper}>发送</button>
+            </div>
+            <div style={{ maxHeight: 150, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
+              {!whisperTo && <div className="text-muted">先选一个私聊对象</div>}
+              {whisperTo && thread.length === 0 && <div className="text-muted">还没有私聊记录</div>}
+              {thread.map((m, i) => (
+                <div key={i} style={{ padding: "3px 0" }}>
+                  <span className="text-dim">{m.self ? "你" : m.fromName}：</span>{m.content}
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -1029,79 +1476,163 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   );
 }
 
-// 线索按三分类分组（地点 → 人物证词 → 搜身物品）
+// ===== 线索列表（按大地点分组 + 类别筛选） =====
+//
+// 归组逻辑抽到了 lib/clue-place.mjs（纯 ESM，可被单测覆盖）——
+// 旧实现依赖写死的房间名词表，动态生成的房间匹配不到就各自成组，
+// 界面上看着"有分组"但实际等于没分。详见那个文件里的说明。
+//
+// 筛选控件这里踩过两次坑，值得记一笔：
+//   1) 一开始没有筛选，几十条线索平铺，找一条要滚很久；
+//   2) 改成"按大地点筛选"的下拉框之后，一局 29 条线索拆出 21 个大地点，
+//      下拉框里 22 个选项，比不筛还累 —— 因为筛选粒度比线索粒度还细。
+// 所以现在只按"类别"（地点 / 人物证词 / 搜身物品）筛选，一共 4 个按钮；
+// 想定位到具体某个地点，靠分组头本身 —— 每个分组头都能点开/收起，
+// 全收起时就等于一份地点目录。
 function GroupedClues({ clues }) {
-  function normalizeLocation(loc) {
-    const s = String(loc || "");
-    // 常见房间优先
-    const places = ["书房", "卧室", "厨房", "大厅", "走廊", "仓库", "药铺", "客厅", "庭院", "阁楼", "地下室", "浴室", "门房", "账房", "闺房", "楼梯"];
-    const hit = places.find((p) => s.includes(p));
-    if (hit) return { cat: "地点", label: hit };
-    // 物品型
-    if (/衣|裤|鞋|帽|包|袋|身上|口袋|首饰|手|怀表|戒指|发簪/.test(s)) return { cat: "搜身物品", label: s };
-    // 人
-    if (/[姓].*(说|称|证词)|目击|看到|听到/.test(s)) return { cat: "人物证词", label: s };
-    return { cat: "地点", label: s || "未知" };
-  }
-  const groups = {};
-  (clues || []).forEach((c) => {
-    const loc = c.discoveryLocation || c.location || c.discoveredAt || "";
-    const { cat, label } = normalizeLocation(loc);
-    const key = cat + "|" + label;
-    if (!groups[key]) groups[key] = { cat, label, items: [] };
-    groups[key].items.push(c);
-  });
-  const order = ["地点", "人物证词", "搜身物品"];
-  const keys = Object.keys(groups).sort((a, b) => order.indexOf(groups[a].cat) - order.indexOf(groups[b].cat));
-  if (keys.length === 0) return null;
+  const [cat, setCat] = useState("");
+  const [collapsed, setCollapsed] = useState(() => new Set());
+
+  const groups = groupCluesByPlace(clues);
+  if (groups.length === 0) return null;
+
+  const stats = clueCategoryStats(clues);
+  const total = (clues || []).length;
+  const shown = cat ? groups.filter((g) => g.cat === cat) : groups;
+  const allCollapsed = shown.length > 0 && shown.every((g) => collapsed.has(g.key));
+
+  const toggle = (key) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {keys.map((k) => (
-        <div key={k} className="clue-group" style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-          <div style={{ padding: "6px 10px", background: "rgba(255,255,255,.05)", fontSize: 13, fontWeight: 600, color: "var(--gold-light)" }}>
-            📍 {groups[k].label}（{groups[k].cat}）· {groups[k].items.length}条
-          </div>
-          <div style={{ padding: 8, fontSize: 12, lineHeight: 1.6 }}>
-            {groups[k].items.map((c, i) => (
-              <div key={i} style={{ padding: "4px 0", borderBottom: "1px dashed var(--border)" }}>
-                <strong>{c.clueId || c.title || c.label || ""}</strong>
-                <div className="text-sm">{c.description || c.content || c.text || ""}</div>
-              </div>
-            ))}
-          </div>
+    <div>
+      {groups.length > 1 && (
+        <div className="chip-row" style={{ marginBottom: 8 }}>
+          <button
+            type="button"
+            className={"chip" + (cat === "" ? " active" : "")}
+            onClick={() => setCat("")}
+            title={`全部线索：${total} 条 / ${groups.length} 个大地点`}
+          >
+            全部 {total}
+          </button>
+          {stats.map((s) => (
+            <button
+              key={s.cat}
+              type="button"
+              className={"chip" + (cat === s.cat ? " active" : "")}
+              onClick={() => setCat(cat === s.cat ? "" : s.cat)}
+              title={`${s.cat}：${s.clues} 条线索 / ${s.groups} 个大地点`}
+            >
+              {s.cat} {s.clues}
+            </button>
+          ))}
+          <button
+            type="button"
+            className="chip"
+            onClick={() => setCollapsed(allCollapsed ? new Set() : new Set(shown.map((g) => g.key)))}
+            title={allCollapsed ? "展开每个地点下的线索" : "只留地点目录，收起来快速扫"}
+          >
+            {allCollapsed ? "展开" : "收起"}
+          </button>
         </div>
-      ))}
+      )}
+      <div className="evidence-panel">
+        {shown.map((g) => {
+          const isCollapsed = collapsed.has(g.key);
+          return (
+            <div key={g.key} className="clue-group">
+              <button
+                type="button"
+                className="clue-group-head"
+                onClick={() => toggle(g.key)}
+                title={isCollapsed ? "展开该地点的线索" : "收起该地点的线索"}
+                aria-expanded={!isCollapsed}
+              >
+                <span style={{ opacity: 0.65, width: 10, flexShrink: 0 }}>{isCollapsed ? "▸" : "▾"}</span>
+                {/* 生成阶段偶尔会把发现地点落成"未知"（当前示例剧本 42 条线索全是这个值）。
+                    这不是前端能修的 —— 与其顶着一个地点图钉写"未知"，不如老实说没记录。 */}
+                <span>{g.label === "未知" ? "地点未记录" : `📍 ${g.label}`}</span>
+                {g.cat !== "地点" ? <span className="text-muted" style={{ fontWeight: 400 }}>（{g.cat}）</span> : null}
+                <span className="badge clue-count">{g.items.length}</span>
+              </button>
+              {!isCollapsed && (
+                <div className="clue-group-body">
+                  {g.items.map(({ clue: c, sub, place }, i) => (
+                    <div key={i} className="clue-item">
+                      <div className="clue-head">
+                        <span className="clue-id">{c.clueId || c.id || c.title || c.label || "?"}</span>
+                        {/* 细分位置（地面/栏杆/内壁…）和被前缀归并掉的原始地点都留在条目上，否则归组会丢信息 */}
+                        {sub ? <span className="text-muted text-xs">（{sub}）</span> : null}
+                        {place && place !== g.label ? <span className="tag">{place}</span> : null}
+                        {c.foundByName ? <span className="text-xs text-muted" style={{ marginLeft: "auto" }}>{c.foundByName} 发现</span> : null}
+                      </div>
+                      <div className="clue-body">{c.description || c.content || c.text || ""}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 // ===== 投票 =====
 function VotingView({ players, myChar, recordedTarget, voteCount, voteTotal, gameMode, onVote }) {
-  // 只能投给有角色的玩家：原写法 p.characterName || p.playerName 在无角色时会发玩家名，
-  // 服务端 allCharNames 校验必然失败并返回"投票目标不存在"
-  const targets = players.filter((p) => p.characterName && !(gameMode === "PVP" && p.isNPC));
+  // 可投对象的口径统一在 lib/vote.mjs（与服务端 cast_vote 的校验逐条对齐）。
+  // ⚠️ 历史缺陷（实测房间 BM4AFM 整局卡死）：这里原本写的是
+  //     players.filter((p) => p.characterName && !(gameMode === "PVP" && p.isNPC))
+  //   而 **AI 补位的也是 isNPC: true**，于是 PVP 下 5 个 AI 补位角色全被滤掉，
+  //   只剩自己那张卡、自己又不可自投 → 一个可点项都没有，玩家一票都投不出。
+  const targets = votablePlayers(players, gameMode);
+  // 分母兜底：服务端只在**有人投过票之后**才通过 vote_update 带上 total，
+  // 在那之前 voteTotal 是 0，界面会显示 "投票指控（0/0）" —— 看起来像坏了。
+  // 这里按同一口径（有角色且可投的玩家）本地算一个下限。
+  const total = voteTotal || targets.length;
   return (
-    <div className="panel" style={{ padding: 16 }}>
-      <h4 style={{ color: "var(--gold)" }}>🗳️ 投票指控（{voteCount}/{voteTotal}）</h4>
+    <div className="panel">
+      <div className="panel-head">
+        <strong>🗳️ 投票指控</strong>
+        <span className="tag tag-danger" style={{ marginLeft: 4 }}>{voteCount}/{total} 已投</span>
+      </div>
+
       {recordedTarget ? (
-        <div className="alert alert-success">你已投票指控：{recordedTarget}（不可更改）</div>
+        <div className="alert alert-success">
+          <span className="alert-body">你已投票指控：<strong>{recordedTarget}</strong>（不可更改）</span>
+        </div>
       ) : (
         <div>
-          <p className="text-sm text-dim">你认为谁是凶手？投票后不可更改。</p>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(160px,1fr))", gap: 8 }}>
-            {targets.map((p) => (
-              <button
-                key={p.characterName}
-                className="btn btn-outline"
-                disabled={p.characterName === myChar?.name}
-                onClick={() => onVote(p.characterName)}
-              >
-                {p.characterName}
-                {p.characterName === myChar?.name ? "（你自己）" : ""}
-              </button>
-            ))}
-          </div>
-          {targets.length === 0 && <div className="state-empty">暂无可投票对象</div>}
+          <p className="text-sm text-dim" style={{ marginBottom: 14 }}>
+            你认为谁是凶手？投票后不可更改。全员投完后点上方「提交并查看真相」揭晓。
+          </p>
+          {targets.length === 0
+            ? <div className="state-empty">暂无可投票对象</div>
+            : (
+              <div className="vote-grid stagger">
+                {targets.map((p) => {
+                  const isSelf = !canVoteFor(p.characterName, myChar?.name);
+                  return (
+                    <button
+                      key={p.characterName}
+                      className="vote-card"
+                      disabled={isSelf}
+                      onClick={() => onVote(p.characterName)}
+                    >
+                      <span className="vote-name">{p.characterName}</span>
+                      <span className="vote-hint">{isSelf ? "你自己" : "指控为凶手"}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
         </div>
       )}
     </div>
@@ -1109,51 +1640,156 @@ function VotingView({ players, myChar, recordedTarget, voteCount, voteTotal, gam
 }
 
 // ===== 真相复盘 =====
-function TruthView({ narrative, review, finished }) {
+function TruthView({ narrative, review, finished, myReview, myReviewState, onLoadMyReview }) {
   const murderer = review?.murderer || {};
   return (
-    <div className="panel" style={{ padding: 20 }}>
-      <h3 style={{ color: "var(--gold)", textAlign: "center" }}>{finished ? "🏁 游戏结束" : "🔦 真相复盘"}</h3>
+    <div>
+      {/* 结案卷宗的抬头：凶手名字是这一屏唯一的主角，
+          所以给它整块深红横幅 + 大字，而不是塞在一行 alert 里。 */}
+      <div className="verdict-band">
+        <div className="verdict-label">{finished ? "已结案" : "真相"}</div>
+        <div className="verdict-name">{murderer.name || "？"}</div>
+      </div>
 
-      {murderer.name && (
-        <div className="alert alert-success" style={{ marginTop: 10 }}>
-          凶手是 <strong>{murderer.name}</strong>
-          {murderer.method ? ` ｜ 手法：${murderer.method}` : ""}
+      <div className="panel">
+        <div className="panel-head">
+          <strong>{finished ? "🏁 游戏结束" : "🔦 案件真相"}</strong>
+          <span className="text-xs text-dim">完整卷宗</span>
         </div>
-      )}
-      {murderer.motive && (
-        <div className="text-sm" style={{ marginTop: 6, lineHeight: 1.7 }}>动机：{murderer.motive}</div>
-      )}
-
-      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.8, fontSize: 14, marginTop: 12 }}>
-        {review?.truthReveal || narrative || "复盘内容生成中..."}
+        {/* 长文一律上纸面 —— 手法、动机、真相都是"读的材料"，
+            压在红色横幅上既难读、又让横幅失去"一句话结论"的作用。
+            注意三者都可能带 markdown（模型写的 `**（详细过程）` 之类），
+            所以统统走 ScriptBody，不能直接当纯文本塞进 JSX。 */}
+        <div className="paper-surface">
+          <div className="script-reader" style={{ maxWidth: "72ch" }}>
+            {murderer.method && (
+              <>
+                <h3 style={{ marginTop: 0 }}>作案手法</h3>
+                <ScriptBody text={murderer.method} />
+              </>
+            )}
+            {murderer.motive && (
+              <>
+                <hr />
+                <h3>动机</h3>
+                <ScriptBody text={murderer.motive} />
+              </>
+            )}
+            <hr />
+            <ScriptBody text={review?.truthReveal || narrative || "复盘内容生成中…"} />
+          </div>
+        </div>
       </div>
 
       {review && (
-        <div style={{ marginTop: 18, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
-          <div>
-            <strong className="text-sm" style={{ color: "var(--gold)" }}>投票分布</strong>
-            <div style={{ marginTop: 6, fontSize: 13 }}>
-              {(review.votes || []).length === 0 && <div className="text-dim text-xs">无投票记录</div>}
-              {(review.votes || []).map((v, i) => (
-                <div key={i} style={{ padding: "3px 0" }}>{v.voter} → {v.target || "未投"}</div>
-              ))}
-            </div>
-          </div>
-          <div>
-            <strong className="text-sm" style={{ color: "var(--gold)" }}>线索发现</strong>
-            <div style={{ marginTop: 6, fontSize: 13, maxHeight: 220, overflowY: "auto" }}>
-              {(review.clues || []).length === 0 && <div className="text-dim text-xs">无线索记录</div>}
-              {(review.clues || []).map((c, i) => (
-                <div key={i} style={{ padding: "3px 0", borderBottom: "1px dashed var(--border)" }}>
-                  <span className="text-dim text-xs">[第{c.round}轮 · {c.location || "未知"}]</span> {c.content}
-                  {c.foundBy ? <span className="text-xs" style={{ color: "var(--mystic-light)" }}> — {c.foundBy}</span> : null}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 16, alignItems: "start" }}>
+          <div className="panel">
+            <div className="panel-head"><strong>投票分布</strong></div>
+            {(review.votes || []).length === 0
+              ? <div className="text-xs text-muted">无投票记录</div>
+              : (review.votes || []).map((v, i) => (
+                <div key={i} className="field-row">
+                  <span className="field-key">{v.voter}</span>
+                  <span className="field-val" style={{ color: v.target ? "var(--wax-bright)" : "var(--text-muted)" }}>
+                    {v.target || "未投"}
+                  </span>
                 </div>
               ))}
+          </div>
+
+          <div className="panel">
+            <div className="panel-head">
+              <strong>线索发现</strong>
+              {(review.clues || []).length > 0 && <span className="tag" style={{ marginLeft: "auto" }}>{review.clues.length} 条</span>}
+            </div>
+            <div style={{ maxHeight: 300, overflowY: "auto" }}>
+              {(review.clues || []).length === 0
+                ? <div className="text-xs text-muted">无线索记录</div>
+                : (review.clues || []).map((c, i) => (
+                  <div key={i} className="clue-item">
+                    <div className="clue-head">
+                      <span className="tag">第 {c.round} 轮</span>
+                      <span className="text-xs text-muted">{c.location || "未知"}</span>
+                      {c.foundBy ? <span className="text-xs" style={{ color: "var(--verd-bright)", marginLeft: "auto" }}>{c.foundBy}</span> : null}
+                    </div>
+                    <div className="clue-body">{c.content}</div>
+                  </div>
+                ))}
             </div>
           </div>
         </div>
       )}
+
+      {/* ===== 结算榜 ===== */}
+      {/* 分数由投票/阵营/线索/发言算出，不含 LLM 判断 —— 同样的局永远同样的分 */}
+      {review?.scoreboard?.board?.length > 0 && (
+        <div className="panel">
+          <div className="panel-head">
+            <strong>🏆 本局结算</strong>
+            <span className={`tag ${review.scoreboard.winner === "murderer" ? "tag-danger" : "tag-success"}`} style={{ marginLeft: 4 }}>
+              {review.scoreboard.winner === "murderer" ? "凶手成功脱身" : "玩家阵营获胜"}
+            </span>
+          </div>
+          <p className="text-xs text-muted" style={{ marginBottom: 10 }}>
+            指认真凶 +30 ｜ 凶手脱身 +40 ｜ 每条线索 +5（上限 20）｜ 每次发言 +2（上限 10）
+          </p>
+          {review.scoreboard.board.map((row, i) => (
+            <div key={row.playerId || i} className={`score-row${i === 0 ? " is-winner" : ""}`}>
+              <span className="score-rank">{i + 1}</span>
+              <span className="score-name">
+                {row.name}
+                {row.isAI ? <span className="text-muted text-xs"> AI</span> : null}
+                {row.isMurderer ? <span className="tag tag-danger" style={{ marginLeft: 6 }}>凶手</span> : null}
+              </span>
+              <span className="score-detail">{row.verdict} ｜ 线索 {row.clueCount} ｜ 发言 {row.speechCount}</span>
+              <span className="score-total">{row.total}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ===== 我的专属复盘 ===== */}
+      {/* 与上面的全局复盘分开：这份只在本人浏览器里生成与展示，含自己的秘密与推理失误 */}
+      <div className="panel">
+        <div className="panel-head">
+          <strong>🧠 我的专属复盘</strong>
+          <span className="text-xs text-dim">只有你能看到</span>
+        </div>
+
+        {!myReview && myReviewState !== "loading" && (
+          <div>
+            <p className="text-xs text-muted" style={{ marginBottom: 12, maxWidth: "62ch", lineHeight: 1.8 }}>
+              基于你自己的发言、搜到的线索和最终投票，复盘你这局的推理路径 ——
+              只在你的页面上生成，不会展示给其他人。
+            </p>
+            {myReviewState === "error" ? (
+              <div className="alert alert-danger" style={{ marginBottom: 10 }}>
+                <span className="alert-body">生成失败（模型服务可能正忙），可以再试一次。</span>
+              </div>
+            ) : null}
+            <button className="btn btn-primary btn-auto" onClick={onLoadMyReview}>
+              {myReviewState === "error" ? "重试" : "生成我的复盘"}
+            </button>
+          </div>
+        )}
+
+        {myReviewState === "loading" && (
+          <div className="state-loading" style={{ padding: "24px 0" }}>正在分析你这局的推理路径…（约 10~20 秒）</div>
+        )}
+
+        {myReview && (
+          <div className="paper-surface">
+            <div className="script-reader" style={{ maxWidth: "72ch" }}>
+              <ScriptBody text={myReview.text} />
+            </div>
+            {myReview.source === "fallback" && (
+              <div className="text-xs paper-dim" style={{ marginTop: 12, textAlign: "center" }}>
+                （模型服务暂不可用，以上为本局事实摘要）
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
