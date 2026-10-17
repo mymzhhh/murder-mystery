@@ -38,6 +38,11 @@ export default function TestRunPage() {
   const [openChar, setOpenChar] = useState("");            // 展开中的角色
   const [openClue, setOpenClue] = useState("");            // 展开中的线索（按钮式查看）
   const [showDm, setShowDm] = useState(false);
+  // 侧边栏页签：剧本体检 / 角色剧本 两块互斥显示。
+  // 为什么必须互斥：并排（或上下叠放）时下面那块会落到折叠线以下 ——
+  // 实测侧边栏改成常驻列之后，「角色剧本」的 y=859 而视口只有 872，等于看不见。
+  // 页签让两块都只隔一次点击，且各自能占满侧边栏高度。
+  const [sideTab, setSideTab] = useState("clue");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const feedRef = useRef(null);
@@ -253,8 +258,15 @@ export default function TestRunPage() {
             </div>
           </div>
 
+          {/* 两列布局：主列（公屏 + 全员时间线，宽）｜右侧常驻侧边栏（剧本体检 + 角色剧本，窄）。
+              为什么改（原先是四个面板一起 flex-wrap 平铺，420/auto/340/340）：
+              第二行只有 340+340，右侧空出一大片 —— 这就是"界面有点空"的来源；
+              改成两列后侧边栏把那一列占满，且 sticky 常驻，看公屏时不用滚动就能对照线索与角色剧本。
+              另：原注释说"全员时间线单独占一整行"，但它没有 flex-basis:100%，
+              实际被挤在右上角；放进主列后它才真正占满主列宽度（它是多列表格，窄了会被截断）。 */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div className="panel" style={{ flex: "1 1 420px", minWidth: 320 }}>
+            <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div className="panel">
               <div className="panel-head"><strong>公屏实录</strong><span className="text-xs text-dim">{stream.length} 条</span></div>
               <div ref={feedRef} style={{ maxHeight: 520, overflowY: "auto", paddingRight: 4 }}>
                 {stream.map((e, i) => (
@@ -282,16 +294,37 @@ export default function TestRunPage() {
               </div>
             </div>
 
-            {/* 全员时间线：**单独占一整行** —— 它是一张多列表格，塞进 340px 的列里会被截断（实测看图发现）。 */}
+            {/* 全员时间线：它是多列表格，必须占满**主列**宽度（窄了会被截断）。 */}
             {scriptPack ? (
-              <div className="panel" style={{ marginBottom: 12 }}>
+              <div className="panel">
                 <PlayerTimeline scripts={scriptPack} />
               </div>
             ) : null}
+            </div>
 
-            {/* 三列平铺（宽屏时三样同时可见）：公屏 / 剧本体检 / 角色剧本。
-                先前的两列叠放会把「角色剧本」挤到页面底部，展开正文落在折叠线以下。 */}
-            <div className="panel" style={{ flex: "0 1 340px", minWidth: 300 }}>
+            {/* 右侧常驻侧边栏：把原先平铺在第二行、右侧留白的那两块收进来。
+                sticky + 自身可滚动：侧边栏比视口高时内部滚，不会把主列推下去。 */}
+            <div style={{
+              flex: "0 0 380px", minWidth: 300, display: "flex", flexDirection: "column", gap: 12,
+              position: "sticky", top: 12, alignSelf: "flex-start",
+              maxHeight: "calc(100vh - 24px)", overflowY: "auto",
+            }}>
+            {/* 侧边栏页签：两块互斥，避免下面那块落到折叠线以下（见 sideTab 的注释）。 */}
+            <div style={{ display: "flex", gap: 6 }}>
+              {[["clue", "剧本体检"], ["script", "角色剧本"]].map(([k, label]) => (
+                <button
+                  key={k}
+                  className={"btn btn-sm" + (sideTab === k ? "" : " btn-outline")}
+                  style={{ flex: 1 }}
+                  onClick={() => setSideTab(k)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {sideTab === "clue" ? (
+            <div className="panel">
               <div className="panel-head">
                 <strong>剧本体检</strong>
                 {state && state.clues ? <span className="text-xs text-dim">线索 {foundCount}/{state.clues.length} 条被发现</span> : null}
@@ -380,12 +413,14 @@ export default function TestRunPage() {
                   : "当前还没有哪一轮被搜空：此处的 ✘ 可能只是阶段时间不够，不能据此判断线索有问题 —— 把阶段调长（或让每轮跑够）再测一次才能下结论。"}
               </div>
             </div>
+            ) : null}
 
             {/* 角色剧本：测试时最需要对照的东西 —— AI 有没有照着剧本演、剧本之间有没有互相矛盾。
                 只有管理员 + 只有测试房能拿到（真人局里这是别人的秘密）。 */}
-            {/* ⚠️ 必须给 flex 约束：这个面板里的 DM 正文用了 white-space: pre-wrap，
-                （不给约束时）它的 min-content 宽度很大 → 会被挤到下一行并撑满整行。 */}
-            <div className="panel" style={{ flex: "0 1 340px", minWidth: 300, overflow: "hidden" }}>
+            {/* ⚠️ 必须给 overflow 约束：这个面板里的 DM 正文用了 white-space: pre-wrap，
+                （不给约束时）它的 min-content 宽度很大 → 会把侧边栏撑宽。 */}
+            {sideTab === "script" ? (
+            <div className="panel" style={{ overflow: "hidden" }}>
               <div className="panel-head">
                 <strong>角色剧本</strong>
                 {scriptPack ? (
@@ -444,6 +479,8 @@ export default function TestRunPage() {
                   </div>
                 </>
               ) : <div className="text-xs text-dim">加载中…（只有测试房能看到全部角色剧本）</div>}
+            </div>
+            ) : null}
             </div>
           </div>
         </>
