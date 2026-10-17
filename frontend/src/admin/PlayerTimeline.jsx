@@ -20,79 +20,21 @@
  * 空缺显示「—」：角色对某个时刻**没有交代**，这正是 DM 要追问的地方。
  */
 import { useMemo, useState } from "react";
+// 解析规则抽到 lib（可在 node --test 里直接测，也与后端 timeline-utils 的规则摆在一起对照）。
+// 本轮的关键修复就在那个文件里：标题识别除 markdown `#` 之外，还要认真实剧本的
+// `【三、时间线（…）】` 与 `**时间线**` —— 否则导入的真实剧本永远是 0 个时刻。
+// 条目形态的容忍度跟着标题形态走：markdown 小节仍只认条列式行（零回归），
+// `【】` 小节连散文行也认（作者已经把它放在"时间线"标题下了）。
+import { buildTimelineTable } from "../lib/player-timeline.mjs";
 
-/** 从一段文本里取出"时间线"小节的正文行 */
-function timelineLines(script) {
-  const lines = String(script || "").split(/\r?\n/);
-  let start = -1, level = 0;
-  for (let i = 0; i < lines.length; i++) {
-    const h = lines[i].match(/^(#+)\s+(.*)$/);
-    if (!h) continue;
-    const title = h[2];
-    if (/时间线/.test(title) && !/(故事|表面|真实|完整|上帝)时间线/.test(title)) { start = i; level = h[1].length; break; }
-  }
-  if (start < 0) return [];
-  const out = [];
-  for (let i = start + 1; i < lines.length; i++) {
-    const h = lines[i].match(/^(#+)\s+/);
-    if (h && h[1].length <= level) break;          // 只在同级或更高级标题处结束（与后端一致）
-    out.push(lines[i]);
-  }
-  return out;
-}
-
-/** 一行里取时刻（HH:MM）与事件正文 */
-function parseEntry(line) {
-  const raw = String(line || "").trim();
-  if (!raw) return null;
-  if (!/^(?:[-*+]|\d+[.、)]|[（(]\d+[）)])\s*/.test(raw)) return null;   // 只认条列式行
-  const bare = raw.replace(/^(?:[-*+]|\d+[.、)]|[（(]\d+[）)])\s*/, "").replace(/\*\*/g, "");
-  const m = bare.match(/(\d{1,2})\s*[:：]\s*(\d{2})/);
-  if (!m) return null;
-  const hh = String(parseInt(m[1], 10)).padStart(2, "0");
-  const mm = m[2];
-  const body = bare
-    .replace(/^[^0-9]{0,12}/, "")                              // 去掉行首的"1月8日"等日期前缀
-    .replace(/\d{1,2}\s*[:：]\s*\d{2}/, "")                    // 去掉时刻本身
-    .replace(/[（(](真实|座钟)[^）)]*[）)]/g, "")
-    .replace(/[【\[][^】\]]*[】\]]/g, "")
-    .replace(/^[\s—\-–:：、，,。;；]+/, "")
-    .trim();
-  return { time: `${hh}:${mm}`, body: body || bare };
-}
-
-/** scripts 可能是数组，也可能是 {characters:[...]}（接口形状两种都兼容） */
-function characterList(scripts) {
-  if (!scripts) return [];
-  const arr = Array.isArray(scripts) ? scripts : (scripts.characters || scripts.list || []);
-  return (Array.isArray(arr) ? arr : [])
-    .map((c) => ({ name: String((c && (c.name || c.characterName)) || ""), script: String((c && (c.playerScript || c.script || c.text)) || ""), roleType: (c && c.roleType) || "", noTimeline: timelineLines(String((c && (c.playerScript || c.script || c.text)) || "")).length === 0 }))
-    .filter((c) => c.name && c.script);
-}
+// 说明：timelineLines / parseEntry / characterList 已移到 ../lib/player-timeline.mjs
+// （原来三份实现在这里内联，既无法单测、也无法与后端规则对照 —— 见该文件头的说明。）
 
 export default function PlayerTimeline({ scripts, compact }) {
   const [onlyGaps, setOnlyGaps] = useState(false);
 
-  const { chars, times, table } = useMemo(() => {
-    const cs = characterList(scripts);
-    const map = new Map();                       // name -> Map(time -> body)
-    for (const c of cs) {
-      const m = new Map();
-      for (const line of timelineLines(c.script)) {
-        const e = parseEntry(line);
-        if (e && !m.has(e.time)) m.set(e.time, e.body);     // 同一时刻只取第一条
-      }
-      map.set(c.name, m);
-    }
-    const all = new Set();
-    for (const m of map.values()) for (const t of m.keys()) all.add(t);
-    const sorted = [...all].sort();               // "HH:MM" 字符串序即时间序
-    const tb = sorted.map((t) => ({
-      time: t,
-      cells: cs.map((c) => ({ name: c.name, body: map.get(c.name).get(t) || "" })),
-    }));
-    return { chars: cs, times: sorted, table: tb };
-  }, [scripts]);
+  // 解析与「时刻 × 角色」表全部在 lib 里（同一套规则既给这里用，也能被单测直接钉住）
+  const { chars, times, table } = useMemo(() => buildTimelineTable(scripts), [scripts]);
 
   if (!chars.length) return null;
   const gapCount = (name) => times.filter((t) => !table.find((r) => r.time === t).cells.find((c) => c.name === name).body).length;

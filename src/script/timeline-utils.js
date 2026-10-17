@@ -34,16 +34,54 @@ function minutesOf(hm) {
   return h * 60 + mi;
 }
 
+/** 他人视角 / 基准类标题不算角色自己的时间线 */
+const EXCLUDE_TIMELINE = /(故事时间线|表面时间线|真实时间线|完整时间线|上帝时间线)/;
+
+/**
+ * 判断一行是不是"时间线"小节标题，并给出该标题的形态与层级。
+ *
+ * ⚠️ 2026-10-17 修的真缺口：原实现只认 markdown 的 `### ...时间线`，
+ * 而**真实剧本（商业本）普遍用 `【三、时间线（严格遵循全局时间线，精确到分钟）】`
+ * 或加粗 `**时间线**`**，于是一整类剧本的时间线对后端完全不可见
+ *（导入的《吉普赛女郎之死（再见卡门）》里 4 个角色都各有时间线小节，一个都读不到）。
+ * 前端 `frontend/src/lib/player-timeline.mjs` 里有同一套规则 —— 两边必须一致，
+ * 否则会出现"页面上有时间线、体检却说没有"这类最难查的问题。
+ *
+ * @returns {{kind:"md"|"bracket"|"bold", level:number}|null}
+ */
+function timelineHeadingInfo(line) {
+  const s = String(line || "").trim();
+  if (!s || !/时间线/.test(s)) return null;
+  const md = s.match(/^(#{1,4})\s+(.*)$/);
+  if (md) return EXCLUDE_TIMELINE.test(md[2]) ? null : { kind: "md", level: md[1].length };
+  const br = s.match(/^【([^】]{1,40})】$/);
+  if (br) return EXCLUDE_TIMELINE.test(br[1]) ? null : { kind: "bracket", level: 0 };
+  const bd = s.match(/^\*\*([^*]{1,40})\*\*$/);
+  if (bd) return EXCLUDE_TIMELINE.test(bd[1]) ? null : { kind: "bold", level: 0 };
+  return null;
+}
+
+/** 该行是否标识"时间线小节结束"（与起始标题同级或更高级） */
+function isTimelineBoundary(line, head) {
+  const s = String(line || "").trim();
+  if (head.kind === "md") {
+    const h = s.match(/^(#+)\s+/);
+    return !!h && h[1].length <= head.level;
+  }
+  if (head.kind === "bracket") return /^【[^】]{1,40}】$/.test(s);   // 下一个【…】小节
+  if (head.kind === "bold") return /^\*\*[^*]{1,40}\*\*$/.test(s);
+  return false;
+}
+
 /** 抽取角色剧本中「时间线」章节正文；无该章节返回 null（排除基准类章节） */
 function extractCharacterTimeline(text) {
   const lines = String(text || "").split("\n");
-  const EXCLUDE = /(故事时间线|表面时间线|真实时间线|完整时间线)/;
   for (let i = 0; i < lines.length; i++) {
-    if (!/^#{1,4}\s+.*时间线/.test(lines[i])) continue;
-    if (EXCLUDE.test(lines[i])) continue;
+    const head = timelineHeadingInfo(lines[i]);
+    if (!head) continue;
     const body = [];
     for (let j = i + 1; j < lines.length; j++) {
-      if (/^#{1,4}\s+/.test(lines[j])) break;
+      if (isTimelineBoundary(lines[j], head)) break;
       body.push(lines[j]);
     }
     return body.join("\n").trim();
