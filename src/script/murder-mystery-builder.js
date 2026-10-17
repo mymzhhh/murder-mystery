@@ -52,6 +52,22 @@ const TOKENS_LIGHT = 12288;      // 线索/DM手册等中型输出（8192 常不
  * 连续 STAGE_NET_RETRIES 次仍失败才抛出（此时再让上层整篇重试）。
  */
 const STAGE_NET_RETRIES = 2;
+/**
+ * 单个阶段的**硬超时**（默认 10 分钟，可用 STAGE_TIMEOUT_MS 调整）。
+ *
+ * 为什么必须有（实测，2026-10-17）：整本生成在 `npc_script (1/2)` 处**挂死 23 分钟**，
+ * 日志一行不出、进程还活着。根因是 runStage 只对**抛错**重试 —— 挂死的调用永远不返回，
+ * 那个 for 循环就永远不推进，"重试当前阶段"这条兜底完全用不上。
+ * 而超时抛出的错误消息里带 "timeout"，正好命中 isNetErr ✓ → 直接走既有重试路径，
+ * 不需要另写一套。最坏情况 = 3 次尝试 × 10 分钟（比"永远停住"好得多）。
+ */
+const STAGE_TIMEOUT_MS = Math.max(60000, parseInt(process.env.STAGE_TIMEOUT_MS, 10) || 10 * 60 * 1000);
+function withTimeout(p, ms, label) {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`stage timeout: ${label} 超过 ${Math.round(ms / 1000)}s 未返回`)), ms);
+    p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+  });
+}
 const isNetErr = (e) => {
   const m = String((e && (e.message || e.code)) || "").toLowerCase();
   return /getaddrinfo|enotfound|econn|etimedout|socket hang up|socket|refused|timeout|network|dns|fetch failed|undici|aborted/i.test(m);
@@ -60,7 +76,7 @@ async function runStage(stageName, fn, onProgress) {
   let lastErr = null;
   for (let a = 0; a <= STAGE_NET_RETRIES; a++) {
     try {
-      return await fn();
+      return await withTimeout(fn(), STAGE_TIMEOUT_MS, stageName);
     } catch (e) {
       lastErr = e;
       if (a < STAGE_NET_RETRIES && isNetErr(e)) {
@@ -4167,4 +4183,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
+module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
