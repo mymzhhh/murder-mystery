@@ -1141,6 +1141,107 @@
   max-height: 40vh;
 }
 
+/* ===================== 对局页：左列「情报台」小组件栏 =====================
+   为什么需要它（实测数字，不是观感）：.game-shell 是「minmax(0,1fr) 380px」两列 + align-items:start，
+   左列（全屋讨论 602px + 在场玩家 285px）高度固定 920px，而右列的线索列表随搜证无上限增长。
+   36 条线索时右列 5229px、左列 920px —— 左列下方 4309px × 868px 的网格区域，
+   命中测试（遍历可见元素求交）为 0 个元素，就是整片背景图。
+   这里的做法不是去搬右列的内容（线索全文常驻可见是有意为之），
+   而是把左列底部做成 sticky 的查询台：滚到线索列表深处时，左半屏仍有东西可查、可跳。
+
+   sticky 生效的前提是父网格项被撑满行高 —— 见 GameView 里左列 div 的 alignSelf:"stretch"。 */
+.intel-desk {
+  position: sticky;
+  top: calc(var(--header-h) + var(--s-4));
+  display: flex;
+  flex-direction: column;
+  /* 钉住时正好填满表头以下的视口：不填满的话 pin 住之后下半截还是空的 */
+  height: calc(100vh - var(--header-h) - var(--s-6));
+  min-height: 320px;
+}
+.intel-desk-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: var(--s-3); }
+.intel-desk-tabs .btn { flex: 1 1 66px; }
+/* 页签内容自己滚，面板本身不滚 —— 否则页签条会跟着滚走 */
+.intel-desk-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.intel-desk-empty { font-size: var(--fs-xs); color: var(--text-muted); line-height: 1.9; }
+/* 三个部件堆成一条（不做页签）：页签版实测"人物/进度"各自只有 4 张卡 / 6 行，
+   在 891px 的面板里各留约 500px 空白 —— 等于把左半屏的空白搬进面板内部。
+   堆叠后内容约 900px > 面板 768px，任何状态下都是满的。 */
+.intel-desk-sec + .intel-desk-sec {
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--ink-650);
+}
+.intel-desk-sec-head {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-bottom: var(--s-2);
+  font-family: var(--font-serif);
+  font-size: var(--fs-sm);
+  letter-spacing: 0.08em;
+  color: var(--brass);
+}
+
+/* 线索目录：一行 = 一个分组（可展开成编号列表），行尾一个「看全文」跳到右列 */
+.intel-desk-clue-group {
+  border: 1px solid var(--ink-650);
+  border-radius: var(--r-sm);
+  background: var(--ink-750);
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+.intel-desk-clue-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px 4px 4px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.intel-desk-clue-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--brass);
+  border-radius: var(--r-xs);
+}
+.intel-desk-clue-toggle:hover { color: var(--brass-bright); background: rgba(201, 164, 95, 0.08); }
+.intel-desk-clue-ids { display: flex; flex-wrap: wrap; gap: 4px; padding: var(--s-2) var(--s-3) var(--s-3); }
+
+/* 人物：一人一张紧凑卡（比左列那份名册多出"发言数 / 发现数"） */
+.intel-desk-person {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink-650);
+  border-radius: var(--r-sm);
+  background: var(--ink-750);
+  margin-bottom: 6px;
+}
+.intel-desk-person.is-me { border-color: var(--brass-line); background: var(--brass-tint); }
+
+/* 右列内层：只有"本列比左列矮"时才真的钉住（例如还没搜到线索：右列 715px / 左列 1859px），
+   免得那条情况反倒在右列下方留下一条空白。本列比视口高时 sticky 自然失效，
+   滚动行为与改造前一致 —— 所以这里刻意**不加** max-height，不给线索列表套内部滚动条。 */
+.game-col-pin { position: sticky; top: calc(var(--header-h) + var(--s-4)); }
+
+/* 窄屏是单列：sticky 与"满视口高"都没有意义，退回普通面板 */
+@media (max-width: 1100px) {
+  .intel-desk { position: static; height: auto; min-height: 0; }
+  .game-col-pin { position: static; }
+}
+
 /* ===================== 响应式 ===================== */
 @media (max-width: 900px) {
   .main-content { padding: var(--s-4); }

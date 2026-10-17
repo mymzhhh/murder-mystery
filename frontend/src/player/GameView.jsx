@@ -8,6 +8,7 @@ import { paginate, estimateBudget, classifyLine } from "../lib/paginate.mjs";
 import { votablePlayers, canVoteFor } from "../lib/vote.mjs";
 import { ScriptBody } from "../components/ScriptBody.jsx";
 import { SceneMap } from "../components/SceneMap.jsx";
+import IntelDesk from "./IntelDesk.jsx";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
 //
@@ -1280,7 +1281,11 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   return (
     <div className="game-shell">
       {/* ============ 左列（宽）：全屋讨论 ============ */}
-      <div style={{ minWidth: 0 }}>
+      {/* alignSelf:"stretch" 是「情报台」能 sticky 的前提：
+          .game-shell 是 align-items:start，网格项默认只有内容那么高（实测 920px），
+          子元素的 sticky 就只能在 920px 内滑动，等于不生效。撑满行高之后，
+          右列线索列表有几千米，情报台就能一路钉在视口里。（视觉上完全一样：列内元素本来就靠上排。） */}
+      <div style={{ minWidth: 0, alignSelf: "stretch" }}>
         <div className="panel">
           <div className="panel-head">
             <strong>全屋讨论</strong>
@@ -1353,10 +1358,27 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
             ))}
           </div>
         </div>
+
+        {/* 「情报台」：左列下方原本是成片空白（实测右列 5229px 时左列只有 920px，
+            下方 4309px × 868px 命中 0 个元素）。这块小组件栏用 sticky 钉住，
+            滚到线索列表深处时左半屏仍有线索目录 / 人物 / 进度可查。
+            数据全部来自本组件已有的状态，没有新增接口。 */}
+        <IntelDesk
+          phase={phase}
+          myChar={myChar}
+          players={players}
+          myClues={myClues}
+          chats={chats}
+          searchInfo={searchInfo}
+        />
       </div>
 
       {/* ============ 右列（窄）：搜证 / 证物 / 审讯 / 私聊 ============ */}
-      <div className="game-col-side">
+      {/* 同样要 alignSelf:"stretch"，否则内层 .game-col-pin 也没法钉住。
+          内层只在「本列比左列矮」时才真的钉住（例：还没搜到线索时右列 715px、左列 1859px）；
+          本列比视口高时（线索多）sticky 自然失效，滚动行为与改造前逐像素一致。 */}
+      <div className="game-col-side" style={{ alignSelf: "stretch" }}>
+        <div className="game-col-pin">
         {/* 搜证与证物合成一块：搜到的线索马上就在下面出现，不用滚动到别处找 */}
         <div className="panel">
           <div className="panel-head">
@@ -1471,6 +1493,7 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
               ))}
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
