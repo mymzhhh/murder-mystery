@@ -48,7 +48,12 @@ async function buildKnowledge(roomCode, ai, parsed) {
 
   // 公开对话全文：原来只有 8 条 × 80 字，素材太薄，AI 难以据此推理
   // 角色名与正文都是玩家可控输入，先清理再拼（拼进 system 段后由 wrapUntrusted 整体标记为数据）
+  //
+  // ⚠️ 剔除**自己的**消息：它们已经在下面 myStatements（【你之前说过的原话】）里单列，
+  // 再在公屏里出现一遍等于同一段话付两次钱。信息一点没少 —— 模型仍能在那段里看到自己说过什么；
+  // 这里要的是"别人说了什么"，也正是它判断别人时间线所需要的。
   const transcript = (msgs || [])
+    .filter(m => m.playerId !== ai.playerId)
     .map(m => {
       const who = safety.safeLabel(m.characterName || m.playerName || "某人");
       const body = safety.neutralize(m.content, 220);

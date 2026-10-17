@@ -104,9 +104,23 @@ function requestOptions(cfg, signal, sessionId) {
  *
  * 三条硬约束：连不上就跳过、异常全部吞掉、不 await —— 计量绝不能拖慢或拖垮 AI 发言。
  */
+/** 上一次调用的时间戳（按 label），用来诊断"缓存命中是否与调用间隔相关"：
+ *  实测 ai.intro / ai.replyQuestion 有命中，而 ai.turn 命中恒为 0，
+ *  三者最大的差别是间隔（turn 每 45 秒才轮到一次，另两个是连发的）。 */
+const lastCallAt = new Map();
+
 function recordUsage(sessionId, label, usage, chars) {
   try {
     const r = getRedis();
+    const cached = Number(
+      (usage && (usage.prompt_cache_hit_tokens ?? (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)))
+    ) || 0;
+    // 每次调用打一行：in/out/缓存命中了多少/本次距上次同 label 调用的间隔。
+    // 这行是"省 token 到底省在哪"的现场记录，也顺带能直接看出缓存失效的规律。
+    const now = Date.now();
+    const gap = lastCallAt.has(label) ? now - lastCallAt.get(label) : -1;
+    lastCallAt.set(label, now);
+    console.log(`[ai-usage] ${sessionId || "-"} ${label} in=${(usage && usage.prompt_tokens) || 0} out=${(usage && usage.completion_tokens) || 0} cached=${cached} gap=${gap < 0 ? "首次" : Math.round(gap / 1000) + "s"}`);
     if (!r || r.status !== "ready") return;
     const key = `ai:usage:${sessionId || "global"}`;
     const p = r.pipeline();
@@ -117,9 +131,6 @@ function recordUsage(sessionId, label, usage, chars) {
     // 提示词缓存命中量（DeepSeek 系返回 prompt_cache_hit_tokens；其它网关可能返回 cached_tokens）
     // —— 这是"把易变内容挪出 system 段"到底有没有效的唯一硬证据：
     // 没这一项就只能看总输入，"挪位置"这个改动在总量上是看不出来的。
-    const cached = Number(
-      (usage && (usage.prompt_cache_hit_tokens ?? (usage.prompt_tokens_details && usage.prompt_tokens_details.cached_tokens)))
-    ) || 0;
     if (cached) p.hincrby(key, `${label}.cacheHit`, cached);
     p.expire(key, 6 * 3600);
     p.exec().catch(() => {});

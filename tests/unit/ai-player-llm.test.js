@@ -200,7 +200,7 @@ test("buildKnowledge：未被发现的线索绝不能进入知识（隔离红线
   assert.ok(!p.includes("这是真凶手法"));
 });
 
-test("buildKnowledge：带上自己之前的发言与公开对话、案情、场景", async () => {
+test("buildKnowledge：自己的发言只在 myStatements 里出现一次，公屏只放别人的", async () => {
   resetStubs();
   stubs.messages = [
     { playerId: "h_1", characterName: "张三", content: "我八点半在楼下" },
@@ -209,8 +209,10 @@ test("buildKnowledge：带上自己之前的发言与公开对话、案情、场
   const k = await buildKnowledge("ROOM", AI, PARSED);
   assert.strictEqual(k.myStatements.length, 1);
   assert.ok(k.myStatements[0].includes("我看到你上楼了"));
-  assert.ok(k.transcript.includes("我八点半在楼下"));
-  assert.ok(k.transcript.includes("我看到你上楼了"));
+  assert.ok(k.transcript.includes("我八点半在楼下"), "别人的发言必须在公屏里");
+  // ⚠️ 自己的发言**不能**再在公屏里出现一份：它已经在【你之前说过的原话】里单列，
+  // 两处都放等于同一段话付两次钱（信息一点没少，模型仍能在 myStatements 里看到自己说过什么）。
+  assert.ok(!k.transcript.includes("我看到你上楼了"), "自己的发言不得在公屏里重复一份");
   assert.ok(k.victim.includes("陆老板"));
   assert.ok(k.scene.includes("茶楼二层"));
 });
