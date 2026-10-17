@@ -509,6 +509,61 @@
 .md-list > .md-marker { color: var(--md-rule); flex-shrink: 0; }
 .md-strong { color: var(--md-strong); font-weight: 700; }
 
+/* ===================== 正文里的配图 =====================
+   正文里的 `![说明](img:键名)` 独立成行时渲染成这一块：图块级居中、最宽不超过版面、
+   高度自适应，图下面跟一行小字说明（alt）。
+   为什么是 max-width:100% 而不是定宽：同一个正文块既出现在很窄的「我的剧本」抽屉里，
+   也出现在很宽的阅读视图/管理端弹窗里 —— 定宽在窄容器里会溢出，
+   横向滚动条在"一边看别人发言一边翻自己的本"这件事上是灾难。 */
+.script-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 14px auto;
+  max-width: 100%;
+}
+.script-img {
+  display: block;
+  max-width: 100%;
+  height: auto;              /* 宽度受限时等比缩放，不压扁 */
+  border-radius: 8px;
+  border: 1px solid var(--ink-650);
+  background: rgba(0, 0, 0, 0.18);
+}
+.script-figcaption {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: center;
+  letter-spacing: 0;
+}
+/* 取不到图时不留浏览器的破图图标：把"这张图挂了"和"这里本来没图"区分开 */
+.script-img-broken {
+  width: 100%;
+  padding: 14px;
+  border: 1px dashed var(--ink-650);
+  border-radius: 8px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* 房间里的场景地图：多张布局图并排，窄屏自动落成单列 */
+.scene-map-text {
+  margin: 0 0 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+.scene-map-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+}
+.scene-map-figure { margin: 0; }
+.scene-map-figure .script-img { width: 100%; }
+
 /* 纸面上换成深墨色。用变量覆盖而不是后代选择器，
    这样任何嵌在纸面里的正文块（包括以后新增的）都自动跟着变。 */
 .paper-surface {

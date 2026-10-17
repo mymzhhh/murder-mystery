@@ -3,8 +3,10 @@ import { apiJson } from "../lib/api.js";
 import { onSocket } from "../lib/socket.js";
 import { createVoice } from "../lib/voice.js";
 import { groupCluesByPlace, clueCategoryStats } from "../lib/clue-place.mjs";
-import { paginate, estimateBudget, classifyLine, parseInline } from "../lib/paginate.mjs";
+import { paginate, estimateBudget, classifyLine } from "../lib/paginate.mjs";
 import { votablePlayers, canVoteFor } from "../lib/vote.mjs";
+import { ScriptBody } from "../components/ScriptBody.jsx";
+import { SceneMap } from "../components/SceneMap.jsx";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
 //
@@ -20,6 +22,9 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   // 表现是整个页面一块黑屏。这个错误 vite build 不报、单测也测不到，只在浏览器里才暴露。
   const room = game.room || {};
   const ownerId = game.ownerId || room.ownerId;
+  // 剧本 id：正文里的配图（![说明](img:键名)）要靠它拼 /api/scripts/<id>/images/<键名>。
+  // 服务端在 room_state.room 里下发 scriptSessionId（房间建好时记下的那个剧本 id）。
+  const scriptId = room.scriptSessionId || "";
 
   const [players, setPlayers] = useState(game.players || []);
   const [phase, setPhase] = useState(game.phase || "lobby");
@@ -422,6 +427,15 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             )}
           </div>
 
+          {/* 场景地图（键名以 map- 开头的布局图）。开局前就先让人看明白"这是个什么场面"：
+              这里紧挨着场景描述，就是页面上"展示场景布局"的那一块。
+              没有地图时组件自己返回 null，不会留下空面板。 */}
+          <SceneMap
+            scriptId={scriptId}
+            layoutText={parsed.layoutDescription || ""}
+            altText={normalizeScript(myScript)}
+          />
+
           <div className="auto-cols">
             {/* 玩家名册 */}
             <div className="panel">
@@ -545,6 +559,14 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         {/* 阶段轨道：玩家在任何时刻都能一眼看到"走到哪一步、还剩几步" */}
         <PhaseRail phase={phase} />
 
+        {/* 场景地图：搜证/讨论阶段要对着平面图找地点，所以对局期间也常驻一块。
+            地图是"场景"的一部分而不是剧本正文，故放在阶段轨道下方、各阶段视图之上。 */}
+        <SceneMap
+          scriptId={scriptId}
+          layoutText={game.scriptSummary?.layoutDescription || ""}
+          altText={[myScript, game.scriptSummary?.layoutDescription].filter(Boolean).join("\n")}
+        />
+
         {notice && (
           <div className="alert alert-danger alert-row" style={{ marginBottom: 10 }}>
             <span className="alert-body">{notice}</span>
@@ -562,7 +584,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         {/* 我的剧本抽屉：整个对局期间（搜证 / 讨论 / 投票 / 复盘）都在，
             不只在阅读阶段。 */}
         {showScript && (
-          <ScriptDrawer script={myScript} char={myChar} onClose={() => setShowScript(false)} />
+          <ScriptDrawer script={myScript} char={myChar} scriptId={scriptId} onClose={() => setShowScript(false)} />
         )}
 
         {showNotes && (
@@ -596,7 +618,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             仍保留 intro 分支是为了兼容部署瞬间还停在旧阶段的房间 ——
             没有它这些房间会渲染成一片空白，只能干等超时。 */}
         {(phase === "reading" || phase === "intro") && (
-          <ReadingView script={myScript} char={myChar} iAmReady={iAmReady} onReady={doReady} />
+          <ReadingView script={myScript} char={myChar} scriptId={scriptId} iAmReady={iAmReady} onReady={doReady} />
         )}
         {(phase === "round1" || phase === "round2") && (
           <CombinedRoundView
@@ -996,49 +1018,9 @@ function PhaseBar({ readyInfo, readyTotal = 0, iAmReady, onReady, phase }) {
 }
 
 // ===== 阅读剧本（分页） =====
-// ===== 剧本正文渲染 =====
-/** 把剧本 markdown 渲染成结构化内容。
- *  原来是把原始文本直接丢进 <div> 用 white-space: pre-wrap 显示，
- *  于是 "###" 和 "**" 都原样打出来 —— 既难看，又白占大量行高，
- *  一页能塞的内容因此少了一大截。 */
-function ScriptBody({ text }) {
-  const lines = String(text || "").split(/\r?\n/);
-  return (
-    <>
-      {lines.map((line, i) => {
-        const c = classifyLine(line);
-        if (c.kind === "blank") return <div key={i} className="md-blank" />;
-        if (c.kind === "heading") {
-          // 标题色走 CSS 变量而不是内联色值：同一个渲染器既用在墨底（DM 叙述）上，
-          // 也用在纸面（剧本正文 / 真相）上，而黄铜压米色纸的对比度明显不够。
-          // 让 surface 决定颜色，渲染器只负责结构。
-          const lvl = Math.min(4, Math.max(1, c.level));
-          return <div key={i} className={`md-h md-l${lvl}`}>{c.text}</div>;
-        }
-        if (c.kind === "subheading") {
-          return <div key={i} className="md-sub">{c.text}</div>;
-        }
-        if (c.kind === "list" || c.kind === "ordered") {
-          return (
-            <div key={i} className="md-list">
-              <span className="md-marker">{c.kind === "ordered" ? c.index + "." : "•"}</span>
-              <span>{inlineNodes(c.text)}</span>
-            </div>
-          );
-        }
-        return <p key={i} className="md-p">{inlineNodes(c.text)}</p>;
-      })}
-    </>
-  );
-}
-
-function inlineNodes(text) {
-  return parseInline(text).map((seg, i) =>
-    seg.t === "bold"
-      ? <strong key={i} className="md-strong">{seg.v}</strong>
-      : <React.Fragment key={i}>{seg.v}</React.Fragment>
-  );
-}
+// 剧本正文的渲染器搬到了 components/ScriptBody.jsx：
+// 管理端剧本详情页要渲染同一份正文（含 `![说明](img:键名)` 配图），
+// 两处各留一份实现的话，配图这种新语法迟早只在一边生效。
 
 /** 剧本正文归一：服务端曾经把角色 script 直接返回成对象，拼进模板串就是满屏 "[object Object]"。
  *  阅读视图和「我的剧本」抽屉共用同一道兜底，避免两处口径不一致。 */
@@ -1072,7 +1054,7 @@ function splitSections(text) {
  *  为什么是覆盖式抽屉而不是主列里的一块：讨论才是这一阶段的主场，
  *  把剧本插进主列会把发言挤走；而玩家的真实动作是"一边看别人说话、一边翻自己的本"，
  *  所以让它浮在右侧，宽度够容纳一行 35 字左右（中文的舒适行宽）。 */
-function ScriptDrawer({ script, char, onClose }) {
+function ScriptDrawer({ script, char, scriptId, onClose }) {
   const bodyRef = useRef(null);
   const raw = normalizeScript(script) || (char ? "（剧本正在生成中，请稍候…）" : "（尚未分配角色，请先在房间内选择角色）");
   const sections = useMemo(() => splitSections(raw), [raw]);
@@ -1116,7 +1098,7 @@ function ScriptDrawer({ script, char, onClose }) {
             <div className="script-reader">
               {sections.map((s, i) => (
                 <section key={i} id={"sec-" + i}>
-                  <ScriptBody text={s.lines.join("\n")} />
+                  <ScriptBody text={s.lines.join("\n")} scriptId={scriptId} />
                 </section>
               ))}
             </div>
@@ -1127,7 +1109,7 @@ function ScriptDrawer({ script, char, onClose }) {
   );
 }
 
-function ReadingView({ script, char, iAmReady, onReady }) {
+function ReadingView({ script, char, scriptId, iAmReady, onReady }) {
   const [page, setPage] = useState(0);
   // 默认整篇滚动：玩家反馈分页"内容太少、还会截断"，整篇滚动一次看完最省事。
   // 分页保留为可选（点右上角切换），有需要时还能用。
@@ -1206,7 +1188,7 @@ function ReadingView({ script, char, iAmReady, onReady }) {
           }}
         >
           <div className="script-reader">
-            <ScriptBody text={pages[page] || ""} />
+            <ScriptBody text={pages[page] || ""} scriptId={scriptId} />
           </div>
         </div>
       </div>

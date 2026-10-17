@@ -3,6 +3,7 @@ import { api, apiJson } from "../lib/api.js";
 import { readSSE } from "../lib/sse.js";
 import { getToken } from "../lib/api.js";
 import TrickPanel from "./TrickPanel.jsx";
+import { ScriptBody } from "../components/ScriptBody.jsx";
 
 // 体检结论的人话映射。
 // 尤其要处理 na：它的含义是"判据证据不足，这一项**没把关**"——
@@ -178,7 +179,13 @@ export default function ScriptsPage() {
       {/* 查看剧本弹窗 */}
       {view && (
         <Modal title={view.title || "剧本"} onClose={() => setView(null)}>
-          <pre>{view.markdown}</pre>
+          {/* 用与玩家端同一份正文渲染器（components/ScriptBody.jsx），不再是一坨 <pre>：
+              正文里的 `![说明](img:键名)` 配图在管理端也要能看到，
+              否则"这稿的地图有没有出问题"就只能去玩家端开局才知道。
+              传 scriptId 才能拼出取图地址（view.id 就是剧本 id / sessionId）。 */}
+          <div className="script-reader">
+            <ScriptBody text={view.markdown} scriptId={view.id} />
+          </div>
         </Modal>
       )}
 

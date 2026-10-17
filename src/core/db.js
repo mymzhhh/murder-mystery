@@ -108,6 +108,17 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_test_reports_created ON test_reports(created_at DESC);
+    -- 剧本正文里引用的图片（!\[说明\](img:键名)）存 PG，不落 public/。
+    -- 为什么：docker-compose 只给 redis / pg 挂了卷，app 的 public/ 没有卷 ——
+    -- 图片写进容器文件系统，镜像一重建就没了；而 PG 是持久的。
+    -- 复合主键就是 upsert 的冲突目标（同一剧本同一键名 → 覆盖）。
+    CREATE TABLE IF NOT EXISTS script_images (
+      script_id TEXT NOT NULL,
+      img_key TEXT NOT NULL,
+      mime TEXT NOT NULL,
+      bytes BYTEA NOT NULL,
+      PRIMARY KEY (script_id, img_key)
+    );
   `);
   // 幂等迁移：中间产物（推理链/大纲/交叉校验问题）。
   // 用 ALTER 而不是只改上面的 CREATE TABLE —— 已有部署的表不会因为 IF NOT EXISTS 而补列。
@@ -183,6 +194,45 @@ async function deleteScript(id) {
   await query("DELETE FROM scripts WHERE id=$1", [id]);
 }
 
+// 图片键名的唯一合法形状：只允许 [A-Za-z0-9_-]，长度给个上限防止拿超长键名撑爆主键索引。
+// 键名会进 URL 路径（/api/scripts/:id/images/:key），所以这里必须是最严的一版 ——
+// 别指望路由层再兜一次：写入侧不校验的话，库里先存进一个带 "/" 的键，
+// 从此再也取不出来（URL 里那个键会被 Express 当成两个路径段）。
+const IMG_KEY_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+/** 校验图片键名是否合法（路由与写入共用同一份判断） */
+function isValidImageKey(imgKey) {
+  return IMG_KEY_RE.test(String(imgKey === null || imgKey === undefined ? "" : imgKey));
+}
+
+/** 保存剧本配图（同一剧本同一键名覆盖写入） */
+async function saveScriptImage(scriptId, imgKey, mime, buffer) {
+  if (!isValidImageKey(imgKey)) throw new Error("图片键名不合法（只允许 A-Za-z0-9_-）");
+  if (!Buffer.isBuffer(buffer)) throw new Error("图片数据必须是 Buffer");
+  await query(
+    `INSERT INTO script_images (script_id, img_key, mime, bytes) VALUES ($1,$2,$3,$4)
+     ON CONFLICT (script_id, img_key) DO UPDATE SET mime=$3, bytes=$4`,
+    [scriptId, imgKey, mime || "application/octet-stream", buffer]
+  );
+}
+
+/** 读取剧本配图，返回 { mime, bytes }；不存在返回 null（bytes 是 Buffer） */
+async function getScriptImage(scriptId, imgKey) {
+  const r = await query("SELECT mime, bytes FROM script_images WHERE script_id=$1 AND img_key=$2", [scriptId, imgKey]);
+  if (r.rows.length === 0) return null;
+  return { mime: r.rows[0].mime, bytes: r.rows[0].bytes };
+}
+
+/** 列出某剧本的全部配图（只回键名/mime/体积，**不带字节**）。
+ *  房间里的"场景地图"要靠它筛 map- 前缀的图 —— 把整张图都读出来只为拿个键名没有意义。 */
+async function listScriptImages(scriptId) {
+  const r = await query(
+    "SELECT img_key, mime, octet_length(bytes) AS size FROM script_images WHERE script_id=$1 ORDER BY img_key",
+    [scriptId]
+  );
+  return r.rows.map((x) => ({ imgKey: x.img_key, mime: x.mime, size: Number(x.size) || 0 }));
+}
+
 /** 注册用户 */
 async function createUser(username, passwordHash, role = "player") {
   const existing = await getUser(username);
@@ -223,4 +273,8 @@ async function deleteUser(username) {
 // query / getPool 一并导出：给"自带 SQL 的小模块"用（例如测试报告 test-report-repo），
 // 否则它们只能各写一套连接池 —— 实测踩过：没导出时 require 到 undefined，
 // 调用时报 "query is not a function" 而被 try/catch 吞成"静默不入库"。
-module.exports = { initDB, query, getPool, saveSplitScript, listScripts, getScript, deleteScript, createUser, getUser, listUsers, updateUserRole, updateUserPassword, deleteUser };
+module.exports = {
+  initDB, query, getPool, saveSplitScript, listScripts, getScript, deleteScript,
+  saveScriptImage, getScriptImage, listScriptImages, isValidImageKey,
+  createUser, getUser, listUsers, updateUserRole, updateUserPassword, deleteUser,
+};

@@ -379,7 +379,7 @@ function setupGameSocket(io) {
         const allReady = currentHumans.length >= 1 && assignedCount >= currentHumans.length;
 
         socket.emit("room_state", {
-          room: { roomCode, status: room.status, phase: room.phase, ownerId: updatedRoom.ownerId, maxPlayers: room.maxPlayers },
+          room: { roomCode, status: room.status, phase: room.phase, ownerId: updatedRoom.ownerId, maxPlayers: room.maxPlayers, scriptSessionId: room.scriptSessionId || "" },
           phase: room.phase,
           playerId: socket.id,
           players: publicPlayers(allPlayers, updatedRoom.ownerId),

@@ -11,6 +11,7 @@ const { initDB } = require("./core/db");
 const { setupAuthRoutes, authMiddleware, adminMiddleware } = require("./routes/auth");
 const { setupAdminRoutes } = require("./routes/admin");
 const { setupPlayerRoutes } = require("./routes/player");
+const { setupScriptImageRoutes } = require("./routes/script-images");
 const { setupGameSocket } = require("./socket/game");
 
 const app = express();
@@ -182,6 +183,7 @@ app.get("/api/health", (req, res) => {
 // 挂载路由
 setupAuthRoutes(app);
 setupAdminRoutes(app, authMiddleware, adminMiddleware, io);
+setupScriptImageRoutes(app);   // 剧本配图：GET /api/scripts/:id/images(/[:key])，刻意匿名（见文件头注释）
 setupPlayerRoutes(app, authMiddleware);
 
 // 挂载 WebSocket
