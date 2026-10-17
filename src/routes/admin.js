@@ -235,7 +235,20 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
     try {
       const sid = req.params.id;
+      // 审计留痕：删剧本会**外键级联**带走 characters / clues / dm_manuals，
+      // 而这张表只按 id 单条删。实测代价（2026-10-17）：整个剧本库被删空，
+      // `test_reports`（6 条）与 `users`（9 条）完好、四张内容表全 0 ——
+      // 正是"逐条 deleteScript + 级联"的形态，但**没有任何留痕**，
+      // 查不出是谁删的、什么时候删的、删了几本。这里在删除之前把规模问出来记一行。
       let deleted = false;
+      try {
+        const { query } = require("../core/db");
+        const g = await query(
+          "SELECT s.title, (SELECT count(*) FROM characters WHERE script_id=s.id) AS chars, (SELECT count(*) FROM clues WHERE script_id=s.id) AS clues FROM scripts s WHERE s.id=$1", [sid]);
+        const row = g.rows[0];
+        console.warn(`[audit] 删除剧本 by=${(req.user && req.user.username) || "?"} id=${sid} ` +
+          `title=《${(row && row.title) || "（库里没有这条）"}》 级联 characters=${(row && Number(row.chars)) || 0} clues=${(row && Number(row.clues)) || 0}`);
+      } catch (e) { console.warn(`[audit] 删除剧本 by=${(req.user && req.user.username) || "?"} id=${sid}（审计查询失败：${e.message}）`); }
 
       // 1. 优先删除 PG 数据
       try {
