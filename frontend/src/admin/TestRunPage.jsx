@@ -406,7 +406,11 @@ export default function TestRunPage() {
             <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column", order: 1 }}>
             <div className="panel" style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, marginBottom: 0 }}>
               <div className="panel-head"><strong>公屏实录</strong><span className="text-xs text-dim">{stream.length} 条</span></div>
-              <div ref={feedRef} style={{ flex: "1 1 0", minHeight: 360, overflowY: "auto", paddingRight: 4 }}>
+              {/* 高度跟着视口走：公屏是这一页的主内容（旁观时一直在读），
+                  原来固定 minHeight:360 会让下方留出一大片页面底色。
+                  470px 是"顶栏 + 页头 + 剧本卡 + 实时摘要 + 间距"的大致高度；
+                  max(420px, …) 是小窗口下的下限，避免压成一条。 */}
+              <div ref={feedRef} style={{ flex: "1 1 0", minHeight: "max(420px, calc(100vh - 470px))", overflowY: "auto", paddingRight: 4 }}>
                 {stream.map((e, i) => (
                   <div key={i} className="text-xs" style={{ marginBottom: 6, lineHeight: 1.7 }}>
                     <span className="text-dim">{new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false })}　</span>
