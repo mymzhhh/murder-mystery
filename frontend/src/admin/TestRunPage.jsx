@@ -21,6 +21,17 @@ const PHASE_TEXT = {
  * 这些数据只发给管理员：服务端的旁观通道仅限 admin 且仅限测试房（见 socket/game.js 的 spectate_room）。
  */
 import PlayerTimeline from "./PlayerTimeline";
+import { fmtClock, phaseSteps, phaseStep, tallyStream, voteRows, relationText, identityText, furthestPhase, PHASE_SHORT } from "../lib/test-run-widgets.mjs";
+
+/** 侧边栏页签：八块内容里除"常驻摘要"外的六块，一次点击可达。
+ *  为什么必须有页签：380px 的窄列塞不下六个部件，硬叠起来实测会落到视口之外（等于看不见）。 */
+const SIDE_TABS = [["clue", "线索"], ["script", "人物"], ["roster", "关系"], ["dm", "DM"], ["timeline", "时间线"], ["stats", "统计"]];
+
+/** 公屏 kind 的中文名（只用于统计页签里那一行对账） */
+const KIND_TEXT = {
+  chat: "发言/提问/投票", phase: "阶段", narrative: "DM 叙事",
+  truth: "真相", error: "错误", aiError: "AI 异常", report: "报告",
+};
 
 export default function TestRunPage() {
   const [scripts, setScripts] = useState([]);
@@ -37,12 +48,23 @@ export default function TestRunPage() {
   const [scriptPack, setScriptPack] = useState(null);      // 全部角色剧本（管理员对照用）
   const [openChar, setOpenChar] = useState("");            // 展开中的角色
   const [openClue, setOpenClue] = useState("");            // 展开中的线索（按钮式查看）
-  const [showDm, setShowDm] = useState(false);
-  // 侧边栏页签：剧本体检 / 角色剧本 两块互斥显示。
+  // 侧边栏页签：八块内容（常驻摘要 + 六块页签内容 + 原有的线索/人物）里，除常驻摘要外互斥显示。
   // 为什么必须互斥：并排（或上下叠放）时下面那块会落到折叠线以下 ——
   // 实测侧边栏改成常驻列之后，「角色剧本」的 y=859 而视口只有 872，等于看不见。
-  // 页签让两块都只隔一次点击，且各自能占满侧边栏高度。
+  // 页签让每块都只隔一次点击，且各自能占满侧边栏高度。
   const [sideTab, setSideTab] = useState("clue");
+  // GET /api/admin/test-runs 里**本房间**那一条 meta（阶段流水 phaseLog / 设定时长 phaseMs / finished）。
+  // 为什么不能只用 state：阶段流水只在服务端登记里，spectate_ready 不含它；
+  // 而"哪一段在拖时间"正是这一页要看的东西之一。
+  const [runMeta, setRunMeta] = useState(null);
+  // 一个跟轮询同频的时钟：当前阶段的"已用时"靠它推进（不单独开 1 秒定时器，没必要为了秒级跳动
+  // 让整页（含几百条公屏）每秒重渲染一次）。
+  const [now, setNow] = useState(() => Date.now());
+  // 每个角色搜到几条线索（来自 clue_received 事件，按线索 id 去重）。
+  // 为什么另开一份：state.clues 只有"有没有被发现"，没有发现者；而"某个 AI 一直没搜到东西"
+  // 与"某个 AI 一直没说话"同样是剧本问题的信号。
+  const [clueTally, setClueTally] = useState({});
+  const clueSeenRef = useRef(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const feedRef = useRef(null);
@@ -103,6 +125,14 @@ export default function TestRunPage() {
         at: Date.now(), who: c.foundBy || "?", id: (c.clue && c.clue.id) || "?",
         content: String((c.clue && c.clue.content) || "").slice(0, 34),
       }, ...prev]).slice(0, 8));
+      // 按发现者累计（统计页签用）。**按线索 id 去重**：同一条线索被搜到两次（代码搜证 + AI 出手）
+      // 会各发一次事件，不去重的话"搜到线索总数"会比线索体检里的"已发现 N/M"多出来。
+      const cid = (c.clue && c.clue.id) || "?";
+      if (!clueSeenRef.current.has(cid)) {
+        clueSeenRef.current.add(cid);
+        const who = c.foundBy || "?";
+        setClueTally((prev) => ({ ...prev, [who]: (prev[who] || 0) + 1 }));
+      }
       setState((s) => {
         if (!s || !s.clues) return s;
         return { ...s, clues: s.clues.map((x) => (x.id === (c.clue && c.clue.id) ? { ...x, found: true } : x)) };
@@ -156,6 +186,25 @@ export default function TestRunPage() {
     return () => { alive = false; };
   }, [run]);
 
+  // 阶段流水与设定时长：轮询测试房登记（8 秒一次，同时把 now 推进一步）。
+  // 为什么轮询而不是只听 socket：phaseLog 只在服务端登记里（spectate_ready 不带它），
+  // 而"各阶段实际花了多久"要看这份流水；8 秒的延迟对分钟级的阶段足够，也不会刷屏。
+  useEffect(() => {
+    if (!run) { setRunMeta(null); return undefined; }
+    let alive = true;
+    const tick = async () => {
+      try {
+        const d = await apiJson("/api/admin/test-runs");
+        const hit = (d.runs || []).find((r) => r.roomCode === run.roomCode);
+        if (alive && hit) setRunMeta(hit);
+      } catch (e) { /* 轮询失败不打扰管理员，下一次再来 */ }
+      if (alive) setNow(Date.now());
+    };
+    tick();
+    const t = setInterval(tick, 8000);
+    return () => { alive = false; clearInterval(t); };
+  }, [run]);
+
   // 新消息自动滚到底
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
@@ -167,6 +216,8 @@ export default function TestRunPage() {
     // 而这里按钮不是 submit，所以必须自己夹 —— 手滑填 10000 会是一局 8 天。
     const mins = Math.max(1, Math.min(60, Math.round(Number(phaseMinutes) || 1)));
     setBusy(true); setError(""); setStream([]); setTruth(null); setState(null); setRecentClues([]); setOpenChar("");
+    // 新的一局：阶段流水/搜证计数/时钟都要归零，否则摘要会显示上一局的耗时
+    setRunMeta(null); setClueTally({}); clueSeenRef.current = new Set(); setNow(Date.now());
     try {
       const d = await apiJson("/api/admin/test-runs", {
         method: "POST", body: JSON.stringify({ scriptSessionId: scriptId, phaseMinutes: mins }),
@@ -181,6 +232,7 @@ export default function TestRunPage() {
     if (!confirm(`结束测试并关闭房间 ${run.roomCode}？`)) return;
     try { await api(`/api/admin/test-runs/${run.roomCode}`, { method: "DELETE" }); } catch (e) { /* 房间可能已回收 */ }
     setRun(null); setState(null); setStream([]); setTruth(null); setRecentClues([]); setScriptPack(null); setOpenChar("");
+    setRunMeta(null); setClueTally({}); clueSeenRef.current = new Set();
   }
 
   const foundCount = state && state.clues ? state.clues.filter((c) => c.found).length : 0;
@@ -200,6 +252,58 @@ export default function TestRunPage() {
   const aiNames = (run && run.aiPlayers && run.aiPlayers.length)
     ? run.aiPlayers
     : ((state && state.players) ? state.players.filter((p) => p.isAI).map((p) => p.characterName).filter(Boolean) : []);
+
+  // ===================== 侧边栏八个部件的数据 =====================
+  // 图片渲染用的剧本 id：优先用**测试房登记里的** scriptSessionId —— 刷新页面后
+  // 顶部下拉框的 scriptId 是空的，只有登记里这一份才是"这一局用的剧本"，
+  // 拿它去拼 /api/scripts/:id/images/:key 才能让线索/DM 手册里的配图在刷新后仍然显示。
+  const sid = (runMeta && runMeta.scriptSessionId) || scriptId;
+  // 当前阶段：取"登记 / socket 事件 / 是否已收到真相"里**最靠后**的那一个。
+  // 为什么不能只看登记：实测这一局真相事件先到（AI 全投完票 → vote-advance 直接推到 truth_reveal
+  // 并广播 truth_revealed），而测试房自己的登记要等它的计时器才写上投票段的结束 ——
+  // 只信登记就会出现"真相都出来了，进度还写着投票"。
+  const metaPhase = furthestPhase([runMeta && runMeta.phase, state && state.phase, truth ? "truth_reveal" : ""]);
+  const step = phaseStep(metaPhase);
+  // ① 阶段进度与各阶段耗时（常驻摘要）：只按服务端真实登记的 phaseLog 画，
+  //    实测有房间会跳过 truth_reveal 直接落 finished，按固定阶段表补行就会多/少一块。
+  const { rows: phaseRows, elapsedMs } = phaseSteps(runMeta && runMeta.phaseLog, {
+    now, phaseMs: runMeta && runMeta.phaseMs, finished: !!(runMeta && runMeta.finished), currentPhase: metaPhase,
+  });
+  // ③ 投票分布与结局（常驻摘要）
+  const votes = voteRows(truth);
+  const maxVotes = votes.rows.length ? Math.max(...votes.rows.map((r) => r.count)) : 0;
+  // ② AI 行为统计（页签）：公屏按 kind 聚合，chat 再按发言人拆
+  const chatStats = tallyStream(stream);
+  const clueTallyReady = Object.keys(clueTally).length > 0;
+  const statRows = (() => {
+    const names = aiNames.slice();
+    for (const s of chatStats.speakers) if (!names.includes(s.name)) names.push(s.name);
+    return names.map((name) => {
+      const sp = chatStats.speakers.find((s) => s.name === name);
+      return {
+        name, isAI: aiNames.includes(name),
+        talk: sp ? sp.talk : 0, asked: sp ? sp.asked : 0, voted: sp ? sp.voted : 0,
+        fallback: sp ? sp.fallback : 0,
+        // 刷新后事件没了 → 按角色的搜证数不可知，显示 "—" 而不是假的 0
+        clue: clueTallyReady ? (clueTally[name] || 0) : null,
+      };
+    }).sort((a, b) => (b.talk + b.asked + b.voted) - (a.talk + a.asked + a.voted) || a.name.localeCompare(b.name, "zh"));
+  })();
+  const silentAI = statRows.filter((r) => r.isAI && !r.talk && !r.asked && !r.voted);
+  // ④ DM 手册各节（走 ScriptBody 渲染，配图才会显示）
+  const dm = scriptPack && scriptPack.dmGuide ? scriptPack.dmGuide : null;
+  const dmAll = dm ? [
+    ["开场白", dm.openingMonologue],
+    ["完整时间线", dm.fullTimeline],
+    ["真相复盘", dm.truthReveal],
+    ["真结局", dm.endings && dm.endings.trueEnding],
+    ["凶手逃脱结局", dm.endings && dm.endings.escapeEnding],
+    ["误判结局", dm.endings && dm.endings.wrongEnding],
+  ] : [];
+  // 有正文的照常渲染；空小节**不铺一堆空框**（那样最像"界面空"），改成末尾一行列出来：
+  // "缺哪几节"本身就是这个剧本的问题，但它是诊断信息，不该占半屏。
+  const dmSections = dmAll.filter(([, t]) => String(t || "").trim());
+  const dmMissing = dmAll.filter(([, t]) => !String(t || "").trim()).map(([title]) => title);
 
   return (
     <div>
@@ -258,17 +362,24 @@ export default function TestRunPage() {
             </div>
           </div>
 
-          {/* 两列布局：主列（公屏 + 全员时间线，宽）｜右侧常驻侧边栏（剧本体检 + 角色剧本，窄）。
-              为什么改（原先是四个面板一起 flex-wrap 平铺，420/auto/340/340）：
-              第二行只有 340+340，右侧空出一大片 —— 这就是"界面有点空"的来源；
-              改成两列后侧边栏把那一列占满，且 sticky 常驻，看公屏时不用滚动就能对照线索与角色剧本。
-              另：原注释说"全员时间线单独占一整行"，但它没有 flex-basis:100%，
-              实际被挤在右上角；放进主列后它才真正占满主列宽度（它是多列表格，窄了会被截断）。 */}
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
-            <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column", gap: 12 }}>
-            <div className="panel">
+          {/* 两列布局：主列（公屏实录，宽）｜右侧常驻侧边栏（摘要 + 六个页签部件，窄）。
+              为什么长这样：
+              ① 原先四个面板一起 flex-wrap 平铺（420/auto/340/340），第二行只有 340+340，
+                 右侧空出一大片 —— 这就是"界面有点空"的来源；
+              ② 现在六个部件（阶段耗时/统计/投票/关系/DM 手册/时间线）全进侧边栏，
+                 380px 一列装不下八块内容，所以拆成"常驻摘要（不占页签）+ 六个页签"；
+              ③ 主列只剩公屏，它必须**自己撑满整列**（flex:1 + 内层 overflow），
+                 否则时间线搬走之后主列底部会空出一大块 —— 又一次"界面有点空"。
+                 行高由内容决定（谁高听谁的）：alignItems:stretch 让主列跟着侧边栏一样高，
+                 所以两列的底边永远对齐。**刻意不给行加 minHeight** ——
+                 实测加了 calc(100vh - 200px) 之后，切到内容较短的页签（统计）时
+                 侧边栏只有 636px 而行被撑到 779px，右下角就空出 380×143 一块（正是"成片空白"）；
+                 去掉之后行高 = 内容高，两列底边齐平。 */}
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
+            <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column" }}>
+            <div className="panel" style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, marginBottom: 0 }}>
               <div className="panel-head"><strong>公屏实录</strong><span className="text-xs text-dim">{stream.length} 条</span></div>
-              <div ref={feedRef} style={{ maxHeight: 520, overflowY: "auto", paddingRight: 4 }}>
+              <div ref={feedRef} style={{ flex: "1 1 0", minHeight: 360, overflowY: "auto", paddingRight: 4 }}>
                 {stream.map((e, i) => (
                   <div key={i} className="text-xs" style={{ marginBottom: 6, lineHeight: 1.7 }}>
                     <span className="text-dim">{new Date(e.at).toLocaleTimeString("zh-CN", { hour12: false })}　</span>
@@ -293,34 +404,104 @@ export default function TestRunPage() {
                 {!stream.length ? <div className="text-xs text-dim">等待 AI 行动…（第一阶段是阅读剧本，AI 在这里预备自我介绍）</div> : null}
               </div>
             </div>
-
-            {/* 全员时间线：它是多列表格，必须占满**主列**宽度（窄了会被截断）。 */}
-            {scriptPack ? (
-              <div className="panel">
-                <PlayerTimeline scripts={scriptPack} />
-              </div>
-            ) : null}
             </div>
 
-            {/* 右侧常驻侧边栏：把原先平铺在第二行、右侧留白的那两块收进来。
-                sticky + 自身可滚动：侧边栏比视口高时内部滚，不会把主列推下去。 */}
+            {/* 右侧常驻侧边栏：八块内容（常驻摘要 + 六个页签 + 原有的线索/人物都在页签里）。
+                sticky + 自身可滚动：侧边栏比视口高时内部滚，不会把主列推下去。
+                ⚠️ maxHeight 为什么是 100vh - 180px 而不是 100vh - 24px：
+                侧边栏自己 sticky 的**活动范围只有它所在的这一行**（行高 = 侧边栏高），所以它实际上
+                钉不住 —— 页面滚动时整列会跟着上移，顶到最上面时会被那条固定顶栏盖住（实测滚到底
+                常驻摘要的第一行就藏到顶栏后面了，用户明确要求"常驻摘要不能被滚走"）。
+                推导：滚到底时侧边栏 top = 视口高 - 侧边栏高 - 页底留白 = 180 - 28 = 152px，
+                恒大于顶栏高度（约 60px）→ 摘要永远在顶栏下面，看得见。
+                代价是侧边栏比视口矮一些（本机 979 → 799），部件区仍有约 550px。 */}
             <div style={{
-              flex: "0 0 380px", minWidth: 300, display: "flex", flexDirection: "column", gap: 12,
+              flex: "0 0 380px", minWidth: 300, display: "flex", flexDirection: "column",
               position: "sticky", top: 12, alignSelf: "flex-start",
-              maxHeight: "calc(100vh - 24px)", overflowY: "auto",
+              maxHeight: "calc(100vh - 180px)", overflowY: "auto",
             }}>
-            {/* 侧边栏页签：两块互斥，避免下面那块落到折叠线以下（见 sideTab 的注释）。 */}
-            <div style={{ display: "flex", gap: 6 }}>
-              {[["clue", "剧本体检"], ["script", "角色剧本"]].map(([k, label]) => (
+            {/* 常驻摘要 + 页签一起 sticky 在侧边栏顶部：滚侧边栏时这两样不动，
+                所以"随时想瞟一眼"的阶段耗时/票型永远不会被滚走，六个页签也永远在同一个位置。
+                （另一条路是给摘要固定高度，但那会白占 380px 里的一大块 —— 摘要是两行的事。） */}
+            <div style={{
+              position: "sticky", top: 0, zIndex: 3, background: "var(--ink-900, #0b0d11)",
+              paddingBottom: 8, marginBottom: 10, borderBottom: "1px solid var(--brass-line)",
+            }}>
+            {/* ① 阶段进度与各阶段耗时 + ③ 投票分布与结局：常驻、不占页签。
+                理由：旁观时这两样是"随时想瞟一眼"的（哪一段在拖时间、票怎么分），
+                藏进页签就等于每次都要点一下，而且页签互斥会把它顶掉。 */}
+            <div className="panel" style={{ marginBottom: 8 }}>
+              <div className="panel-head" style={{ marginBottom: 4 }}>
+                <strong>实时摘要</strong>
+                <span className="text-xs text-dim" style={{ marginLeft: "auto" }}>
+                  {step ? `第 ${step.index}/${step.total} 步` : (metaPhase ? (PHASE_SHORT[metaPhase] || metaPhase) : "未登记")}
+                  {phaseRows.length ? ` ｜ 已跑 ${fmtClock(elapsedMs)}` : ""}
+                </span>
+              </div>
+              <div className="text-xs" style={{ lineHeight: 1.7 }}>
+                <div>
+                  <span className="text-dim">阶段耗时　</span>
+                  {phaseRows.length ? phaseRows.map((r, i) => (
+                    <span key={`${r.phase}-${i}`} title={`${PHASE_TEXT[r.phase] || r.phase}｜${r.stale ? "服务端登记还没写上下一段的开始时刻（实际已进入更后面的阶段），所以这一段的时间还在涨" : `实际 ${r.ms === null ? "未记结束时刻" : fmtClock(r.ms)}`}${r.over ? `｜比设定多 ${fmtClock(r.deltaMs)}` : ""}`}>
+                      {i ? <span className="text-dim"> · </span> : null}
+                      <span style={{ color: r.over ? "var(--amber)" : (r.running ? "var(--brass-bright)" : "var(--text-dim)") }}>
+                        {PHASE_SHORT[r.phase] || r.phase} {r.ms === null ? "—" : fmtClock(r.ms)}{r.stale ? "?" : (r.running ? "…" : "")}{r.over ? "↑" : ""}
+                      </span>
+                    </span>
+                  )) : <span className="text-dim">等待阶段登记…（服务端每推进一段就记一条）</span>}
+                </div>
+                <div style={{ marginTop: 2 }}>
+                  <span className="text-dim">投票结局　</span>
+                  {truth ? (
+                    <>
+                      <span style={{ color: "var(--wax-bright, #d64d50)" }}>真凶 {truth.murdererName || "?"}</span>
+                      {votes.outcomeText ? <span>　{votes.outcomeText}</span> : null}
+                      {votes.desc ? <span className="text-dim">｜{votes.desc}</span> : null}
+                      {votes.hasVotes ? votes.rows.map((r) => (
+                        <div key={r.name} style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                          <span title={r.name} style={{
+                            flex: "0 0 64px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                            color: r.isMurderer ? "var(--wax-bright, #d64d50)" : "var(--text)",
+                          }}>{r.name}</span>
+                          <span style={{ flex: "0 0 20px", textAlign: "right" }}>{r.count}</span>
+                          <span style={{ flex: "1 1 auto", minWidth: 20, height: 6, background: "rgba(255,255,255,.07)", borderRadius: 3, overflow: "hidden" }}>
+                            <span style={{
+                              display: "block", height: "100%", borderRadius: 3,
+                              width: `${maxVotes ? Math.round((r.count / maxVotes) * 100) : 0}%`,
+                              background: r.isMurderer ? "var(--wax)" : "var(--brass)",
+                            }} />
+                          </span>
+                          {r.isTop ? <span className="text-dim">最高票</span> : null}
+                        </div>
+                      )) : <div className="text-dim">这一局没有票（无人投票）</div>}
+                    </>
+                  ) : (
+                    <span className="text-dim">
+                      {state && state.phase === "voting" ? "投票进行中…" : "等待投票"}
+                      {state && state.murdererName
+                        ? <span>　｜ 真凶（仅你可见）<span style={{ color: "var(--wax-bright, #d64d50)" }}>{state.murdererName}</span></span>
+                        : null}
+                      　票型与结局要等 AI DM 广播 truth_revealed（投票阶段结束后）才有数据。
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* 页签条：允许换行，六个页签都只隔一次点击；激活的那块紧贴在下面，
+                所以它的 top 一定在视口内（上一轮的坑：并排叠放时下面那块落到折叠线以外）。 */}
+            <div id="side-tabs" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {SIDE_TABS.map(([k, label]) => (
                 <button
                   key={k}
                   className={"btn btn-sm" + (sideTab === k ? "" : " btn-outline")}
-                  style={{ flex: 1 }}
+                  style={{ flex: "1 1 66px" }}
                   onClick={() => setSideTab(k)}
                 >
                   {label}
                 </button>
               ))}
+            </div>
             </div>
 
             {sideTab === "clue" ? (
@@ -334,13 +515,8 @@ export default function TestRunPage() {
                   </label>
                 ) : null}
               </div>
-              {truth ? (
-                <div className="text-xs" style={{ marginBottom: 10, padding: 8, border: "1px solid var(--brass-line)", borderRadius: 6 }}>
-                  <div><strong>真凶：{truth.murdererName}</strong>　结局：{truth.outcome}</div>
-                  <div className="text-dim" style={{ marginTop: 4 }}>{truth.description}</div>
-                  {truth.votes ? <div className="text-dim" style={{ marginTop: 4 }}>票型：{JSON.stringify(truth.votes)}</div> : null}
-                </div>
-              ) : null}
+              {/* 真相（真凶/结局/票型）不在这里重复一份：它已经搬到侧边栏顶部的常驻摘要里
+                  （旁观时随时要瞟的就是票型，藏进页签反而看不到）。这里只留"线索"这件事。 */}
               {state && state.clues ? (
                 <>
                   {roundNums.length ? (
@@ -387,12 +563,13 @@ export default function TestRunPage() {
                       {/* 展开的线索正文走与玩家端同一个渲染器（components/ScriptBody.jsx）：
                           线索里带 `![说明](img:键名)` 配图时必须看到图 —— 管理员在这里判断
                           "这条线索玩家能不能靠它推出真相"，看不到图就等于漏判了关键证据。
-                          scriptId 是本次测试选中的剧本 id（房间的 scriptSessionId），
-                          拿不到时 ScriptBody 自动退回纯文本，线索不会因此不显示。 */}
+                          scriptId 取**房间登记里的** scriptSessionId（sid）：刷新页面后顶部下拉框是空的，
+                          只有登记里那一份才是这一局真正用的剧本，否则刷新后配图就全变纯文本了。
+                          拿不到 scriptId 时 ScriptBody 自动退回纯文本，线索不会因此不显示。 */}
                       {openClue === c.id
                         ? (
                           <div style={{ lineHeight: 1.7, padding: "4px 6px" }}>
-                            <ScriptBody text={clueBodyText(c)} scriptId={scriptId} />
+                            <ScriptBody text={clueBodyText(c)} scriptId={sid} />
                           </div>
                         )
                         : null}
@@ -416,8 +593,10 @@ export default function TestRunPage() {
             ) : null}
 
             {/* 角色剧本：测试时最需要对照的东西 —— AI 有没有照着剧本演、剧本之间有没有互相矛盾。
-                只有管理员 + 只有测试房能拿到（真人局里这是别人的秘密）。 */}
-            {/* ⚠️ 必须给 overflow 约束：这个面板里的 DM 正文用了 white-space: pre-wrap，
+                只有管理员 + 只有测试房能拿到（真人局里这是别人的秘密）。
+                DM 手册原来藏在这个面板的「看 DM 手册」按钮后面（还只 dump 前 2000 字），
+                本轮把它提成独立的「DM」页签，走 ScriptBody 渲染 —— 见下面的 DM 面板。 */}
+            {/* ⚠️ 必须给 overflow 约束：这个面板里的正文用了 white-space: pre-wrap，
                 （不给约束时）它的 min-content 宽度很大 → 会把侧边栏撑宽。 */}
             {sideTab === "script" ? (
             <div className="panel" style={{ overflow: "hidden" }}>
@@ -428,29 +607,10 @@ export default function TestRunPage() {
                     {scriptPack.characters.length} 个角色{scriptPack.murderer && scriptPack.murderer.name ? `｜真凶 ${scriptPack.murderer.name}` : ""}
                   </span>
                 ) : null}
-                {scriptPack && scriptPack.dmGuide ? (
-                  <button className="btn btn-outline btn-xs" style={{ marginLeft: "auto" }} onClick={() => setShowDm((v) => !v)}>
-                    {showDm ? "收起 DM 手册" : "看 DM 手册"}
-                  </button>
-                ) : null}
               </div>
               {scriptPack ? (
                 <>
-                  {showDm && scriptPack.dmGuide ? (
-                    <div className="text-xs" style={{ marginBottom: 8, padding: 8, border: "1px solid var(--brass-line)", borderRadius: 6, maxHeight: 220, overflowY: "auto" }}>
-                      {scriptPack.murderer && scriptPack.murderer.name ? (
-                        <div style={{ marginBottom: 4 }}>
-                          <strong>真凶：{scriptPack.murderer.name}</strong>
-                          {scriptPack.murderer.motive ? <span className="text-dim">　动机：{String(scriptPack.murderer.motive).slice(0, 60)}</span> : null}
-                          {scriptPack.murderer.method ? <span className="text-dim">　手法：{String(scriptPack.murderer.method).slice(0, 60)}</span> : null}
-                        </div>
-                      ) : null}
-                      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
-                        {String(scriptPack.dmGuide.truthReveal || "（DM 手册没有真相复盘文本）").slice(0, 2000)}
-                      </div>
-                    </div>
-                  ) : null}
-                  <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                  <div style={{ maxHeight: 520, overflowY: "auto" }}>
                     {scriptPack.characters.map((c) => (
                       <div key={c.name} style={{ borderTop: "1px solid var(--ink-600, rgba(255,255,255,.08))" }}>
                         <div
@@ -479,6 +639,193 @@ export default function TestRunPage() {
                   </div>
                 </>
               ) : <div className="text-xs text-dim">加载中…（只有测试房能看到全部角色剧本）</div>}
+            </div>
+            ) : null}
+
+            {/* ⑥ 人物关系速览（名册）：身份/职业/是否真凶/与死者的关系，一眼能扫。
+                "与死者的关系"取角色剧本里的关系小节（NPC 有「一、人物关系」、单人侦探有「二、你与死者的关系」，
+                PVP 玩家把关系揉在背景故事里 → 取不到就**如实说没有**，绝不编一段关系填满这块）。 */}
+            {sideTab === "roster" ? (
+            <div className="panel" style={{ overflow: "hidden" }}>
+              <div className="panel-head">
+                <strong>人物关系速览</strong>
+                {scriptPack ? <span className="text-xs text-dim">{scriptPack.characters.length} 人</span> : null}
+              </div>
+              {scriptPack ? (
+                <>
+                  <div className="text-xs" style={{ marginBottom: 8, padding: "6px 8px", border: "1px solid var(--brass-line)", borderRadius: 6, lineHeight: 1.7 }}>
+                    <div>
+                      <span className="text-dim">死者　</span>
+                      {scriptPack.victim && scriptPack.victim.name
+                        ? <strong>{scriptPack.victim.name}</strong>
+                        : <span className="text-dim">剧本没解析出死者信息（本身值得回查）</span>}
+                    </div>
+                    {scriptPack.victim ? (
+                      <div className="text-dim">
+                        {scriptPack.victim.causeOfDeath ? <>死因：{String(scriptPack.victim.causeOfDeath).slice(0, 40)}　</> : null}
+                        {scriptPack.victim.deathTime ? <>身亡：{String(scriptPack.victim.deathTime).slice(0, 40)}　</> : null}
+                        {scriptPack.victim.deathPlace ? <>地点：{String(scriptPack.victim.deathPlace).slice(0, 30)}</> : null}
+                      </div>
+                    ) : null}
+                    {scriptPack.murderer && scriptPack.murderer.name
+                      ? (
+                        <div className="text-dim" style={{ marginTop: 4 }}>
+                          真凶（仅你可见）<span style={{ color: "var(--wax-bright, #d64d50)" }}>{scriptPack.murderer.name}</span>
+                          {scriptPack.murderer.motive ? <>　动机：{String(scriptPack.murderer.motive).replace(/\s+/g, " ").slice(0, 60)}</> : null}
+                        </div>
+                      ) : null}
+                  </div>
+                  <div style={{ maxHeight: 520, overflowY: "auto" }}>
+                    {scriptPack.characters.map((c, i) => {
+                      const rel = relationText(c.script);
+                      const id = identityText(c);
+                      return (
+                        <div key={c.name} className="text-xs" style={{ borderTop: "1px solid var(--ink-600, rgba(255,255,255,.08))", padding: "5px 0" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                            <span className="text-dim">{i + 1}.</span>
+                            <strong>{c.name}</strong>
+                            <span className="text-dim">{c.roleType === "npc" ? "NPC" : "玩家"}</span>
+                            {c.isMurderer ? <span style={{ color: "var(--wax-bright, #d64d50)" }}>凶手</span> : null}
+                          </div>
+                          <div style={{ marginTop: 2, lineHeight: 1.7 }}>
+                            <span className="text-dim">身份　</span>
+                            {id.text
+                              ? <span title={id.from === "script" ? "职业字段是空的，这里取剧本正文首句（自我介绍）" : ""}>{id.text}{id.from === "script" ? <span className="text-dim">（取自正文首句）</span> : null}</span>
+                              : <span className="text-dim">剧本里既没有职业字段，正文首句也没给出身份</span>}
+                          </div>
+                          <div style={{ marginTop: 2, lineHeight: 1.7 }}>
+                            <span className="text-dim">与死者　</span>
+                            {rel || <span className="text-dim">剧本里没有独立的关系小节（全文见「人物」页签）</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {(!scriptPack.victim || !scriptPack.victim.name) ? (
+                    <div className="text-xs" style={{ color: "var(--warning)", marginTop: 8, lineHeight: 1.7 }}>
+                      这个剧本解析出来的「死者」信息是空的（玩家端同样拿不到），所以上面只能给职业/角色类型/是否真凶；
+                      "与死者关系"要等剧本里有独立的关系小节才会显示 —— 这是剧本形状问题，不是这里没渲染。
+                    </div>
+                  ) : null}
+                </>
+              ) : <div className="text-xs text-dim">加载中…</div>}
+            </div>
+            ) : null}
+
+            {/* ④ DM 手册（独立页签）：开场白/完整时间线/真相复盘/三种结局。
+                用与玩家端同一个渲染器 ScriptBody → 手册里独立成行的 `![说明](img:键名)` 会显示成真图，
+                而且是**全文**（旧实现藏在角色剧本里、只 dump 真相复盘的前 2000 字，配图与后文都看不到）。 */}
+            {sideTab === "dm" ? (
+            <div className="panel" style={{ overflow: "hidden" }}>
+              <div className="panel-head">
+                <strong>DM 手册</strong>
+                {scriptPack && scriptPack.murderer && scriptPack.murderer.name
+                  ? <span className="text-xs text-dim">真凶 {scriptPack.murderer.name}</span> : null}
+              </div>
+              {scriptPack ? (dm ? (
+                <>
+                  {scriptPack.murderer && (scriptPack.murderer.method || scriptPack.murderer.mistakes) ? (
+                    <div className="text-xs" style={{ marginBottom: 8, padding: "6px 8px", border: "1px solid var(--brass-line)", borderRadius: 6, lineHeight: 1.7 }}>
+                      {scriptPack.murderer.method ? <div><span className="text-dim">手法　</span>{String(scriptPack.murderer.method).replace(/\s+/g, " ").slice(0, 120)}</div> : null}
+                      {scriptPack.murderer.mistakes ? <div><span className="text-dim">破绽　</span>{String(scriptPack.murderer.mistakes).replace(/\s+/g, " ").slice(0, 120)}</div> : null}
+                    </div>
+                  ) : null}
+                  <div style={{ maxHeight: 560, overflowY: "auto" }}>
+                    {dmSections.map(([title, text]) => (
+                      <div key={title} style={{ marginBottom: 10 }}>
+                        <div className="text-xs text-dim" style={{ marginBottom: 2 }}>{title}</div>
+                        <div className="text-xs" style={{ lineHeight: 1.7 }}>
+                          <ScriptBody text={String(text)} scriptId={sid} />
+                        </div>
+                      </div>
+                    ))}
+                    {dmMissing.length ? (
+                      <div className="text-xs" style={{ color: "var(--warning)", lineHeight: 1.7, marginTop: 4 }}>
+                        缺失的小节（{dmMissing.length}）：{dmMissing.join("、")} —— 手册缺节会影响主持，值得回查生成结果。
+                      </div>
+                    ) : null}
+                  </div>
+                </>
+              ) : <div className="text-xs text-dim">这个剧本没有 DM 手册数据（本身就是一个问题）。</div>) : <div className="text-xs text-dim">加载中…</div>}
+            </div>
+            ) : null}
+
+            {/* ⑤ 全员时间线（从主列搬进侧边栏）：
+                它原本是多列表格（时刻 × 角色），380px 的窄列放不下 —— 直接塞进来会被截断/挤出横向滚动条，
+                所以给 PlayerTimeline 加了 compact（堆叠式：一个时刻一段，段内一行一个角色）。
+                窄列怎么处理见 PlayerTimeline.jsx 的注释。 */}
+            {sideTab === "timeline" ? (
+            scriptPack ? (
+              <div className="panel" style={{ overflow: "hidden" }}>
+                <PlayerTimeline scripts={scriptPack} compact />
+              </div>
+            ) : <div className="panel"><div className="text-xs text-dim">加载中…</div></div>
+            ) : null}
+
+            {/* ② AI 行为统计：全部从公屏流聚合（kind + 文本前缀），用来发现"某个 AI 一直没说话"。
+                数字口径写在面板里，方便对着"公屏实录 N 条"自己核一遍。 */}
+            {sideTab === "stats" ? (
+            <div className="panel" style={{ overflow: "hidden" }}>
+              <div className="panel-head">
+                <strong>AI 行为统计</strong>
+                <span className="text-xs text-dim">公屏 {chatStats.total} 条</span>
+              </div>
+              <div className="text-xs" style={{ lineHeight: 1.7, marginBottom: 4 }}>
+                {chatStats.kinds.length ? chatStats.kinds.map((k, i) => (
+                  <span key={k.kind}>
+                    {i ? <span className="text-dim"> · </span> : null}
+                    <span className="text-dim">{KIND_TEXT[k.kind] || k.kind}</span> {k.n}
+                  </span>
+                )) : <span className="text-dim">还没有任何公屏事件</span>}
+              </div>
+              <div className="text-xs text-dim" style={{ lineHeight: 1.7, marginBottom: 8 }}>
+                {`其中：发言 ${chatStats.chat.spoke + chatStats.chat.fallback}、提问 ${chatStats.chat.asked}、投票 ${chatStats.chat.voted}`
+                  + (chatStats.chat.unnamed ? `、无名字前缀 ${chatStats.chat.unnamed}` : "")}
+                {chatStats.chat.fallback
+                  ? `。有 ${chatStats.chat.fallback} 条发言是模板兜底（那一次 LLM 没给出稿子 —— 属于环境问题，别当成剧本问题）`
+                  : ""}
+                {silentAI.length && chatStats.chat.total
+                  ? <div style={{ color: "var(--danger)", marginTop: 2 }}>
+                      ⚠ {silentAI.map((r) => r.name).join("、")} 一句都没说过（发言/提问/投票都是 0）—— 对照剧本看是角色设定如此，还是调度/LLM 出了问题。
+                    </div>
+                  : null}
+                {/* 一句话都没人说过时别报"某 AI 没说话"：阅读阶段 AI 本来就不发言，那是误报。 */}
+                {silentAI.length && !chatStats.chat.total
+                  ? <div className="text-dim" style={{ marginTop: 2 }}>
+                      公屏还没有任何发言（阅读阶段 AI 不说话），等进入搜证轮再看这一栏才有意义。
+                    </div>
+                  : null}
+              </div>
+              <div style={{ display: "flex", gap: 6, fontSize: 11, lineHeight: 1.6 }} className="text-dim">
+                <span style={{ flex: "1 1 auto", minWidth: 0 }}>角色</span>
+                <span style={{ flex: "0 0 40px", textAlign: "right" }}>发言</span>
+                <span style={{ flex: "0 0 40px", textAlign: "right" }}>提问</span>
+                <span style={{ flex: "0 0 40px", textAlign: "right" }}>投票</span>
+                <span style={{ flex: "0 0 46px", textAlign: "right" }}>搜到线索</span>
+              </div>
+              <div style={{ maxHeight: 420, overflowY: "auto" }}>
+                {statRows.map((r) => (
+                  <div key={r.name} style={{ display: "flex", gap: 6, fontSize: 11, lineHeight: 1.9, borderTop: "1px solid var(--ink-600, rgba(255,255,255,.08))" }}>
+                    <span title={r.name + (r.isAI ? "" : "（不在 AI 名单里：DM 或真人？）")} style={{
+                      flex: "1 1 auto", minWidth: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                      color: (r.talk || r.asked || r.voted) ? "var(--text)" : "var(--danger)",
+                    }}>
+                      {r.name}{r.isAI ? null : <span className="text-dim">（非AI）</span>}
+                    </span>
+                    {[r.talk, r.asked, r.voted, r.clue === null ? "—" : r.clue].map((v, i) => (
+                      <span key={i} style={{ flex: `0 0 ${i === 3 ? 46 : 40}px`, textAlign: "right", color: i === 3 && v === "—" ? "var(--text-muted)" : undefined }}>{v}</span>
+                    ))}
+                  </div>
+                ))}
+                {!statRows.length ? <div className="text-xs text-dim">还没有 AI 名单（等旁观数据）…</div> : null}
+              </div>
+              <div className="text-xs text-dim" style={{ marginTop: 6, lineHeight: 1.7 }}>
+                发言/提问/投票按公屏里服务端写死的前缀区分（`❓ 我想问`／`🤖 我投票给`），
+                被点名后的回答与 LLM 发言在公屏上无法区分，都算发言。
+                {clueTallyReady
+                  ? `搜到线索按 clue_received 事件按线索去重累计，合计 ${Object.values(clueTally).reduce((a, b) => a + b, 0)} 条，可与「线索」页签的「已发现 N/M」对照。`
+                  : "按角色的搜证数来自实时 clue_received 事件：刷新页面后事件已经过去，这项会显示「—」（快照只带「是否被发现」、不带发现者），不影响上面的发言统计。"}
+              </div>
             </div>
             ) : null}
             </div>
