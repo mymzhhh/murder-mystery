@@ -4,7 +4,7 @@
 // 现行约定：凶手时间线＝真实经过；对外说辞另立；「凶手确认」保留原名但只做要点确认。
 const test = require("node:test");
 const assert = require("node:assert");
-const { buildCharacterPrompt } = require("../../src/script/murder-mystery-builder");
+const { buildCharacterPrompt, MIN_TIMELINE_POINTS } = require("../../src/script/murder-mystery-builder");
 
 const FW = "## 二、死者信息\n姓名与身份：荣宗耀\n";
 const mk = (isMurderer, name = "白凤") =>
@@ -55,7 +55,17 @@ test("两种角色：占位符全部被替换，无残留", () => {
   }
 });
 
-test("凶手指令：时间线仍要求 ≥8 个时间点（与模板约束一致）", () => {
-  const p = mk(true);
-  assert.ok(p.includes("至少列出 8 个时间点"), "凶手时间线同样受最少条数约束");
+test("凶手指令：时间线受与普通玩家**同一条**条数约束（不得因是凶手而放宽）", () => {
+  // ⚠️ 本测试在 2953d92（把模板从"至少 8 个"上调为"至少 12 个、下限 8"）之后**曾长期是红的**：
+  // 它断言 `至少列出 8 个时间点`，而模板早已改成 12。当时没被发现，是因为那一次 npm test
+  // 的工作目录传错了、匹配到 0 个测试而假绿。所以这里不再钉死某一句具体措辞，
+  // 改为钉**真正的不变量**：两种角色的条数约束必须逐字相同，且下限与代码常量一致。
+  const mur = mk(true), plain = mk(false);
+  const grab = (s) => (s.match(/- \*\*时间线客观且完整\*\*[^\n]*/) || [""])[0];
+  const line = grab(mur);
+  assert.ok(line.length > 0, "「时间线客观且完整」约束行必须存在于两种角色的提示词里");
+  assert.strictEqual(line, grab(plain), "凶手与普通玩家的时间线条数约束必须逐字相同，否则凶手那条会被静默放宽");
+  assert.ok(line.includes(String(MIN_TIMELINE_POINTS)),
+    `约束行里的下限必须等于 MIN_TIMELINE_POINTS=${MIN_TIMELINE_POINTS}（改模板时别忘改常量，或反之）`);
+  assert.ok(/目标 12~25 条/.test(line), "目标条数（12~25）必须写明——只留下限会让模型贴着下限写");
 });

@@ -162,7 +162,14 @@ function findDeathMoment(outline) {
   });
   const pick = (pool) => (victimName && pool.find((r) => String(r.desc).includes(victimName))) || pool[0];
   const toTime = (row) => (row ? hmOf(row.time) : null);
-  if (cands.length) return toTime(pick(cands));
+  if (cands.length) {
+    const t = toTime(pick(cands));
+    // ⚠️ 不能在这里直接 `return toTime(...)`：候选行的 time 可能 hmOf **解析不出**
+    //（如写成"案发前后"），而下面的死因兜底明明能判出这一条。
+    // 原实现只要 cands 非空就直接 return，于是那个 null 被原样交出去 →
+    // 整层死亡约束静默失效。改成"解析出来才返回，否则继续往下兜底"。
+    if (t) return t;
+  }
 
   // 兜底：靠**死因描述**定位，而不是靠死亡动词。
   // ⚠️ 第三次实测漏判（1993 成都·川剧团）：时间线写「21:10 贺清源推倒大戏箱压住陈慕舟口鼻」——
@@ -178,7 +185,13 @@ function findDeathMoment(outline) {
     if (DEATH_PLAN_RE.test(d)) return false;
     if (!d.includes(victimName)) return false;           // 死者必须在场（作为受害者被提及）
     if (victimActs(d, victimName)) return false;         // 死者若是这一行的动作主体，多半是他生前在做事
-    return kw.some((k) => d.includes(k));
+    // ⚠️ 第四次实测漏判（2026-10-17）：死因短语常被**死者姓名插在中间** ——
+    // 死因写「钝器击打后脑」，行文却是「用压片轮击打**邱长贵**后脑」，
+    // 要求短语连续出现必然落空（4 字窗口"击打后脑"被姓名劈开）。
+    // 所以把姓名从行文里摘掉后再匹配一次。这不放宽判据：上面已经要求
+    // "这一行提到了死者"且"死者不是动作主体"，摘掉姓名只是把这句话还原成死因的措辞。
+    const noName = d.split(victimName).join("");
+    return kw.some((k) => d.includes(k) || noName.includes(k));
   });
   if (fallback.length) return toTime(pick(fallback));
   return null;
