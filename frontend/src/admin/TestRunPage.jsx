@@ -26,6 +26,11 @@ import { fmtClock, phaseSteps, phaseStep, tallyStream, voteRows, relationText, i
 /** 侧边栏页签：八块内容里除"常驻摘要"外的六块，一次点击可达。
  *  为什么必须有页签：380px 的窄列塞不下六个部件，硬叠起来实测会落到视口之外（等于看不见）。 */
 const SIDE_TABS = [["clue", "线索"], ["script", "人物"], ["roster", "关系"], ["dm", "DM"], ["timeline", "时间线"], ["stats", "统计"]];
+/** 模块 key → 中文名（弹框标题用；找不到就退回 key 本身，不抛错） */
+const moduleLabel = (k) => (SIDE_TABS.find(([key]) => key === k) || [k, k])[1];
+/** 左侧模块栏的图标。用 emoji 而不是引图标库：本项目其它面板（玩家页情报台）已是这个做法，
+ *  为零散几个入口引一整套图标依赖不值当。 */
+const MODULE_ICON = { clue: "🔍", script: "📖", roster: "👥", dm: "🗝️", timeline: "🕰️", stats: "📊" };
 
 /** 公屏 kind 的中文名（只用于统计页签里那一行对账） */
 const KIND_TEXT = {
@@ -48,11 +53,10 @@ export default function TestRunPage() {
   const [scriptPack, setScriptPack] = useState(null);      // 全部角色剧本（管理员对照用）
   const [openChar, setOpenChar] = useState("");            // 展开中的角色
   const [openClue, setOpenClue] = useState("");            // 展开中的线索（按钮式查看）
-  // 侧边栏页签：八块内容（常驻摘要 + 六块页签内容 + 原有的线索/人物）里，除常驻摘要外互斥显示。
-  // 为什么必须互斥：并排（或上下叠放）时下面那块会落到折叠线以下 ——
-  // 实测侧边栏改成常驻列之后，「角色剧本」的 y=859 而视口只有 872，等于看不见。
-  // 页签让每块都只隔一次点击，且各自能占满侧边栏高度。
-  const [sideTab, setSideTab] = useState("clue");
+  // 六个模块（线索/人物/关系/DM/时间线/统计）改成**按钮 + 弹框**：
+  // 原来它们常驻在 380px 的右侧栏里，等于永久吃掉公屏的宽度，而这六块都是"需要时看一眼"的。
+  // openModule = 当前打开的模块 key（null = 都没开）；同一时刻只弹一个。
+  const [openModule, setOpenModule] = useState(null);
   // GET /api/admin/test-runs 里**本房间**那一条 meta（阶段流水 phaseLog / 设定时长 phaseMs / finished）。
   // 为什么不能只用 state：阶段流水只在服务端登记里，spectate_ready 不含它；
   // 而"哪一段在拖时间"正是这一页要看的东西之一。
@@ -376,7 +380,30 @@ export default function TestRunPage() {
                  侧边栏只有 636px 而行被撑到 779px，右下角就空出 380×143 一块（正是"成片空白"）；
                  去掉之后行高 = 内容高，两列底边齐平。 */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
-            <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column" }}>
+            {/* 左侧模块栏：图标 + 文字竖排一列（用户指定的形态，参照编辑器那种左侧栏）。
+                点一个弹一个框（面板内容在下面的 modal 里）；sticky 是为了往下滚公屏时它不走。
+                order 与主列同为 1 → 两者并排一行；上方的「实时摘要」order 0 → 始终占满一整行。 */}
+            <div style={{
+              flex: "0 0 92px", order: 1, alignSelf: "flex-start",
+              /* sticky 的偏移必须让开固定顶栏（--header-h），否则往下滚时整栏会钻到顶栏底下 */
+              position: "sticky", top: "calc(var(--header-h) + 12px)",
+              display: "flex", flexDirection: "column", gap: 6,
+            }}>
+              {SIDE_TABS.map(([k, label]) => (
+                <button
+                  key={k}
+                  className={"btn btn-sm" + (openModule === k ? "" : " btn-outline")}
+                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 4px", lineHeight: 1.25 }}
+                  onClick={() => setOpenModule(k)}
+                  title={`打开「${label}」`}
+                >
+                  <span style={{ fontSize: 16, lineHeight: 1 }}>{MODULE_ICON[k] || "•"}</span>
+                  <span style={{ fontSize: 11, whiteSpace: "nowrap" }}>{label}</span>
+                </button>
+              ))}
+            </div>
+
+            <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column", order: 1 }}>
             <div className="panel" style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, marginBottom: 0 }}>
               <div className="panel-head"><strong>公屏实录</strong><span className="text-xs text-dim">{stream.length} 条</span></div>
               <div ref={feedRef} style={{ flex: "1 1 0", minHeight: 360, overflowY: "auto", paddingRight: 4 }}>
@@ -406,27 +433,15 @@ export default function TestRunPage() {
             </div>
             </div>
 
-            {/* 右侧常驻侧边栏：八块内容（常驻摘要 + 六个页签 + 原有的线索/人物都在页签里）。
-                sticky + 自身可滚动：侧边栏比视口高时内部滚，不会把主列推下去。
-                ⚠️ maxHeight 为什么是 100vh - 180px 而不是 100vh - 24px：
-                侧边栏自己 sticky 的**活动范围只有它所在的这一行**（行高 = 侧边栏高），所以它实际上
-                钉不住 —— 页面滚动时整列会跟着上移，顶到最上面时会被那条固定顶栏盖住（实测滚到底
-                常驻摘要的第一行就藏到顶栏后面了，用户明确要求"常驻摘要不能被滚走"）。
-                推导：滚到底时侧边栏 top = 视口高 - 侧边栏高 - 页底留白 = 180 - 28 = 152px，
-                恒大于顶栏高度（约 60px）→ 摘要永远在顶栏下面，看得见。
-                代价是侧边栏比视口矮一些（本机 979 → 799），部件区仍有约 550px。 */}
-            <div style={{
-              flex: "0 0 380px", minWidth: 300, display: "flex", flexDirection: "column",
-              position: "sticky", top: 12, alignSelf: "flex-start",
-              maxHeight: "calc(100vh - 180px)", overflowY: "auto",
-            }}>
-            {/* 常驻摘要 + 页签一起 sticky 在侧边栏顶部：滚侧边栏时这两样不动，
-                所以"随时想瞟一眼"的阶段耗时/票型永远不会被滚走，六个页签也永远在同一个位置。
-                （另一条路是给摘要固定高度，但那会白占 380px 里的一大块 —— 摘要是两行的事。） */}
-            <div style={{
-              position: "sticky", top: 0, zIndex: 3, background: "var(--ink-900, #0b0d11)",
-              paddingBottom: 8, marginBottom: 10, borderBottom: "1px solid var(--brass-line)",
-            }}>
+            {/* 实时摘要 + 六个模块按钮：占满整幅宽度的一段（原来是 380px 的常驻侧边栏）。
+                ⚠️ 模块面板本身已经移进弹框（见下面的 modal），所以这里不再需要 sticky /
+                内部滚动 —— 那两个属性当初只是为了"侧边栏比视口高时内部滚"。
+                摘要仍然常驻可见：它是"随时想瞟一眼"的阶段耗时与票型。 */}
+            {/* order:0 —— 摘要与模块按钮排到公屏**之前**（DOM 里仍在后面，只调显示顺序）：
+                六个按钮是这一页的"入口"，落到页面底部就得先滚下去才能点。 */}
+            <div style={{ flex: "1 1 100%", width: "100%", display: "flex", flexDirection: "column", order: 0 }}>
+            {/* 摘要和按钮同处一段，滚走也无所谓了（它们不再需要钉住）。 */}
+            <div style={{ marginBottom: 8 }}>
             {/* ① 阶段进度与各阶段耗时 + ③ 投票分布与结局：常驻、不占页签。
                 理由：旁观时这两样是"随时想瞟一眼"的（哪一段在拖时间、票怎么分），
                 藏进页签就等于每次都要点一下，而且页签互斥会把它顶掉。 */}
@@ -496,23 +511,25 @@ export default function TestRunPage() {
               </div>
             </div>
 
-            {/* 页签条：允许换行，六个页签都只隔一次点击；激活的那块紧贴在下面，
-                所以它的 top 一定在视口内（上一轮的坑：并排叠放时下面那块落到折叠线以外）。 */}
-            <div id="side-tabs" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-              {SIDE_TABS.map(([k, label]) => (
-                <button
-                  key={k}
-                  className={"btn btn-sm" + (sideTab === k ? "" : " btn-outline")}
-                  style={{ flex: "1 1 66px" }}
-                  onClick={() => setSideTab(k)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {/* 六个模块按钮已经搬到**左侧竖栏**（见上面的 rail），这里不再需要横排按钮。 */}
             </div>
 
-            {sideTab === "clue" ? (
+            {/* 模块弹框：复用项目既有的 .modal-overlay / .modal-card / .modal-head / .modal-body
+                （ScriptsPage 的剧本详情就是这么弹的），不另造一套样式。
+                点遮罩或「关闭」收起。里面仍然原来那六个面板，只是换了容器。 */}
+            {openModule ? (
+            <div className="modal-overlay" onClick={() => setOpenModule(null)} role="dialog" aria-modal="true" aria-label={moduleLabel(openModule)}>
+              <div
+                className="modal-card"
+                onClick={(e) => e.stopPropagation()}
+                style={{ width: "min(1040px, 94vw)", maxWidth: 1040, maxHeight: "88vh", display: "flex", flexDirection: "column" }}
+              >
+                <div className="modal-head">
+                  <strong>{moduleLabel(openModule)}</strong>
+                  <button className="btn btn-outline btn-xs" style={{ marginLeft: "auto" }} onClick={() => setOpenModule(null)}>关闭</button>
+                </div>
+                <div className="modal-body">
+            {openModule === "clue" ? (
             <div className="panel">
               <div className="panel-head">
                 <strong>剧本体检</strong>
@@ -606,7 +623,7 @@ export default function TestRunPage() {
                 本轮把它提成独立的「DM」页签，走 ScriptBody 渲染 —— 见下面的 DM 面板。 */}
             {/* ⚠️ 必须给 overflow 约束：这个面板里的正文用了 white-space: pre-wrap，
                 （不给约束时）它的 min-content 宽度很大 → 会把侧边栏撑宽。 */}
-            {sideTab === "script" ? (
+            {openModule === "script" ? (
             <div className="panel" style={{ overflow: "hidden" }}>
               <div className="panel-head">
                 <strong>角色剧本</strong>
@@ -661,7 +678,7 @@ export default function TestRunPage() {
             {/* ⑥ 人物关系速览（名册）：身份/职业/是否真凶/与死者的关系，一眼能扫。
                 "与死者的关系"取角色剧本里的关系小节（NPC 有「一、人物关系」、单人侦探有「二、你与死者的关系」，
                 PVP 玩家把关系揉在背景故事里 → 取不到就**如实说没有**，绝不编一段关系填满这块）。 */}
-            {sideTab === "roster" ? (
+            {openModule === "roster" ? (
             <div className="panel" style={{ overflow: "hidden" }}>
               <div className="panel-head">
                 <strong>人物关系速览</strong>
@@ -731,7 +748,7 @@ export default function TestRunPage() {
             {/* ④ DM 手册（独立页签）：开场白/完整时间线/真相复盘/三种结局。
                 用与玩家端同一个渲染器 ScriptBody → 手册里独立成行的 `![说明](img:键名)` 会显示成真图，
                 而且是**全文**（旧实现藏在角色剧本里、只 dump 真相复盘的前 2000 字，配图与后文都看不到）。 */}
-            {sideTab === "dm" ? (
+            {openModule === "dm" ? (
             <div className="panel" style={{ overflow: "hidden" }}>
               <div className="panel-head">
                 <strong>DM 手册</strong>
@@ -770,7 +787,7 @@ export default function TestRunPage() {
                 它原本是多列表格（时刻 × 角色），380px 的窄列放不下 —— 直接塞进来会被截断/挤出横向滚动条，
                 所以给 PlayerTimeline 加了 compact（堆叠式：一个时刻一段，段内一行一个角色）。
                 窄列怎么处理见 PlayerTimeline.jsx 的注释。 */}
-            {sideTab === "timeline" ? (
+            {openModule === "timeline" ? (
             scriptPack ? (
               <div className="panel" style={{ overflow: "hidden" }}>
                 <PlayerTimeline scripts={scriptPack} compact />
@@ -780,7 +797,7 @@ export default function TestRunPage() {
 
             {/* ② AI 行为统计：全部从公屏流聚合（kind + 文本前缀），用来发现"某个 AI 一直没说话"。
                 数字口径写在面板里，方便对着"公屏实录 N 条"自己核一遍。 */}
-            {sideTab === "stats" ? (
+            {openModule === "stats" ? (
             <div className="panel" style={{ overflow: "hidden" }}>
               <div className="panel-head">
                 <strong>AI 行为统计</strong>
@@ -841,6 +858,10 @@ export default function TestRunPage() {
                 {clueTallyReady
                   ? `搜到线索按 clue_received 事件按线索去重累计，合计 ${Object.values(clueTally).reduce((a, b) => a + b, 0)} 条，可与「线索」页签的「已发现 N/M」对照。`
                   : "按角色的搜证数来自实时 clue_received 事件：刷新页面后事件已经过去，这项会显示「—」（快照只带「是否被发现」、不带发现者），不影响上面的发言统计。"}
+              </div>
+            </div>
+            ) : null}
+                </div>
               </div>
             </div>
             ) : null}
