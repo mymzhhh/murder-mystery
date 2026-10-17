@@ -246,10 +246,27 @@ function parseScript(markdown) {
 
 function extractField(text, label) {
   // 兼容 CRLF（\r\n）与 LF（\n）；\s*? 非贪婪避免吞掉行尾换行
+  //
+  // ⚠️ 但 `\s*?` **能跨换行**，于是"值为空"的字段会把**下一行**当成自己的值。
+  // 实测（真跑出来的两本稿都有）：`- **死亡时间**：` 后面是空的，解析器就把下一行
+  // `- **死亡地点**：放映室` 整个吞成 deathTime → `victim.deathTime = "**死亡地点**：放映室"`。
+  // 这串垃圾会顺着 ai-player-llm 念给 AI 玩家（"死亡时间 **死亡地点**：放映室"），
+  // 比字段为空更糟 —— 空至少是"不知道"，这是"知道错了"。
+  // 修法：加负向前瞻，**只拒绝"下一行本身是另一个字段"**这种情况 ——
+  // 既要认加粗形态（`- **死亡地点**：`），也要认不加粗形态（`- 死亡地点：`）。
+  // 不能简单把 \s*? 换成 [ \t]*，因为"值另起一段"是合法写法（如 `- **尸体状态**：\n<整段描述>`），
+  // 那样改会把这类字段一律读成空。
+  // 三种模式都要加：第三种带 `s` 标志、本来就能跨行，不加就绕过去了（单测抓到过）。
+  // ⚠️ "字段行"的判据必须收紧到**中文字标签 + 冒号**（`[一-龥]{1,12}[：:]`），
+  // 不能写成"短串+冒号" —— 那样会把**值**也误判成字段行：实测 `- **死亡时间**：22:28`
+  // 里的 `22:28` 会被当成"标签 22 + 冒号"，于是这个值被读成空（单测当场抓到）。
+  // 代价：值另起一段、且首行以"某某："开头的散文会被读成空；这种写法在本项目不存在
+  //（字段值要么同行、要么是整段叙述），两害相权取"不再污染结构化数据"。
+  const NOT_A_FIELD = "(?!\\s*[-*]?\\s*(?:\\*\\*|[\\u4e00-\\u9fa5]{1,12}[：:]))";
   const patterns = [
-    new RegExp(`${label}[：:]\\s*?(.+?)(?:\\r?\\n|$)`, "i"),
-    new RegExp(`\\*\\*${label}\\*\\*[：:]\\s*?(.+?)(?:\\r?\\n|$)`, "i"),
-    new RegExp(`${label}\\s*[：:]\\s*?(.+?)(?:\\r?\\n\\r?\\n|\\r?\\n#{1,3}|$)`, "is"),
+    new RegExp(`${label}[：:]\\s*?${NOT_A_FIELD}(.+?)(?:\\r?\\n|$)`, "i"),
+    new RegExp(`\\*\\*${label}\\*\\*[：:]\\s*?${NOT_A_FIELD}(.+?)(?:\\r?\\n|$)`, "i"),
+    new RegExp(`${label}\\s*[：:]\\s*?${NOT_A_FIELD}(.+?)(?:\\r?\\n\\r?\\n|\\r?\\n#{1,3}|$)`, "is"),
   ];
   for (const p of patterns) {
     const m = text.match(p);
@@ -627,4 +644,7 @@ function normalizeCharacterScript(char) {
 module.exports = {
   parseScript, normalizeCharacterScript, extractSecretFromScript, extractAllClues,
   cutCharacterName, isValidCharacterName, checkCharacterCoverage,
+  // 导出给单测：这个函数的"空值会吞下一行"曾经污染过真稿的结构化数据（见其注释），
+  // 值得直接钉住，而不是只从 parseScript 的间接结果去推断。
+  extractField,
 };

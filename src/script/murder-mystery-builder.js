@@ -97,6 +97,16 @@ async function runStage(stageName, fn, onProgress) {
 /** 时间线最少时间点数（与 templates/murder-mystery/character.js 玩家模板的"至少 8 个时间点"一致） */
 const MIN_TIMELINE_POINTS = 8;
 
+/**
+ * NPC 时间线最少时间点数（与 NPC 模板的"至少 6 个时间点"一致）。
+ *
+ * 为什么 NPC 要单独一个更低的数（2026-10-17 实测）：NPC 的篇幅预算本就比玩家小
+ *（目击者 1500-2500 / 嫌疑人 1200-2000，玩家 3400-5200），且 NPC 时间线只覆盖
+ * "案发当日及前一日的行动轨迹"，不含完整背景动线。所以 8 条对 NPC 不合适，
+ * 但"不设下限"更不行 —— 实测漏写时只剩 5 条。
+ */
+const MIN_NPC_TIMELINE_POINTS = 6;
+
 /** 统计时间线正文的时间点数（HH:MM、中文时辰/时段都算，去重） */
 function countTimelinePoints(body) {
   // 注意：古代设定剧本用"戌时二刻"这类时辰表述，必须一并识别，
@@ -770,6 +780,11 @@ async function ensureDeathConsistent(charName, content, deathAt, victimName, ret
 
   if (onProgress) onProgress("player_script", `${charName} 剧本在死者死亡后仍写其活动（${chk.violations.length} 处），正在就地改写...`);
   console.warn(`[builder] ${charName} 死亡时刻校验失败：${chk.violations.length} 处（死亡时刻 ${deathAt}）`);
+  // 与日期标注那处同理：这一层判错会把**写对的内容改坏**（见上方 repairDeathLines 的注释），
+  // 所以每条违规的时刻与原文都必须留痕，事后才能复核是"真违规"还是"误伤"。
+  // ⚠️ 注意这里的违规对象形状是 `{time, line, short}`（checkVictimAfterDeath 产出），
+  // **没有 reason 字段** —— 别照抄日期标注那处的 `v.reason`，否则打出一行空原因。
+  for (const v of chk.violations) console.warn(`[builder]   · [死后活动] 死者在该时刻之后仍被写成活动（${v.time}）｜原文：${v.short || v.line || ""}`);
 
   // ① 优先就地改写
   const patched = await repairDeathLines(charName, content, deathAt, victimName, chk.violations, onProgress, caseDate);
@@ -992,6 +1007,12 @@ async function ensureDateConsistent(charName, content, opts, retryFn, onProgress
   const note = `\n\n## ⚠️ 上一次输出的日期标注有误，必须重写\n问题：本剧本**跨过午夜**${opts.nextDate ? `（案发当日 ${opts.caseDate}，案发次日 ${opts.nextDate}）` : ""}，而你的日期标注与之冲突：\n${shown}\n\n请重新输出**完整**角色剧本（保留上一版情节要点），并改成：\n- 17:00–23:59 的事件标 **案发当日${opts.caseDate ? `（${opts.caseDate}）` : ""}**；\n- 00:00–05:59 的事件标 **案发次日${opts.nextDate ? `（${opts.nextDate}）` : ""}**；\n- 不要把整段夜间事件统一标成同一天。`;
   if (onProgress) onProgress("player_script", `${charName} 日期标注与跨午夜规则冲突（${chk.violations.length} 处），正在重写...`);
   console.warn(`[builder] ${charName} 日期标注校验失败：${chk.violations.length} 处`);
+  // ⚠️ 必须把**每一条**违规的原因与原文都打出来，不能只写"N 处"：
+  // 这里每命中一次就要**整篇重写一遍角色剧本**（实测一次约 1 分钟），代价不低；
+  // 只留一个数字的话，事后连"这是真缺陷还是判据误伤"都判断不了 ——
+  // 实测改后那一本有 2 个角色因此各多跑了一整遍，却无从复核。
+  // 与 bible-enforce 里 warn 路径的做法一致（那里也是逐条列出原因与原文）。
+  for (const v of chk.violations) console.warn(`[builder]   · [日期标注] ${v.reason}｜原文：${v.line}`);
   try {
     const retried = await retryFn(note);
     const r = checkDateLabels(retried, opts);
@@ -1126,22 +1147,38 @@ function checkDateAgreement(sections, outline) {
  */
 
 /**
- * 生成后校验：角色剧本必须含「时间线」章节且时间点不少于 MIN_TIMELINE_POINTS。
+ * 生成后校验：角色剧本必须含「时间线」章节且时间点不少于下限（玩家 8 / NPC 6）。
  * 实测缺陷：模型会把时间线压成一两条（出现 82 字/1 条、74 字/1 条），
  * 或把完整行动轨迹塞进「凶手确认」而让时间线只剩抵达一条。
  * 不达标时带明确纠正指令补写一次；补写仍不达标则保留时间点更多的一份。
+ *
+ * ⚠️ 为什么加第 5 个参数（NPC 校验缺失，2026-10-17 实测）：
+ *   这个门以前**只接在玩家角色循环上**（NPC 循环里没人调用它）。于是 NPC 的时间线
+ *   薄到只剩几条也没人拦 —— 实测改后那一本里 `阿强` 只有 **5 个时刻 / 时间线 374 字**，
+ *   而 NPC 模板自己要求"至少 6 个时间点"，即**低于自己的要求却无人出声**。
+ *   NPC 的目击信息是玩家推理的输入，它薄了直接削弱整局可推理度，属于结构性漏洞。
+ *   但 NPC 的章节名（"三、时间线"）与标题体系（人物关系/作案动机/需要隐瞒的信息）
+ *   都与玩家不同，所以把"下限/章节名/标题约束/覆盖范围/进度阶段"做成可选参数，
+ *   而不是复制一份实现 —— 本项目已经吃过"同一份事实在两处各实现一次"的亏（见 timeline-utils.js 注释）。
+ *   默认值即玩家侧的原行为，调用方不传参数时行为完全不变。
  */
-async function ensureTimelineComplete(charName, content, retryFn, onProgress) {
+async function ensureTimelineComplete(charName, content, retryFn, onProgress, opts) {
+  const o = opts || {};
+  const min = Number.isFinite(o.min) ? o.min : MIN_TIMELINE_POINTS;
+  const section = o.section || "二、你的时间线";
   const body = extractCharacterTimeline(content);
   const points = body === null ? 0 : countTimelinePoints(body);
-  if (body !== null && points >= MIN_TIMELINE_POINTS) return content;
+  if (body !== null && points >= min) return content;
 
   const problem = body === null
-    ? "完全没有「二、你的时间线」章节"
-    : `「二、你的时间线」只有 ${points} 个时间点（要求至少 ${MIN_TIMELINE_POINTS} 个）`;
-  const note = `\n\n## ⚠️ 上一次输出不合格，必须重写\n上一次的问题：${problem}。\n请重新输出**完整**角色剧本（保留上一版背景故事与任务的要点，不要压缩它们），并严格遵守格式约束：\n- 必须包含 "### 一、你的背景故事" / "### 二、你的时间线" / "### 三、你的任务" 三个三级标题，顺序不可变。\n- 「二、你的时间线」必须独立成章、**至少 ${MIN_TIMELINE_POINTS} 个时间点**，覆盖案发前一日晚间到案发后，格式 "- **月日 时刻**：房间名 — 事件"（月日/时刻/房间名都要换成真实值；**禁止把"日期""时间""地点"这三个词写进条目**）。\n- 不得把行动轨迹写进背景故事或其它章节。`;
+    ? `完全没有「${section}」章节`
+    : `「${section}」只有 ${points} 个时间点（要求至少 ${min} 个）`;
+  const headings = o.headings
+    || '必须包含 "### 一、你的背景故事" / "### 二、你的时间线" / "### 三、你的任务" 三个三级标题，顺序不可变。';
+  const cover = o.cover || "覆盖案发前一日晚间到案发后";
+  const note = `\n\n## ⚠️ 上一次输出不合格，必须重写\n上一次的问题：${problem}。\n请重新输出**完整**角色剧本（保留上一版其它章节的要点，不要压缩它们），并严格遵守格式约束：\n- ${headings}\n- 「${section}」必须独立成章、**至少 ${min} 个时间点**，${cover}，格式 "- **月日 时刻**：房间名 — 事件"（月日/时刻/房间名都要换成真实值；**禁止把"日期""时间""地点"这三个词写进条目**）。\n- 不得把行动轨迹写进其它章节。`;
 
-  if (onProgress) onProgress("player_script", `${charName} 时间线不达标（${problem}），正在补写...`);
+  if (onProgress) onProgress(o.progressStage || "player_script", `${charName} 时间线不达标（${problem}），正在补写...`);
   console.warn(`[builder] ${charName} 时间线不达标：${problem}，触发补写`);
 
   try {
@@ -1919,7 +1956,31 @@ async function buildMurderMystery(userInput, onProgress, config) {
     // 单人本NPC需要更丰富内容，token适度加量（封顶）
     const npcTokens = isSolo ? Math.min(TOKENS_PER_STAGE * 1.25, 16384) : TOKENS_PER_STAGE;
     const result = await runStage(`NPC信息(${ch.name})`, () => generate(systemPrompt, prompt, { maxTokens: Math.floor(npcTokens), temperature: 0.7 }), onProgress);
-    characterResults[ch.name] = result.content;
+    // 生成后校验：NPC 的时间线同样有下限（模板要求"至少 6 个时间点"）。
+    // ⚠️ 这一步以前**不存在** —— 门只接在玩家角色循环上，于是 NPC 时间线薄到 5 条也没人出声
+    //（实测改后那一本的 `阿强`：5 个时刻 / 时间线 374 字）。NPC 的目击信息是玩家推理的输入，
+    // 它薄了直接削弱整局可推理度，属于结构性漏洞而不是文风问题。
+    // 章节名与标题体系用 NPC 自己那套（"三、时间线" / 人物关系 / 目击信息…），不能沿用玩家的。
+    const npcHeadings = isWitness
+      ? '使用 "### 一、人物关系" / "### 二、目击信息与需要隐瞒的事" / "### 三、时间线" 三个三级标题，顺序不可变。'
+      : '使用 "### 一、人物关系" / "### 二、作案动机" / "### 三、时间线" / "### 四、需要隐瞒或可供审讯透露的信息" 四个三级标题，顺序不可变。';
+    const npcTimeline = await ensureTimelineComplete(
+      ch.name,
+      result.content,
+      async (note) => {
+        const r = await runStage(`NPC信息补写(${ch.name})`, () => generate(systemPrompt, prompt + note, { maxTokens: Math.floor(npcTokens), temperature: 0.7 }), onProgress);
+        return r.content;
+      },
+      onProgress,
+      {
+        min: MIN_NPC_TIMELINE_POINTS,
+        section: "三、时间线",
+        progressStage: "npc_script",
+        headings: npcHeadings,
+        cover: "覆盖案发当日及前一日的完整行动轨迹",
+      },
+    );
+    characterResults[ch.name] = npcTimeline;
   }
   report.characterScripts = characterResults;
 
@@ -4025,7 +4086,18 @@ function assembleScript(report, userInput) {
   // 死者信息
   parts.push(`\n## 三、死者信息\n`);
   parts.push(`- **姓名与身份**：${victim.name || ""}${victim.identity ? "（" + victim.identity + "）" : ""}\n`);
-  parts.push(`- **死亡时间**：${victim.deathTime || ""}\n`);
+  // ⚠️ 死亡时间必须**有来源**，不能直接打一个空标签（实测两本都渲染出「- **死亡时间**：」后面什么都没有）：
+  //   根因是大纲的 victim 结构里**没有 deathTime 字段**（只有 name/identity/gender/causeOfDeath/deathPlace），
+  //   而框架提示词确实要求过"死亡时间"，所以它是**在从框架落到大纲结构时丢掉的**，不是模型没写。
+  //   这里用 findDeathMoment(outline) 兜底 —— 那是同一套判定（也是"死者死后不得再活动"
+  //   那层约束的依据），所以填进去的值与全篇其它判定**同源**，不会自相矛盾。
+  //   ⚠️ 兜底也不许写成"（见权威时间轴）"这类**占位语**：script-parser 会把
+  //   `- **死亡时间**：` 后面的文本原样当成 deathTime 存进结构化数据，
+  //   占位语会顺着流到 AI 玩家提示词里（ai-player-llm 会念"死亡时间 （见…）"）。
+  //   所以取不到就留空 + 出声告警，让人去权威时间轴复核，而不是把噪声写进数据。
+  const deadTime = victim.deathTime || findDeathMoment(outline);
+  parts.push(`- **死亡时间**：${deadTime || ""}\n`);
+  if (!deadTime) console.warn(`[builder] ${victim.name || "死者"} 的死亡时间两头都取不到（victim.deathTime 空 + 时间线里判不出死亡时刻）——成稿该字段留空并需人工复核，未编造时刻`);
   parts.push(`- **死亡地点**：${victim.deathPlace || ""}\n`);
   parts.push(`- **直接死因**：${victim.causeOfDeath || ""}\n`);
   const bodyDesc = fwSection(fw, "尸体状态") || fwSection(fw, "现场");
@@ -4196,4 +4268,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
+module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
