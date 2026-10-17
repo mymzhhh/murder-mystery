@@ -476,13 +476,21 @@ export default function TestRunPage() {
                       )) : <div className="text-dim">这一局没有票（无人投票）</div>}
                     </>
                   ) : (
-                    <span className="text-dim">
-                      {state && state.phase === "voting" ? "投票进行中…" : "等待投票"}
-                      {state && state.murdererName
-                        ? <span>　｜ 真凶（仅你可见）<span style={{ color: "var(--wax-bright, #d64d50)" }}>{state.murdererName}</span></span>
-                        : null}
-                      　票型与结局要等 AI DM 广播 truth_revealed（投票阶段结束后）才有数据。
-                    </span>
+                    <>
+                      <span className="text-dim">
+                        {state && state.phase === "voting" ? "投票进行中…" : "等待投票"}
+                        {state && state.murdererName
+                          ? <span>　｜ 真凶（仅你可见）<span style={{ color: "var(--wax-bright, #d64d50)" }}>{state.murdererName}</span></span>
+                          : null}
+                      </span>
+                      {/* ⚠️ 这行原来紧跟在上一段 JSX 文本里、以一个全角空格 `　` 开头做分隔，
+                          结果渲染出来是「…（仅你可见）占卜师票型与结局要等…」——黏成一句。
+                          原因是 JSX 文本最后会 `.trim()`，而 JS 的 trim 连 U+3000 一起删掉。
+                          所以这里改成**独立成行**（不依赖任何前导空白）。 */}
+                      <span className="text-dim" style={{ display: "block", marginTop: 2 }}>
+                        票型与结局要等 AI DM 广播 truth_revealed（投票阶段结束后）才有数据。
+                      </span>
+                    </>
                   )}
                 </div>
               </div>
@@ -631,7 +639,15 @@ export default function TestRunPage() {
                             {c.personality ? <div className="text-dim">语气：{c.personality}</div> : null}
                             {c.goal ? <div className="text-dim">个人任务：{c.goal}</div> : null}
                             {c.secret ? <div style={{ color: "var(--warning)", marginTop: 4 }}>秘密：{c.secret}</div> : null}
-                            <div style={{ whiteSpace: "pre-wrap", marginTop: 6, maxHeight: 260, overflowY: "auto" }}>{c.script || "（这个角色没有正文）"}</div>
+                            {/* ⚠️ 角色正文必须走 ScriptBody：真实剧本的角色剧本里带配图
+                                （独立成行的 `![说明](img:键名)`），此前这里是 `white-space: pre-wrap`
+                                的纯文本渲染 → 玩家/管理员看到的是原始标记，图不显示。
+                                实测对照：同一页的「线索」与「DM」两个页签都用了 ScriptBody，所以
+                                只有「角色剧本」这一处看不到图。scriptId 拿不到时 ScriptBody
+                                自动退回文本，正文不会因此消失。 */}
+                            {c.script
+                              ? <div style={{ marginTop: 6, maxHeight: 380, overflowY: "auto" }}><ScriptBody text={c.script} scriptId={sid} /></div>
+                              : <div className="text-dim">（这个角色没有正文）</div>}
                           </div>
                         ) : null}
                       </div>
