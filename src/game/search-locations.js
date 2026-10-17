@@ -172,12 +172,34 @@ function pickClueAtLocation(clues, chosen, round) {
   return finalPool[Math.floor(Math.random() * finalPool.length)];
 }
 
+/**
+ * **本轮**可搜证的地点池：先用本轮线索过滤，再归纳地点。
+ *
+ * 为什么必须单独抽出这一个函数（2026-10-17）：`buildSearchLocations` 本身只看"线索的地点"，
+ * 不知道轮次；而调用方有两种写法 —— 有的先按 round 过滤线索（ai-player、auto-search 都这么做，
+ * 是对的），有的直接把**全部**线索丢进去（routes/player 的地点列表、socket 里对客户端传参的校验）。
+ * 后者会把**下一轮**的地点也摆出来/也认成合法：玩家选了必然空手，白耗一次配额
+ * —— 正是本文件开头点名的"不公平的随机惩罚"。
+ * 两处各写一遍过滤必然漂移，所以收敛到这一个函数，调用方只许用它。
+ *
+ * @param {Array<{location?:string, round?:number}>} clues 本局全部线索
+ * @param {number} round 当前轮次（1/2）；<=0（非搜证阶段）时不筛，保持原有行为
+ * @param {string} [layoutDescription] 仅当线索完全没有地点时的兜底来源
+ */
+function buildRoundSearchLocations(clues, round, layoutDescription) {
+  const list = Array.isArray(clues) ? clues : [];
+  const r = Number(round);
+  const sameRound = Number.isFinite(r) && r > 0 ? list.filter((c) => Number(c && c.round) === r) : list;
+  return buildSearchLocations(sameRound, layoutDescription);
+}
+
 module.exports = {
   MAX_LOCATIONS,
   normalizeLoc,
   matchLocation,
   mergeSublocations,
   buildSearchLocations,
+  buildRoundSearchLocations,
   availableClues,
   cluesAtLocation,
   pickClueAtLocation,

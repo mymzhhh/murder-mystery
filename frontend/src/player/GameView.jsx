@@ -172,7 +172,23 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       // 注意：这里刻意不监听 ai_answer。
       // 服务端已经把 AI 的回答写成了持久化的 chat_message，若此处再追加一次，
       // 同一个回答会显示两遍（和 intro_statement 是同一类重复）。
-      onSocket("truth_revealed", (d) => setNarrative(d.text || JSON.stringify(d).substring(0, 500))),
+      // ⚠️ 这个处理器以前是 `setNarrative(d.text || JSON.stringify(d).substring(0, 500))`，
+      // 两处都错：
+      //   ① 服务端 truth_revealed 发的是 { murdererName, votes, outcome, description,
+      //      narrative, phase } —— **没有 text 字段**，于是把整包 JSON 的前 500 字
+      //      当成"叙述"显示给玩家；
+      //   ② 它**不切换阶段**。真相阶段刻意不发 phase_changed（避免 renderGame 覆盖真相数据），
+      //      而 phase 是本地 state，于是投完票后页面**停在投票页**，只能刷新
+      //      （刷新后 room_state 带回 phase=truth_reveal 才渲染复盘）。
+      //      实测症状："一次推进不生效、需刷新后重按"。
+      // 修法：读正确的字段，并把 phase 置为 truth_reveal —— 下面既有的 useEffect
+      // （phase === "truth_reveal" 时拉 /api/player/review/:code）本来就在，
+      // 只是以前永远进不去。
+      onSocket("truth_revealed", (d) => {
+        if (d && typeof d.narrative === "string" && d.narrative) setNarrative(d.narrative);
+        else if (d && d.text) setNarrative(d.text);   // 兼容旧字段，别删
+        setPhase("truth_reveal");
+      }),
       // 搜证结果：空手而归/次数用尽都要明确告诉玩家，否则"点了没反应"会被当成卡了
       onSocket("investigate_failed", (d) => {
         setNotice(d?.message || "搜证失败");

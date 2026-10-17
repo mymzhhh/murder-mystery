@@ -3,7 +3,7 @@
 const { verifyToken } = require("../core/auth");
 const { getRedis } = require("../core/redis-client");
 const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions, claimClue, claimCharacter, releaseCharacterClaim, consumeSearchQuota, getSearchQuota, SEARCH_MAX_PER_ROUND, revealClue, shareClue, addWhisper, getWhispersFor } = require("../game/game-manager");
-const { buildSearchLocations, cluesAtLocation, pickClueAtLocation, availableClues } = require("../game/search-locations");
+const { buildRoundSearchLocations, cluesAtLocation, pickClueAtLocation, availableClues } = require("../game/search-locations");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, visibleClues, clueVisibilityOf, PHASE_DEADLINE_MS, needsPhaseDeadline } = require("../game/game-engine");
 const { generatePhaseNarrative } = require("../game/dm-agent");
 const { generateNpcResponse } = require("../game/npc-agent");
@@ -603,7 +603,11 @@ function setupGameSocket(io) {
         // 现在保留 location 参数（AI 路径与旧客户端仍按地点搜），但玩家端不再暴露选择。
         const chosen = String(location || "").trim();
         if (chosen) {
-          const known = buildSearchLocations(allClues, JSON.parse(room.parsedScript || "{}").layoutDescription);
+          // ⚠️ 校验用的地点池也必须是**本轮**的。用全部线索会把下一轮的地点也认成合法，
+          // 客户端（旧页面/AI 路径）传它就能通过校验、然后一条都搜不到 —— 白耗一次配额，
+          // 正是 search-locations.js 注释里点名的"不公平的随机惩罚"。
+          // round <= 0（非搜证阶段）时该函数不筛，保持原行为。
+          const known = buildRoundSearchLocations(allClues, round, JSON.parse(room.parsedScript || "{}").layoutDescription);
           if (!known.some(l => l === chosen)) {
             return socket.emit("error", { code: "UNKNOWN_LOCATION", message: "该地点不在本案场景内" });
           }

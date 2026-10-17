@@ -109,6 +109,25 @@ function narrativeCacheKey(script, phase) {
 /**
  * 生成完整的真相复盘（带超时保护 + DM 手册 fallback，真相揭示不能被 LLM 卡死）
  */
+/**
+ * **同步可得**的兜底真相叙述：结局概要 + DM 手册真相节选，不调 LLM。
+ *
+ * 为什么必须单独抽出来（2026-10-17）：阶段推进要求"先翻阶段、立刻广播"，
+ * 那一刻**不能等 LLM**；但广播的 payload 里需要有可用文本。于是这里提供一份
+ * 不依赖网络的版本给 `autoAdvancePhase` 立即使用，`generateTruthReveal` 超时/失败时
+ * 也复用同一份 —— 同一个兜底只写一遍（本项目已经吃过"同一份事实两处各实现一次"的亏）。
+ */
+function fallbackTruthReveal(script, outcome) {
+  const outcomeText = {
+    true_accusation: "玩家成功指认真凶",
+    wrong_accusation: "玩家指认错误，真凶逍遥法外",
+    tie: "票数平局，凶手趁乱逃脱",
+    no_votes: "无人投票",
+  }[outcome?.outcome] || "游戏结束";
+  const manual = (script?.dmGuide?.truthReveal || "").trim();
+  return `【真相复盘】${outcomeText}。\n\n${manual ? "根据DM手册记录：\n" + manual.substring(0, 1200) : "（DM手册暂无真相记录）"}`;
+}
+
 async function generateTruthReveal(script, votes, outcome) {
   const npcs = (script.characters || []).filter(c => c.roleType === "npc");
   const isPVE = (script.setting?.gameMode || "").toUpperCase() === "PVE";
@@ -143,14 +162,8 @@ ${script.dmGuide?.truthReveal || ''}
   });
   if (result) return result.content;
 
-  const outcomeText = {
-    true_accusation: "玩家成功指认真凶",
-    wrong_accusation: "玩家指认错误，真凶逍遥法外",
-    tie: "票数平局，凶手趁乱逃脱",
-    no_votes: "无人投票",
-  }[outcome?.outcome] || "游戏结束";
-  const manual = (script.dmGuide?.truthReveal || "").trim();
-  return `【真相复盘】${outcomeText}。\n\n${manual ? "根据DM手册记录：\n" + manual.substring(0, 1200) : "（DM手册暂无真相记录）"}`;
+  // 超时/失败一律退回**同步兜底**（与 autoAdvancePhase 立即广播用的是同一份）
+  return fallbackTruthReveal(script, outcome);
 }
 
 function getCharacterNames(script) {
@@ -158,4 +171,4 @@ function getCharacterNames(script) {
   return script.characters.map(c => c.name).filter(Boolean);
 }
 
-module.exports = { generatePhaseNarrative, generateTruthReveal };
+module.exports = { generatePhaseNarrative, generateTruthReveal, fallbackTruthReveal };

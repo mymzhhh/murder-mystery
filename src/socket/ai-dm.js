@@ -2,7 +2,7 @@
 
 const { getRoom, updateRoom, getVotes, clearVotes, getPlayers } = require("../game/game-manager");
 const { getPhaseConfig, getNextPhase, tallyVotes, determineOutcome } = require("../game/game-engine");
-const { generatePhaseNarrative, generateTruthReveal } = require("../game/dm-agent");
+const { generatePhaseNarrative, generateTruthReveal, fallbackTruthReveal } = require("../game/dm-agent");
 
 async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
   const room = await getRoom(roomCode);
@@ -26,25 +26,37 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
     const realPlayers = players.filter(p => !p.isNPC);
     const outcome = determineOutcome(votes, room.murdererName);
     const tallied = tallyVotes(votes, realPlayers);
-    // ⚠️ 真相叙述是**可选装饰**，绝不能让它的失败挡住阶段推进 ——
-    // 此前没有 try/catch：生成失败/超时会把异常抛给计时器回调（被静默吞掉），
-    // 房间于是**永远停在 voting**（用户实测："投完票不会自动进入下一个阶段"）。
-    let narrative = "";
-    try {
-      narrative = await generateTruthReveal(parsed, votes, outcome);
-    } catch (e) {
-      console.warn("[ai-dm] 真相叙述生成失败（仍推进 truth_reveal）:", e.message);
-    }
+    // ⚠️ 这里必须**先翻阶段、立刻广播**，绝不 await LLM。
+    //
+    // 旧实现是 `narrative = await generateTruthReveal(...)`（最长 20s 超时）之后才
+    // updateRoom + emit，于是房间在投完票后**停在 voting 长达 20 秒**：这期间玩家
+    // 刷新看到的还是投票页，只能重按"提交并查看真相"。
+    // 实测症状（子代理真浏览器跑出来的）："一次推进不生效、需刷新后重按"。
+    // 上方 L29 的注释早就写明"真相叙述是可选装饰，绝不能让它的失败挡住阶段推进"，
+    // 但那次只加了 try/catch —— await 仍在阻塞路径上，问题没根治。
+    //
+    // 现在与本文件下方"先切换阶段（即时响应）"用同一套模式：
+    //   ① 立刻用**同步可得**的兜底文本（结局概要 + DM 手册真相节选）广播；
+    //   ② LLM 版叙述异步生成，好了再补发一条 `narrative`（客户端已监听该事件）。
+    // 于是"真相页立刻出现"与"叙述仍然戏剧化"两件事不再互相牺牲。
+    const immediateNarrative = fallbackTruthReveal(parsed, outcome);
 
-    await updateRoom(roomCode, { phase: "truth_reveal", phaseStartedAt: Date.now(), aiNarrative: narrative, status: "finished" });
+    await updateRoom(roomCode, { phase: "truth_reveal", phaseStartedAt: Date.now(), aiNarrative: immediateNarrative, status: "finished" });
     const { getRedis: gr } = require("../game/game-manager");
     (await (await gr())).del(`game:${roomCode}:ready`);
     // 只发送 truth_revealed，不发送 phase_changed（避免前端 renderGame 覆盖真相数据）
     io.to(roomCode).emit("truth_revealed", {
       murdererName: room.murdererName, votes: tallied,
-      outcome: outcome.outcome, description: outcome.description, narrative,
+      outcome: outcome.outcome, description: outcome.description, narrative: immediateNarrative,
       phase: "truth_reveal",
     });
+
+    // 异步补上 LLM 版叙述。失败/超时都只降级（玩家已经拿到可读的复盘页），不影响开局。
+    generateTruthReveal(parsed, votes, outcome).then(async (n) => {
+      if (!n || n === immediateNarrative) return;
+      await updateRoom(roomCode, { aiNarrative: n });
+      io.to(roomCode).emit("narrative", { text: n });
+    }).catch((e) => console.warn("[ai-dm] 真相叙述异步生成失败（复盘页已可用，不回滚）:", e.message));
     return;
   }
 

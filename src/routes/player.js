@@ -5,7 +5,7 @@ const { getRedis } = require("../core/redis-client");
 const { normalizeCharacterScript } = require("../script/script-parser");
 const { generatePersonalReview } = require("../game/review-agent");
 const { determineOutcome, getPhaseConfig, getPhaseRound } = require("../game/game-engine");
-const { buildSearchLocations } = require("../game/search-locations");
+const { buildRoundSearchLocations } = require("../game/search-locations");
 const { computeScores } = require("../game/scoring");
 
 /** 个性化复盘的缓存时长（7 天）：真相已固定，同一玩家重复刷新不必重复花 LLM 配额 */
@@ -170,7 +170,12 @@ const { createGameRoom } = require("../game/game-room-creator");
       const round = getPhaseRound(room.phase);
       const parsed = JSON.parse(room.parsedScript || "{}");
       const clues = await getClues(req.params.code);
-      const locations = buildSearchLocations(clues, parsed.layoutDescription);
+      // ⚠️ 地点池只列**本轮还能搜出东西**的地点（口径收敛在 buildRoundSearchLocations 里）。
+      // 旧实现直接拿全部线索（含下一轮的地点），于是第一轮就把第二轮的搜证地点也摆出来，
+      // 玩家选了必然空手 —— 正是 search-locations.js 注释里点名的"不公平的随机惩罚"。
+      // 注：玩家端现在的搜证是**随机翻一条**（见 socket/game.js 的说明），
+      // 这个列表属遗留路径，但口径仍然要对 —— 否则以后谁把它接回 UI 就踩同一个坑。
+      const locations = buildRoundSearchLocations(clues, round, parsed.layoutDescription);
       // 配额按 playerName 计（playerId 是 socket.id，刷新即变）
       const quota = round ? await getSearchQuota(req.params.code, round, me.playerName) : { used: 0, max: 0, remaining: 0 };
 
