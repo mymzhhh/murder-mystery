@@ -838,7 +838,10 @@ function setupGameSocket(io) {
           answer = await aiLlm.answerLLM(k, askerName, q);
         } catch (e) { console.warn("[ai-player] ask LLM 失败:", e.message); }
         if (!answer) {
-          answer = `🤖 ${ai.characterName || "AI"}：我这边暂时没有更多线索，关于这个问题我知道的就是剧本中提到的情况，目前还不好下结论。`;
+          // 兜底文案要像人说话：原来那句"我这边暂时没有更多线索…"在审讯场景里看着像 AI 坏了。
+          // 触发兜底的实测原因是 25 秒超时（日志 [agnes] 超时丢弃 … ai.answer），
+          // 所以这里给一句自然的口头回避，玩家不会觉得系统卡住。
+          answer = `🤖 ${ai.characterName || "AI"}：这个……我得再想想，一时也说不准。`;
         }
 
         // 问题与回答广播（全员可见，辅助集体推理）
