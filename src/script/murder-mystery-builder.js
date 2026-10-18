@@ -59,9 +59,16 @@ const STAGE_NET_RETRIES = 2;
  * 日志一行不出、进程还活着。根因是 runStage 只对**抛错**重试 —— 挂死的调用永远不返回，
  * 那个 for 循环就永远不推进，"重试当前阶段"这条兜底完全用不上。
  * 而超时抛出的错误消息里带 "timeout"，正好命中 isNetErr ✓ → 直接走既有重试路径，
- * 不需要另写一套。最坏情况 = 3 次尝试 × 10 分钟（比"永远停住"好得多）。
+ * 不需要另写一套。最坏情况 = 3 次尝试 × 阶段超时上限（比"永远停住"好得多）。
+ *
+ * ⚠️ 默认值 10 → 15 分钟（2026-10-18 实测）：
+ * 用火山方舟 ark-code-latest 生成时，framework 阶段连续撞满 10 分钟超时，
+ * 日志时间差正好是 601s / 602s（= 每次都在同一个上限被打断），
+ * 4 次重试白烧 40 分钟、整轮跑了 75 分钟还没出稿。
+ * 长本（4 角色 × 4000+ 字 + 40 条线索 + 完整 DM 手册）的输出本来就重，
+ * 上限卡在 10 分钟会让"慢但能成"的阶段被反复打断 —— 那比多等 5 分钟更糟。
  */
-const STAGE_TIMEOUT_MS = Math.max(60000, parseInt(process.env.STAGE_TIMEOUT_MS, 10) || 10 * 60 * 1000);
+const STAGE_TIMEOUT_MS = Math.max(60000, parseInt(process.env.STAGE_TIMEOUT_MS, 10) || 15 * 60 * 1000);
 function withTimeout(p, ms, label) {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`stage timeout: ${label} 超过 ${Math.round(ms / 1000)}s 未返回`)), ms);
