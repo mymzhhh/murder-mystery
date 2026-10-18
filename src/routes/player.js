@@ -19,7 +19,8 @@ function setupPlayerRoutes(app, authMiddleware) {
       const scripts = [];
       try {
         const { listScripts } = require("../core/db");
-        const pgList = await listScripts();
+        // 只列出对玩家可见的剧本：is_public=false 的（内容还没调好的）只在管理端出现
+        const pgList = await listScripts({ publicOnly: true });
         pgList.forEach(s => scripts.push({
           sessionId: s.id, title: s.title, topic: s.title,
           characterCount: Number(s.real_player_count) || Number(s.player_count) || 0,
@@ -62,6 +63,15 @@ const { createGameRoom } = require("../game/game-room-creator");
     try {
       const { scriptSessionId, maxPlayers } = req.body;
       if (!scriptSessionId) return res.status(400).json({ error: "请选择剧本" });
+      // 下架剧本（is_public=false）不许玩家建房 —— 只在管理端可见/可测；
+      // 否则玩家虽然在大厅看不到，拿到 id 仍能直接建房。
+      try {
+        const { getScript } = require("../core/db");
+        const s = await getScript(scriptSessionId);
+        if (s && s.is_public === false && req.user.role !== "admin") {
+          return res.status(403).json({ error: "该剧本暂未开放" });
+        }
+      } catch (e) { /* 查库失败不阻塞建房（老数据/Redis 剧本没有 is_public） */ }
       res.json(await createGameRoom(scriptSessionId, maxPlayers || 6));
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

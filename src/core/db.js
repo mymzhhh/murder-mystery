@@ -50,6 +50,9 @@ async function initDB() {
       layout_description TEXT DEFAULT '',
       original_markdown TEXT DEFAULT '',
       split_at TIMESTAMPTZ DEFAULT NOW(),
+      -- 是否对玩家可见：false = 只在管理端可见（内容还没调到满意就先下架，
+      -- 不必删除剧本，也不用担心玩家在大厅里点到它）
+      is_public BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMPTZ DEFAULT NOW()
     );
     CREATE TABLE IF NOT EXISTS characters (
@@ -130,6 +133,8 @@ async function initDB() {
   // 用 ALTER 补列而不是只改上面的 CREATE TABLE —— 已有部署的 script_images 表不会因为
   // IF NOT EXISTS 而补列，那样新代码一读 alt 就报错。
   await query(`ALTER TABLE script_images ADD COLUMN IF NOT EXISTS alt TEXT DEFAULT ''`);
+  // 玩家可见性开关：老库补列，默认 TRUE（= 现有剧本照旧对玩家可见，不会因为上线这个改动集体下架）
+  await query(`ALTER TABLE scripts ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE`);
   console.log("[db] PostgreSQL 表已就绪");
 }
 
@@ -174,16 +179,27 @@ async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
   }
 }
 
-/** 查询剧本列表（带真实角色数：老数据的 player_count 可能为 0，用 characters 表聚合兜底） */
-async function listScripts() {
+/**
+ * 查询剧本列表（带真实角色数：老数据的 player_count 可能为 0，用 characters 表聚合兜底）
+ * @param {{publicOnly?: boolean}} [opts] publicOnly=true 时只返回对玩家可见的剧本（管理端不传，看全部）
+ */
+async function listScripts(opts) {
+  const publicOnly = !!(opts && opts.publicOnly);
   const r = await query(`
     SELECT s.id, s.title, s.era, s.location, s.game_mode, s.player_count, s.npc_count, s.clue_count,
-           s.layout_description, s.split_at, s.created_at,
+           s.layout_description, s.split_at, s.created_at, s.is_public,
            (SELECT COUNT(*) FROM characters ch WHERE ch.script_id = s.id AND ch.role_type = 'player') AS real_player_count,
            (SELECT COUNT(*) FROM characters ch WHERE ch.script_id = s.id AND ch.role_type = 'npc') AS real_npc_count
     FROM scripts s
+    ${publicOnly ? "WHERE s.is_public IS NOT FALSE" : ""}
     ORDER BY s.split_at DESC NULLS LAST, s.created_at DESC`);
   return r.rows;
+}
+
+/** 设置剧本是否对玩家可见（false = 仅管理端可见） */
+async function setScriptPublic(id, isPublic) {
+  const r = await query("UPDATE scripts SET is_public=$2 WHERE id=$1 RETURNING id, is_public", [id, !!isPublic]);
+  return r.rows[0] || null;
 }
 
 /** 获取单个剧本详情 */
@@ -286,7 +302,7 @@ async function deleteUser(username) {
 // 否则它们只能各写一套连接池 —— 实测踩过：没导出时 require 到 undefined，
 // 调用时报 "query is not a function" 而被 try/catch 吞成"静默不入库"。
 module.exports = {
-  initDB, query, getPool, saveSplitScript, listScripts, getScript, deleteScript,
+  initDB, query, getPool, saveSplitScript, listScripts, setScriptPublic, getScript, deleteScript,
   saveScriptImage, getScriptImage, listScriptImages, isValidImageKey,
   createUser, getUser, listUsers, updateUserRole, updateUserPassword, deleteUser,
 };

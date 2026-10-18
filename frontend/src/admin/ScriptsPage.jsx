@@ -44,6 +44,16 @@ export default function ScriptsPage() {
     try { await api(`/api/admin/scripts/${id}`, { method: "DELETE" }); load(); } catch (e) { alert(e.message); }
   }
 
+  // 上架/下架：下架后玩家大厅看不到、也不能凭 id 建房（管理端一切照旧）
+  async function doTogglePublic(s) {
+    const id = s.sessionId || s.id;
+    const next = s.isPublic === false;   // 当前是下架 → 点了就是上架
+    try {
+      await api(`/api/admin/scripts/${id}/visibility`, { method: "PATCH", body: { isPublic: next } });
+      load();
+    } catch (e) { alert(e.message); }
+  }
+
   async function doView(id) {
     try {
       const d = await apiJson(`/api/admin/scripts/${id}`);
@@ -157,6 +167,8 @@ export default function ScriptsPage() {
                     {s.isSplit
                       ? <span className="tag tag-success">已切分</span>
                       : <span className="tag tag-warning">未切分</span>}
+                    {/* 下架状态必须显眼：否则管理端看不出"玩家为什么看不到这本" */}
+                    {s.isPublic === false ? <span className="tag tag-danger">仅管理端</span> : null}
                   </div>
                   <div className="text-xs text-muted" style={{ marginTop: 4 }}>
                     {new Date(s.createdAt || Date.now()).toLocaleString()}
@@ -167,7 +179,10 @@ export default function ScriptsPage() {
                   <button className="btn btn-outline btn-xs" onClick={() => doView(s.sessionId || s.id)}>查看</button>
                   <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>切分预览</button>
                   <button className="btn btn-success btn-xs" disabled={busy} onClick={() => doReviewSplit(s.sessionId || s.id)}>评测并切分</button>
-                  <button className="btn btn-outline btn-xs" disabled={busy} onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
+                  <button className="btn btn-outline btn-xs" onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
+                  <button className="btn btn-outline btn-xs" onClick={() => doTogglePublic(s)}>
+                    {s.isPublic === false ? "上架（玩家可见）" : "下架（仅管理端）"}
+                  </button>
                   <button className="btn btn-danger btn-xs" onClick={() => doDelete(s.sessionId || s.id)}>删除</button>
                 </div>
               </div>

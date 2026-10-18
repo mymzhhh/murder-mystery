@@ -176,6 +176,8 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
           sessionId: s.id, topic: s.title, textType: "murder-mystery",
           createdAt: s.split_at || s.created_at,
           characterCount: Number(s.real_player_count) || Number(s.player_count) || 0, messageCount: s.clue_count || 0, isSplit: true,
+          // 管理端能看到并切换：false = 只在管理端可见（玩家大厅不出现）
+          isPublic: s.is_public !== false,
         }));
       } catch (e) { /* PG不可用，跳过 */ }
 
@@ -230,6 +232,19 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       sse.send("complete", { sessionId: result.sessionId, summary: result.summary });
     } catch (err) { if (!sse.isClosed()) sse.send("error", { message: err.message }); }
     sse.end();
+  });
+
+  // 上架/下架：is_public=false 时玩家大厅看不到、也建不了房；管理端一切照旧
+  app.patch("/api/admin/scripts/:id/visibility", authMiddleware, adminMiddleware, async (req, res) => {
+    try {
+      const { setScriptPublic } = require("../core/db");
+      const isPublic = req.body && req.body.isPublic;
+      if (typeof isPublic !== "boolean") return res.status(400).json({ error: "isPublic 必须是布尔值" });
+      const row = await setScriptPublic(req.params.id, isPublic);
+      if (!row) return res.status(404).json({ error: "剧本不存在" });
+      console.log(`[audit] 剧本可见性 by=${(req.user && req.user.username) || "?"} id=${req.params.id} is_public=${row.is_public}`);
+      res.json({ ok: true, id: row.id, isPublic: row.is_public });
+    } catch (e) { res.status(500).json({ error: e.message }); }
   });
 
   app.delete("/api/admin/scripts/:id", authMiddleware, adminMiddleware, async (req, res) => {
