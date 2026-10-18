@@ -1248,6 +1248,11 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   const [speakerFilter, setSpeakerFilter] = useState("");
   // 哪个模块弹框开着（"" = 都没开）。与测试剧本页同一个交互：点左侧竖栏 → 弹框。
   const [openPanel, setOpenPanel] = useState("");
+  // 正在等待回答的对象名。为什么要这个：点「询问」后服务端要调 LLM，几秒内什么都没发生，
+  // 玩家会以为按钮没生效（实测就是这样被反馈成"无法询问 AI 玩家"）。这里给出即时反馈，
+  // 并在新聊天消息到达时清掉。
+  const [askPending, setAskPending] = useState("");
+  useEffect(() => { if (askPending) setAskPending(""); }, [chats.length]);
 
   // AI 补位玩家的标记是 isNPC:true + isAI:true，两个条件同时成立。
   // 原写法 npcs/ais 都包含 AI 玩家 → 下拉框重复项，且点击时被 npcs 先命中而路由到 ask_npc，
@@ -1455,15 +1460,22 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                         if (e.key !== "Enter") return;
                         if (!ask.npc || !ask.q.trim()) return;
                         if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
+                        setAskPending(ask.npc);
                         setAsk({ ...ask, q: "" });
                       }}
                     />
-                    <button className="btn btn-outline btn-sm btn-auto" onClick={() => {
+                    <button className="btn btn-outline btn-sm btn-auto" disabled={!!askPending} onClick={() => {
                       if (!ask.npc || !ask.q.trim()) return;
                       if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
+                      setAskPending(ask.npc);
                       setAsk({ ...ask, q: "" });
-                    }}>询问</button>
+                    }}>{askPending ? "已发出…" : "询问"}</button>
                   </div>
+                  {askPending ? (
+                    <div className="text-xs text-dim" style={{ marginTop: 8 }}>
+                      已向 {askPending} 提问，等待回答…（AI 需要几秒，回答会出现在公屏）
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 

@@ -808,7 +808,11 @@ function setupGameSocket(io) {
 
     // 玩家向 AI 玩家审讯提问（AI 仅依据自己的剧本/线索回答，全员可见）
     socket.on("ask_ai_player", async ({ roomCode, characterName, question }) => {
-      if (!checkRateLimit(socket, "ask_ai_player")) return;
+      // ⚠️ 限流命中必须**给出反馈**：这里原来是 `return;` 静默丢弃，
+      // 于是玩家快速追问时看到的是"点了完全没反应"，只会以为功能坏了（实测就是这么被报上来的）。
+      if (!checkRateLimit(socket, "ask_ai_player")) {
+        return socket.emit("error", { code: "RATE_LIMITED", message: "提问太频繁，请等 3 秒后再问" });
+      }
       try {
         const room = await getRoom(roomCode);
         if (!room || ["lobby", "reading"].includes(room.phase)) {
