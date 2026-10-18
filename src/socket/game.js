@@ -845,9 +845,12 @@ function setupGameSocket(io) {
         // 只发聊天消息：它会持久化，重连/刷新后仍能从 chatMessages 恢复。
         // 历史 bug：这里另外还 emit 了 ai_answer，而前端把它也追加进聊天列表，
         // 于是同一个回答显示两遍（与自我介绍重复显示是同一类问题）。
-        const qMsg = await addChatMessage(roomCode, socket.id, asker?.playerName || "", askerName, `🎤 向 ${ai.characterName || "AI"}（AI玩家）提问：${q}`, room.phase);
+        // 审讯问答打上 kind:"ask"：前端据此把它从「全屋讨论」摘出来，
+        // 显示在「审讯」对话框里（所有玩家看到的是同一份，因为消息本身仍是广播的）。
+        const askTag = { kind: "ask", askerName, targetName: ai.characterName || "AI" };
+        const qMsg = await addChatMessage(roomCode, socket.id, asker?.playerName || "", askerName, `🎤 向 ${ai.characterName || "AI"}（AI玩家）提问：${q}`, room.phase, { ...askTag, askQuestion: true, question: q });
         io.to(roomCode).emit("chat_message", qMsg);
-        const aMsg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", answer, room.phase);
+        const aMsg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", answer, room.phase, { ...askTag, askQuestion: false });
         io.to(roomCode).emit("chat_message", aMsg);
       } catch (e) { socket.emit("error", { code: "ASK_AI_FAILED", message: e.message }); }
     });
@@ -907,14 +910,15 @@ function setupGameSocket(io) {
         };
         const npcForAgent = { ...npcChar, roleMode: parsed.setting?.gameMode || "" };
 
-        // 先广播玩家的问题
-        const qMsg = await addChatMessage(roomCode, socket.id, "NPC:" + npcName, askerName, `🔍 审问 ${npcName}：${question}`, room.phase);
+        // 先广播玩家的问题（同样打 kind:"ask"，进「审讯」对话框而不是公屏）
+        const npcAskTag = { kind: "ask", askerName, targetName: npcName };
+        const qMsg = await addChatMessage(roomCode, socket.id, "NPC:" + npcName, askerName, `🔍 审问 ${npcName}：${question}`, room.phase, { ...npcAskTag, askQuestion: true, question: qText });
         io.to(roomCode).emit("chat_message", qMsg);
 
         const response = await generateNpcResponse(npcForAgent, question, scriptSummary, chatHistory);
 
-        // NPC回复以聊天消息形式广播
-        const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `${response}`, room.phase);
+        // NPC回复以聊天消息形式广播（同样进「审讯」对话框）
+        const msg = await addChatMessage(roomCode, "npc_" + npcName, "NPC:" + npcName, npcName, `${response}`, room.phase, { ...npcAskTag, askQuestion: false });
         io.to(roomCode).emit("chat_message", msg);
       } catch (e) { socket.emit("error", { code: "NPC_FAILED", message: e.message }); }
     });

@@ -501,12 +501,21 @@ async function roomHashExists(r, code) {
   return (await r.exists(`game:${code}`)) === 1;
 }
 
-async function addChatMessage(code, playerId, playerName, characterName, content, phase) {
+/**
+ * 写一条公屏消息。
+ * @param {object} [extra] 附加字段，会并入消息对象。当前用于审讯问答的归类：
+ *   `{ kind:"ask", askQuestion:true|false, askerName, targetName, question }`
+ *   —— 审讯问答仍然留在消息流里（AI 的上下文要能看到谁被问过），
+ *   但前端按 kind 把它从「全屋讨论」里摘出来，显示在「审讯」对话框里。
+ *   这样两边都不丢：公屏干净了，审讯又是所有玩家看到的同一份。
+ */
+async function addChatMessage(code, playerId, playerName, characterName, content, phase, extra) {
   const r = await ensureConn();
   const key = `game:${code}:chat`;
   const msg = JSON.stringify({
     messageId: uuidv4(), playerId, playerName, characterName,
     content, phase, timestamp: new Date().toISOString(),
+    ...(extra || {}),
   });
   await r.multi().lpush(key, msg).ltrim(key, 0, 499).exec();
   // 写完复查：房间已经不存在就撤销这次写入，别留下孤儿键。

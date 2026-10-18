@@ -91,6 +91,14 @@ export default function GameView({ game, socket, user, onLeave, online = true })
       content: m.content || m.text || "",
       ts: m.ts || Date.now(),
       ai: !!m.ai,
+      // ⚠️ 审讯问答的归类字段必须原样带过来（服务端 addChatMessage 的 extra）：
+      // 「全屋讨论」靠 kind 把它们摘出去，「审讯」对话框要显示"谁问了谁、问的原文"。
+      // 漏掉这些字段不会报错，只会让功能静默失效 —— 所以专门在这里显式列出。
+      kind: m.kind || "",
+      askQuestion: !!m.askQuestion,
+      askerName: m.askerName || "",
+      targetName: m.targetName || "",
+      question: m.question || "",
     };
   }
 
@@ -1281,6 +1289,11 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   const railItems = GAME_PANELS
     .filter(([k]) => k !== "map" || hasMap)
     .map(([k, icon, label, full]) => ({ key: k, icon, label, title: `打开「${full}」` }));
+  // 私聊对话框标题里显示"正在和谁聊"——比只写"私聊"清楚得多
+  const whisperTargetPlayer = (players || []).find((p) => p.playerId === whisperTo);
+  const whisperTargetName = whisperTargetPlayer
+    ? (whisperTargetPlayer.characterName || whisperTargetPlayer.playerName || "")
+    : "";
 
   // AI 补位玩家的标记是 isNPC:true + isAI:true，两个条件同时成立。
   // 原写法 npcs/ais 都包含 AI 玩家 → 下拉框重复项，且点击时被 npcs 先命中而路由到 ask_npc，
@@ -1293,8 +1306,15 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   // 不限次数时（默认）不显示计数、也不因次数禁用按钮
   const outOfQuota = !quota.unlimited && quota.remaining <= 0;
 
-  const speakers = Array.from(new Set((chats || []).map((c) => c.from).filter(Boolean)));
-  const shownChats = speakerFilter ? (chats || []).filter((c) => c.from === speakerFilter) : (chats || []);
+  // 审讯问答（服务端打了 kind:"ask"）从公屏里摘出来，单独显示在「审讯」对话框里。
+  // 为什么不在两边都显示：全屋讨论是"大家说了什么"，审讯是"我问了谁什么" ——
+  // 混在一起会把讨论刷得看不清（用户反馈"全塞在全屋讨论那不太现实"）。
+  // 消息本身仍然是广播的，所以**所有玩家看到的审讯记录完全一样**。
+  const publicChats = (chats || []).filter((c) => c.kind !== "ask");
+  const askChats = (chats || []).filter((c) => c.kind === "ask");
+
+  const speakers = Array.from(new Set(publicChats.map((c) => c.from).filter(Boolean)));
+  const shownChats = speakerFilter ? publicChats.filter((c) => c.from === speakerFilter) : publicChats;
 
   function doChat() { if (msg.trim()) { onSendChat(msg); setMsg(""); } }
 
@@ -1323,7 +1343,7 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
           <div className="panel-head">
             <strong>全屋讨论</strong>
             <span className="text-xs text-dim">
-              {chats.length} 条发言
+              {publicChats.length} 条发言
               {speakerFilter ? ` ｜ 只看 ${speakerFilter}` : ""}
             </span>
             <select
@@ -1334,9 +1354,9 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
               title="只看某位玩家的发言"
               aria-label="按发言者筛选"
             >
-              <option value="">全部发言（{chats.length}）</option>
+              <option value="">全部发言（{publicChats.length}）</option>
               {speakers.map((s) => (
-                <option key={s} value={s}>{s}（{chats.filter((c) => c.from === s).length}）</option>
+                <option key={s} value={s}>{s}（{publicChats.filter((c) => c.from === s).length}）</option>
               ))}
             </select>
           </div>
@@ -1465,9 +1485,40 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                   </div>
                   {askPending ? (
                     <div className="text-xs text-dim" style={{ marginTop: 8 }}>
-                      已向 {askPending} 提问，等待回答…（AI 需要几秒，回答会出现在公屏）
+                      已向 {askPending} 提问，等待回答…（AI 需要几秒，回答会出现在下面）
                     </div>
                   ) : null}
+
+                  {/* 审讯记录：单独一个对话框显示，不再混进「全屋讨论」。
+                      消息本身是广播的，所以**所有玩家看到的这一份完全一样**。 */}
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
+                    <div className="panel-head" style={{ marginBottom: 8 }}>
+                      <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>审讯记录</strong>
+                      <span className="text-xs text-dim" style={{ marginLeft: "auto" }}>
+                        全场可见 ｜ {askChats.length} 条
+                      </span>
+                    </div>
+                    <div style={{ maxHeight: 340, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
+                      {askChats.length === 0 && (
+                        <div className="text-muted">还没有人提问。问出来的回答全场都能看到。</div>
+                      )}
+                      {askChats.map((m, i) => (
+                        <div key={i} style={{ padding: "5px 0", borderTop: i ? "1px dashed rgba(255,255,255,.07)" : "none" }}>
+                          {m.askQuestion ? (
+                            <div>
+                              <span className="text-dim">{m.askerName || m.from} 问 {m.targetName || "?"}：</span>
+                              <span style={{ color: "var(--brass, #c9a45f)" }}>{m.question || m.content}</span>
+                            </div>
+                          ) : (
+                            <div>
+                              <span style={{ color: "var(--success, #6b8)" }}>{m.targetName || m.from}：</span>
+                              {m.content}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               ) : null}
 
@@ -1476,7 +1527,9 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                   {/* 私聊：只有收发双方能看到。公屏发言会进 AI 的上下文，私聊不会 —— 所以这里是真正"见不得光"的渠道 */}
                   <div className="panel-head">
                     <strong>私聊</strong>
-                    <span className="text-xs text-dim">仅你和对方可见</span>
+                    <span className="text-xs text-dim">
+                      {whisperTargetName ? `与 ${whisperTargetName} 的对话 · 仅你与对方可见` : "仅你和对方可见"}
+                    </span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
                     <select
@@ -1506,12 +1559,14 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                     />
                     <button className="btn btn-outline btn-sm btn-auto" disabled={!whisperTo || !whisperText.trim()} onClick={doWhisper}>发送</button>
                   </div>
-                  <div style={{ maxHeight: 300, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
+                  <div style={{ maxHeight: 360, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
                     {!whisperTo && <div className="text-muted">先选一个私聊对象</div>}
                     {whisperTo && thread.length === 0 && <div className="text-muted">还没有私聊记录</div>}
                     {thread.map((m, i) => (
-                      <div key={i} style={{ padding: "3px 0" }}>
-                        <span className="text-dim">{m.self ? "你" : m.fromName}：</span>{m.content}
+                      <div key={i} style={{ padding: "4px 0", borderTop: i ? "1px dashed rgba(255,255,255,.07)" : "none" }}>
+                        <span style={{ color: m.self ? "var(--brass, #c9a45f)" : "var(--success, #6b8)" }}>
+                          {m.self ? "你" : m.fromName}：
+                        </span>{m.content}
                       </div>
                     ))}
                   </div>
