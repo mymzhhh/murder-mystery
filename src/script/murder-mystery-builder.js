@@ -2275,6 +2275,17 @@ async function buildMurderMystery(userInput, onProgress, config) {
     let dmPrompt = stages.dmGuide.replace("{frameworkSummary}", dmSummary.substring(0, 6000))
       .replace("{murdererName}", (report.outline && report.outline.murderer && report.outline.murderer.name) || (report.characters || []).find(c => c.isMurderer)?.name || "见设定集")
       + stageDirective(cfg.advancedMode, "dm");
+    // 把**真实线索编号**交给 DM：实测模型会自己造「线索1…线索22」这套编号，
+    // 与库里的 A1..A20/B1..B20 对不上，玩家复盘时无法回查；而且它只解析了 22/40 条却自称"无遗漏"。
+    {
+      const ids = [...String(report.clues || "").matchAll(/^###\s*([AB]\d{1,3})/gm)].map((m) => m[1]);
+      if (ids.length) {
+        dmPrompt += `\n\n## 必须逐条解析的线索编号（共 ${ids.length} 条，一条都不能漏）\n`
+          + ids.join("、")
+          + `\n\n硬性要求：「真相复盘」里的线索解析**必须按上面这些编号逐条写**（如「A3：… —— 在推理中的作用」），`
+          + `不得自造「线索1、线索2」这类序号；漏一条即不合格；不得声称"共N条"以外的数量。`;
+      }
+    }
     let dmResult = await runStage("dmGuide", () => generate(getDMSystemPrompt(), dmPrompt, { maxTokens: TOKENS_LIGHT }), onProgress);
     report.dmGuide = dmResult.content;
     // ===== 真相复盘字数下限 =====
@@ -2328,6 +2339,22 @@ async function buildMurderMystery(userInput, onProgress, config) {
   onProgress("assemble", "正在组装完整剧本...");
   let fullScript = assembleScript(report, userInput);
 
+  // 非法时刻的确定性修复（2026-10-18）：实测生成稿的真相里出现「手表显示22:60」——
+  // 分钟位 ≥60 不是合法时刻，玩家一眼就看出错。这类可以纯字符串修好，不必回炉让模型改。
+  try {
+    const { fixIllegalClockTimes } = require("./logic-checks");
+    const fix1 = fixIllegalClockTimes(fullScript);
+    if (fix1.fixed) {
+      fullScript = fix1.text;
+      console.log(`[builder] 非法时刻修正 ${fix1.fixed} 处（如 22:60 → 23:00）`);
+      if (onProgress) onProgress("assemble", `非法时刻修正 ${fix1.fixed} 处`);
+    }
+    if (report.dmGuide) {
+      const fix2 = fixIllegalClockTimes(report.dmGuide);
+      if (fix2.fixed) report.dmGuide = fix2.text;
+    }
+  } catch (e) { console.warn("[builder] 非法时刻修正跳过:", e.message); }
+
   // 组装后是**交付文本**（DM 手册 + 线索 + 各角色本都在里面），时辰换算在这里再查一次：
   // 线索与 DM 复盘是角色本之外最容易写错的地方（实测 4 处真问题里有 2 处在线索正文）。
   try {
@@ -2374,6 +2401,35 @@ async function buildMurderMystery(userInput, onProgress, config) {
       }
     } catch (e) {
       console.warn("[builder] 日期体系核对跳过:", e.message);
+    }
+    // ===== 逻辑层确定性校验（2026-10-18 新增）=====
+    // 补上管道此前完全查不出的四类问题（实测《停摆的时针》四类全中）：
+    //   ① 凶手「凶手确认」写了手法，但自己的时间线里没落地 → 凶手玩家以为自己是目击者
+    //   ② 「座钟」在凶手剧本里是被调过的钟、在其他人剧本里当真实时间用
+    //   ③ 真相算术不自洽（同一只钟两个偏差、22:60 这种不存在的时刻）
+    //   ④ 真相只解析了 22/40 条线索，还自称"无遗漏"
+    // 并入 issues 后走既有的定向修订；结论同时留档 report.logicChecks 供审计。
+    try {
+      const { runLogicChecks } = require("./logic-checks");
+      const sections = Object.entries(report.characterScripts || {}).map(([name, text]) => ({ name, text: String(text || "") }));
+      const clueIds = [...String(report.clues || "").matchAll(/^###\s*([AB]\d{1,3})/gm)].map((m) => m[1]);
+      const lc = runLogicChecks({
+        sections,
+        murdererName: (report.outline && report.outline.murderer && report.outline.murderer.name) || "",
+        dmText: String(report.dmGuide || ""),
+        clueIds,
+      });
+      report.logicChecks = { issues: lc.issues, details: lc.details, clueIdCount: clueIds.length };
+      if (lc.issues.length) {
+        report.crossCheck = report.crossCheck || { issues: [] };
+        report.crossCheck.issues = [...(report.crossCheck.issues || []), ...lc.issues];
+        console.warn(`[builder] 逻辑校验发现 ${lc.issues.length} 个问题：`, lc.issues.slice(0, 3).join("；"));
+        if (onProgress) onProgress("crosscheck", `逻辑校验：发现 ${lc.issues.length} 个逻辑问题（凶手手法/时间基准/真相算术/线索覆盖），已并入待修订问题`);
+      } else if (onProgress) {
+        onProgress("crosscheck", "逻辑校验：凶手手法落地、时间基准、真相算术、线索覆盖 四项均通过");
+      }
+    } catch (e) {
+      console.warn("[builder] 逻辑校验跳过:", e.message);
     }
   } catch (e) {
     console.warn("[builder] 交叉校验跳过:", e.message);
