@@ -8,6 +8,7 @@ import { paginate, estimateBudget, classifyLine } from "../lib/paginate.mjs";
 import { votablePlayers, canVoteFor } from "../lib/vote.mjs";
 import { ScriptBody } from "../components/ScriptBody.jsx";
 import { SceneMap } from "../components/SceneMap.jsx";
+import { SideRail } from "../components/SideRail.jsx";
 import IntelDesk from "./IntelDesk.jsx";
 
 // 游戏主视图：lobby(选角色) → reading → intro → round1/2(搜证讨论) → voting → truth_reveal
@@ -445,15 +446,6 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             )}
           </div>
 
-          {/* 场景地图（键名以 map- 开头的布局图）。开局前就先让人看明白"这是个什么场面"：
-              这里紧挨着场景描述，就是页面上"展示场景布局"的那一块。
-              没有地图时组件自己返回 null，不会留下空面板。 */}
-          <SceneMap
-            scriptId={scriptId}
-            layoutText={parsed.layoutDescription || ""}
-            altText={normalizeScript(myScript)}
-          />
-
           <div className="auto-cols">
             {/* 玩家名册 */}
             <div className="panel">
@@ -577,13 +569,9 @@ export default function GameView({ game, socket, user, onLeave, online = true })
         {/* 阶段轨道：玩家在任何时刻都能一眼看到"走到哪一步、还剩几步" */}
         <PhaseRail phase={phase} />
 
-        {/* 场景地图：搜证/讨论阶段要对着平面图找地点，所以对局期间也常驻一块。
-            地图是"场景"的一部分而不是剧本正文，故放在阶段轨道下方、各阶段视图之上。 */}
-        <SceneMap
-          scriptId={scriptId}
-          layoutText={game.scriptSummary?.layoutDescription || ""}
-          altText={[myScript, game.scriptSummary?.layoutDescription].filter(Boolean).join("\n")}
-        />
+        {/* 场景地图**不放在这一层**：这里会覆盖所有阶段（阅读/投票/复盘都显示），
+            而用户要求"只在玩家讨论阶段可以看到"。它现在挂在搜证/讨论视图里
+            （CombinedRoundView），只有 round1/round2 才会出现。 */}
 
         {notice && (
           <div className="alert alert-danger alert-row" style={{ marginBottom: 10 }}>
@@ -1240,9 +1228,15 @@ function ReadingView({ script, char, scriptId, iAmReady, onReady }) {
 }
 
 // ===== 搜证 + 讨论（合并阶段） =====
-// 布局：左侧（宽）全屋讨论 + 在场玩家；右侧（窄）搜证 / 审讯 / 私聊 / 线索。
-// 之所以把讨论放主列：讨论是这一阶段真正的主场，需要横向空间读长发言；
-// 而线索列表是短行文本，窄列反而更易扫读。
+// 布局：**左侧竖栏（模块）+ 右侧宽主列（场景地图 / 全屋讨论 / 在场玩家 / 情报台）**，
+// 与测试剧本页同一形态（共用 components/SideRail.jsx）。搜证 / 审讯 / 私聊收进弹框：
+// 这三个都是"做一件事"的入口，常驻窄列反而白占讨论的横向空间。
+const GAME_PANELS = [
+  ["search", "🔍", "搜证"],
+  ["ask", "💬", "审讯"],
+  ["whisper", "✉️", "私聊"],
+];
+const panelLabel = (k) => (GAME_PANELS.find(([key]) => key === k) || [k, "", k])[2];
 function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper, scriptId }) {
   const [msg, setMsg] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
@@ -1252,6 +1246,8 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   // 发言筛选："" = 全部；否则只显示该角色的发言。
   // 人多时逐条翻聊天很难对齐时间线，"某人到底说过什么"是最常需要的视图。
   const [speakerFilter, setSpeakerFilter] = useState("");
+  // 哪个模块弹框开着（"" = 都没开）。与测试剧本页同一个交互：点左侧竖栏 → 弹框。
+  const [openPanel, setOpenPanel] = useState("");
 
   // AI 补位玩家的标记是 isNPC:true + isAI:true，两个条件同时成立。
   // 原写法 npcs/ais 都包含 AI 玩家 → 下拉框重复项，且点击时被 npcs 先命中而路由到 ask_npc，
@@ -1279,13 +1275,19 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   }
 
   return (
-    <div className="game-shell">
-      {/* ============ 左列（宽）：全屋讨论 ============ */}
-      {/* alignSelf:"stretch" 是「情报台」能 sticky 的前提：
-          .game-shell 是 align-items:start，网格项默认只有内容那么高（实测 920px），
-          子元素的 sticky 就只能在 920px 内滑动，等于不生效。撑满行高之后，
-          右列线索列表有几千米，情报台就能一路钉在视口里。（视觉上完全一样：列内元素本来就靠上排。） */}
-      <div style={{ minWidth: 0, alignSelf: "stretch" }}>
+    <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+      {/* 左侧模块栏：与测试剧本页共用 components/SideRail.jsx（用户要求两边样式一致）。
+          搜证/审讯/私聊做成弹框后，主列能整幅留给全屋讨论。 */}
+      <SideRail
+        items={GAME_PANELS.map(([k, icon, label]) => ({ key: k, icon, label, title: `打开「${label}」` }))}
+        onSelect={(k) => setOpenPanel(k)}
+        active={openPanel}
+        ariaLabel="对局模块栏"
+      />
+      <div style={{ flex: "1 1 560px", minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
+        {/* 场景地图：**只在搜证/讨论阶段**出现（用户要求）—— 这个组件本来就在搜证/讨论视图里，
+            所以放进这里就自然满足了"只有讨论阶段可见"，不再占大厅和阅读阶段的地方。 */}
+        <SceneMap scriptId={scriptId} />
         <div className="panel">
           <div className="panel-head">
             <strong>全屋讨论</strong>
@@ -1377,125 +1379,144 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
       {/* 同样要 alignSelf:"stretch"，否则内层 .game-col-pin 也没法钉住。
           内层只在「本列比左列矮」时才真的钉住（例：还没搜到线索时右列 715px、左列 1859px）；
           本列比视口高时（线索多）sticky 自然失效，滚动行为与改造前逐像素一致。 */}
-      <div className="game-col-side" style={{ alignSelf: "stretch" }}>
-        <div className="game-col-pin">
-        {/* 搜证与证物合成一块：搜到的线索马上就在下面出现，不用滚动到别处找 */}
-        <div className="panel">
-          <div className="panel-head">
-            <strong>🔍 {phase === "round1" ? "第一轮" : "第二轮"} 搜证</strong>
-            {!quota.unlimited && quota.max > 0 && (
-              <span className="text-xs text-dim" style={{ marginLeft: "auto" }}>
-                剩余 {quota.remaining} / {quota.max} 次
-              </span>
-            )}
-          </div>
-          {/* 随机搜证：点一次翻出一条还没被找到的线索。线索一搜到就自动公开给全场。 */}
-          <p className="text-xs text-dim" style={{ marginBottom: 10, lineHeight: 1.7 }}>
-            点一次搜证，随机翻出一条本轮还没被找到的线索。搜到什么由不得你 ——
-            拿到之后怎么用才是博弈。
-          </p>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button className="btn btn-primary btn-sm btn-auto" disabled={!canSearch || outOfQuota} onClick={() => onInvestigate()}>
-              随机搜证
-            </button>
-            {outOfQuota && <span className="text-xs" style={{ color: "var(--wax-bright)" }}>本轮次数已用完</span>}
-          </div>
-
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
-            <div className="panel-head" style={{ marginBottom: 8 }}>
-              <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>已发现的线索</strong>
-              {myClues.length > 0 && <span className="tag" style={{ marginLeft: "auto" }}>{myClues.length} 条</span>}
+      {/* ============ 模块弹框：搜证 / 审讯 / 私聊 ============
+          与测试剧本页同一套弹框样式（.modal-overlay/.modal-card/.modal-head/.modal-body）。
+          这几块都是"做一件事"的入口，做成弹框后主列能整幅留给全屋讨论。 */}
+      {openPanel ? (
+        <div className="modal-overlay" onClick={() => setOpenPanel("")} role="dialog" aria-modal="true" aria-label={panelLabel(openPanel)}>
+          <div
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: "min(880px, 94vw)", maxWidth: 880, maxHeight: "88vh", display: "flex", flexDirection: "column" }}
+          >
+            <div className="modal-head">
+              <strong>{panelLabel(openPanel)}</strong>
+              <button className="btn btn-outline btn-xs" style={{ marginLeft: "auto" }} onClick={() => setOpenPanel("")}>关闭</button>
             </div>
-            {myClues.length === 0
-              ? (
-                <div className="text-xs text-muted" style={{ lineHeight: 1.7 }}>
-                  还没有线索被发现。线索一被搜到就会自动公开给全场。
+            <div className="modal-body">
+              {openPanel === "search" ? (
+                <div className="panel">
+                  <div className="panel-head">
+                    <strong>🔍 {phase === "round1" ? "第一轮" : "第二轮"} 搜证</strong>
+                    {!quota.unlimited && quota.max > 0 && (
+                      <span className="text-xs text-dim" style={{ marginLeft: "auto" }}>
+                        剩余 {quota.remaining} / {quota.max} 次
+                      </span>
+                    )}
+                  </div>
+                  {/* 随机搜证：点一次翻出一条还没被找到的线索。线索一搜到就自动公开给全场。 */}
+                  <p className="text-xs text-dim" style={{ marginBottom: 10, lineHeight: 1.7 }}>
+                    点一次搜证，随机翻出一条本轮还没被找到的线索。搜到什么由不得你 ——
+                    拿到之后怎么用才是博弈。
+                  </p>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <button className="btn btn-primary btn-sm btn-auto" disabled={!canSearch || outOfQuota} onClick={() => onInvestigate()}>
+                      随机搜证
+                    </button>
+                    {outOfQuota && <span className="text-xs" style={{ color: "var(--wax-bright)" }}>本轮次数已用完</span>}
+                  </div>
+
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
+                    <div className="panel-head" style={{ marginBottom: 8 }}>
+                      <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>已发现的线索</strong>
+                      {myClues.length > 0 && <span className="tag" style={{ marginLeft: "auto" }}>{myClues.length} 条</span>}
+                    </div>
+                    {myClues.length === 0
+                      ? (
+                        <div className="text-xs text-muted" style={{ lineHeight: 1.7 }}>
+                          还没有线索被发现。线索一被搜到就会自动公开给全场。
+                        </div>
+                      )
+                      : <GroupedClues clues={myClues} scriptId={scriptId} />}
+                  </div>
                 </div>
-              )
-              : <GroupedClues clues={myClues} scriptId={scriptId} />}
-          </div>
-        </div>
+              ) : null}
 
-        {/* 审讯 + 私聊 */}
-        <div className="panel">
-          <div className="panel-head">
-            <strong>审讯</strong>
-            <span className="text-xs text-dim">NPC 与 AI 玩家</span>
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <select className="form-select" style={{ maxWidth: 200 }} value={ask.npc} onChange={(e) => setAsk({ ...ask, npc: e.target.value })} aria-label="审讯对象">
-              <option value="">选择审讯对象…</option>
-              {npcs.map((n) => <option key={"npc-" + n.characterName} value={n.characterName}>{n.characterName}（NPC）</option>)}
-              {ais.map((n) => <option key={"ai-" + n.characterName} value={n.characterName}>{n.characterName}（AI）</option>)}
-            </select>
-            <input
-              className="form-input"
-              style={{ flex: 1, minWidth: 130 }}
-              placeholder="问什么…"
-              aria-label="审讯问题"
-              value={ask.q}
-              onChange={(e) => setAsk({ ...ask, q: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                if (!ask.npc || !ask.q.trim()) return;
-                if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
-                setAsk({ ...ask, q: "" });
-              }}
-            />
-            <button className="btn btn-outline btn-sm btn-auto" onClick={() => {
-              if (!ask.npc || !ask.q.trim()) return;
-              if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
-              setAsk({ ...ask, q: "" });
-            }}>询问</button>
-          </div>
-
-          {/* 私聊：只有收发双方能看到。公屏发言会进 AI 的上下文，私聊不会 —— 所以这里是真正"见不得光"的渠道 */}
-          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--ink-650)" }}>
-            <div className="panel-head" style={{ marginBottom: 8 }}>
-              <strong style={{ fontFamily: "var(--font-serif)", fontSize: 14 }}>私聊</strong>
-              <span className="text-xs text-dim">仅你和对方可见</span>
-            </div>
-            <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
-              <select
-                className="form-select"
-                style={{ maxWidth: 160 }}
-                value={whisperTo}
-                onChange={(e) => setWhisperTo(e.target.value)}
-                aria-label="私聊对象"
-              >
-                <option value="">选择对象…</option>
-                {(players || [])
-                  .filter((p) => (p.characterName || p.playerName) && p.characterName !== myChar?.name)
-                  .map((p) => (
-                    <option key={p.playerId} value={p.playerId}>
-                      {p.characterName || p.playerName}{p.isAI ? "（AI）" : ""}
-                    </option>
-                  ))}
-              </select>
-              <input
-                className="form-input"
-                style={{ flex: 1, minWidth: 120 }}
-                placeholder="悄悄说一句…"
-                aria-label="私聊内容"
-                value={whisperText}
-                onChange={(e) => setWhisperText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") doWhisper(); }}
-              />
-              <button className="btn btn-outline btn-sm btn-auto" disabled={!whisperTo || !whisperText.trim()} onClick={doWhisper}>发送</button>
-            </div>
-            <div style={{ maxHeight: 150, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
-              {!whisperTo && <div className="text-muted">先选一个私聊对象</div>}
-              {whisperTo && thread.length === 0 && <div className="text-muted">还没有私聊记录</div>}
-              {thread.map((m, i) => (
-                <div key={i} style={{ padding: "3px 0" }}>
-                  <span className="text-dim">{m.self ? "你" : m.fromName}：</span>{m.content}
+              {openPanel === "ask" ? (
+                <div className="panel">
+                  <div className="panel-head">
+                    <strong>审讯</strong>
+                    <span className="text-xs text-dim">NPC 与 AI 玩家</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <select className="form-select" style={{ maxWidth: 200 }} value={ask.npc} onChange={(e) => setAsk({ ...ask, npc: e.target.value })} aria-label="审讯对象">
+                      <option value="">选择审讯对象…</option>
+                      {npcs.map((n) => <option key={"npc-" + n.characterName} value={n.characterName}>{n.characterName}（NPC）</option>)}
+                      {ais.map((n) => <option key={"ai-" + n.characterName} value={n.characterName}>{n.characterName}（AI）</option>)}
+                    </select>
+                    <input
+                      className="form-input"
+                      style={{ flex: 1, minWidth: 130 }}
+                      placeholder="问什么…"
+                      aria-label="审讯问题"
+                      value={ask.q}
+                      onChange={(e) => setAsk({ ...ask, q: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key !== "Enter") return;
+                        if (!ask.npc || !ask.q.trim()) return;
+                        if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
+                        setAsk({ ...ask, q: "" });
+                      }}
+                    />
+                    <button className="btn btn-outline btn-sm btn-auto" onClick={() => {
+                      if (!ask.npc || !ask.q.trim()) return;
+                      if (ais.some((n) => n.characterName === ask.npc)) onAskAi(ask.npc, ask.q); else onAskNpc(ask.npc, ask.q);
+                      setAsk({ ...ask, q: "" });
+                    }}>询问</button>
+                  </div>
                 </div>
-              ))}
+              ) : null}
+
+              {openPanel === "whisper" ? (
+                <div className="panel">
+                  {/* 私聊：只有收发双方能看到。公屏发言会进 AI 的上下文，私聊不会 —— 所以这里是真正"见不得光"的渠道 */}
+                  <div className="panel-head">
+                    <strong>私聊</strong>
+                    <span className="text-xs text-dim">仅你和对方可见</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
+                    <select
+                      className="form-select"
+                      style={{ maxWidth: 160 }}
+                      value={whisperTo}
+                      onChange={(e) => setWhisperTo(e.target.value)}
+                      aria-label="私聊对象"
+                    >
+                      <option value="">选择对象…</option>
+                      {(players || [])
+                        .filter((p) => (p.characterName || p.playerName) && p.characterName !== myChar?.name)
+                        .map((p) => (
+                          <option key={p.playerId} value={p.playerId}>
+                            {p.characterName || p.playerName}{p.isAI ? "（AI）" : ""}
+                          </option>
+                        ))}
+                    </select>
+                    <input
+                      className="form-input"
+                      style={{ flex: 1, minWidth: 120 }}
+                      placeholder="悄悄说一句…"
+                      aria-label="私聊内容"
+                      value={whisperText}
+                      onChange={(e) => setWhisperText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") doWhisper(); }}
+                    />
+                    <button className="btn btn-outline btn-sm btn-auto" disabled={!whisperTo || !whisperText.trim()} onClick={doWhisper}>发送</button>
+                  </div>
+                  <div style={{ maxHeight: 300, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
+                    {!whisperTo && <div className="text-muted">先选一个私聊对象</div>}
+                    {whisperTo && thread.length === 0 && <div className="text-muted">还没有私聊记录</div>}
+                    {thread.map((m, i) => (
+                      <div key={i} style={{ padding: "3px 0" }}>
+                        <span className="text-dim">{m.self ? "你" : m.fromName}：</span>{m.content}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
-        </div>
-      </div>
+      ) : null}
     </div>
   );
 }

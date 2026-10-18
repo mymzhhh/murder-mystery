@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { apiJson, api, getToken } from "../lib/api.js";
 import { getSocket } from "../lib/socket.js";
 import { ScriptBody } from "../components/ScriptBody.jsx";
+import { SideRail } from "../components/SideRail.jsx";
 import { clueBodyText } from "../lib/clue-body.mjs";
 
 const PHASE_TEXT = {
@@ -380,28 +381,14 @@ export default function TestRunPage() {
                  侧边栏只有 636px 而行被撑到 779px，右下角就空出 380×143 一块（正是"成片空白"）；
                  去掉之后行高 = 内容高，两列底边齐平。 */}
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "stretch" }}>
-            {/* 左侧模块栏：图标 + 文字竖排一列（用户指定的形态，参照编辑器那种左侧栏）。
-                点一个弹一个框（面板内容在下面的 modal 里）；sticky 是为了往下滚公屏时它不走。
-                order 与主列同为 1 → 两者并排一行；上方的「实时摘要」order 0 → 始终占满一整行。 */}
-            <div style={{
-              flex: "0 0 92px", order: 1, alignSelf: "flex-start",
-              /* sticky 的偏移必须让开固定顶栏（--header-h），否则往下滚时整栏会钻到顶栏底下 */
-              position: "sticky", top: "calc(var(--header-h) + 12px)",
-              display: "flex", flexDirection: "column", gap: 6,
-            }}>
-              {SIDE_TABS.map(([k, label]) => (
-                <button
-                  key={k}
-                  className={"btn btn-sm" + (openModule === k ? "" : " btn-outline")}
-                  style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "8px 4px", lineHeight: 1.25 }}
-                  onClick={() => setOpenModule(k)}
-                  title={`打开「${label}」`}
-                >
-                  <span style={{ fontSize: 16, lineHeight: 1 }}>{MODULE_ICON[k] || "•"}</span>
-                  <span style={{ fontSize: 11, whiteSpace: "nowrap" }}>{label}</span>
-                </button>
-              ))}
-            </div>
+            {/* 左侧模块栏：与玩家对局页共用 components/SideRail.jsx（用户要求两边长得一样）。
+                点一个弹一个框（面板内容在下面的 modal 里）；order 与主列同为 1 → 两者并排一行。 */}
+            <SideRail
+              items={SIDE_TABS.map(([k, label]) => ({ key: k, icon: MODULE_ICON[k], label, title: `打开「${label}」` }))}
+              onSelect={setOpenModule}
+              active={openModule || ""}
+              order={1}
+            />
 
             <div style={{ flex: "1 1 560px", minWidth: 320, display: "flex", flexDirection: "column", order: 1 }}>
             <div className="panel" style={{ display: "flex", flexDirection: "column", flex: "1 1 auto", minHeight: 0, marginBottom: 0 }}>
