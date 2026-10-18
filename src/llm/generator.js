@@ -11,7 +11,14 @@ const defaultModel = process.env.DEFAULT_MODEL || "deepseek-v4-flash";
 
 const MAX_RETRIES = 8;
 const RETRY_DELAY_MS = 1000;
-const API_TIMEOUT_MS = 180000; // 单次调用最长3分钟（长剧本生成可能 2-3 分钟；超时即走熔断切 Agnes）
+// 单次调用超时。
+// ⚠️ 180000（3 分钟）在换成**推理模型**后不够用（2026-10-18 实测）：
+// 火山方舟 ark-code-latest 会先产出 reasoning_content 再产出正文，framework / dmGuide 这种
+// 大阶段经常要跑 3 分钟以上；一超时就"熔断切 Agnes"，Agnes 同样跑不动 → 阶段级重试 →
+// 整轮白烧十几分钟（实测 framework 阶段连续 4 次撞超时、整轮 75 分钟没出稿）。
+// 放宽到 10 分钟：宁可在慢的阶段多等，也不要反复重试把时间烧光。
+// 仍然可由调用方通过 opts.timeoutMs 覆盖，也支持环境变量调整。
+const API_TIMEOUT_MS = Math.max(60000, parseInt(process.env.LLM_API_TIMEOUT_MS, 10) || 10 * 60 * 1000);
 
 // reasoning 占满预算时的 max_tokens 升级策略
 const DEFAULT_MAX_TOKENS = 4096;     // 与 callDeepSeek 的默认输出上限保持一致
