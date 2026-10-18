@@ -7,8 +7,9 @@
 const agnes = require("../llm/agnes-client");
 const safety = require("../llm/prompt-safety");
 const { HARDENING_RULES } = safety;
-const { getClues, getChatMessages, getPlayers } = require("./game-manager");
+const { getClues, getChatMessages, getPlayers, getRoom } = require("./game-manager");
 const { visibleClues, clueVisibilityOf } = require("./game-engine");
+const acts = require("../script/acts");
 
 /**
  * 构造 AI 玩家的"已知信息"（信息隔离封装）
@@ -22,10 +23,12 @@ const { visibleClues, clueVisibilityOf } = require("./game-engine");
  * @param {object} parsed 剧本解析结果（用于取角色名单/案情/场景）
  */
 async function buildKnowledge(roomCode, ai, parsed) {
-  const [allClues, players, msgs] = await Promise.all([
+  const [allClues, players, msgs, room] = await Promise.all([
     getClues(roomCode).catch(() => []),
     getPlayers(roomCode).catch(() => []),
     getChatMessages(roomCode, 40).catch(() => []),
+    // 阶段：分幕剧本要按阶段只给"已解锁的幕"，所以要把它带进知识里
+    getRoom(roomCode).catch(() => null),
   ]);
 
   const nameOf = (pid) => {
@@ -89,6 +92,8 @@ async function buildKnowledge(roomCode, ai, parsed) {
     scene: String(parsed.layoutDescription || "").substring(0, 600),
     transcript,
     myStatements,
+    // 当前阶段：分幕剧本据此只把"已解锁的幕"给 AI（详见 systemPrompt 里的分幕逻辑）
+    phase: (room && room.phase) || "",
     room: {
       title: parsed.title || "未知",
       setting: [parsed.setting?.era, parsed.setting?.location].filter(Boolean).join("，"),
@@ -108,7 +113,30 @@ function systemPrompt(k) {
   const role = K.role || {};
   // 剧本可能存在顶层（playerScript/story）或嵌套在 script 对象里（script.story/script.playerScript），两种都兼容
   const scr = role.script || {};
-  const story = String(role.playerScript || scr.playerScript || role.fullScript || role.story || scr.story || "").substring(0, 4000) || "（你没有更多详细记忆）";
+  const rawStory = String(role.playerScript || scr.playerScript || role.fullScript || role.story || scr.story || "");
+  // ⚠️ 原来固定 substring(0, 4000)：导入的长本（实测《麋鹿神社》每人 8000+ 字）会被**截掉后半段**，
+  // 而时间线与秘密通常就在后半段 —— AI 会表现成"不知道自己的设定"。改成：
+  //   · 不超过 9000 字：全给；
+  //   · 超过：保留**头部 3500 + 尾部 5500**（中段多是叙事铺陈，头尾才是身份/时间线/秘密）。
+  const STORY_LIMIT = 9000, STORY_HEAD = 3500, STORY_TAIL = 5500;
+  const clampStory = (s) => (s.length > STORY_LIMIT
+    ? s.slice(0, STORY_HEAD) + "\n\n（……中段省略……）\n\n" + s.slice(s.length - STORY_TAIL)
+    : s);
+  // ---- 分幕剧本：只给"已解锁的幕"，前几幕压成摘要（省 token，也避免剧透后面几幕）----
+  // 无幕标记的剧本 actList 长度为 1 → 走下面的老逻辑，行为完全不变。
+  const actList = acts.splitActs(rawStory);
+  let story;
+  if (actList.length > 1) {
+    const point = acts.unlockPointForPhase(K.phase);
+    const unlocked = Math.max(1, acts.unlockedActCount(actList.length, point));
+    const cur = actList[Math.min(unlocked, actList.length) - 1];
+    const earlier = acts.summarizeActs(actList, Math.min(unlocked, actList.length) - 1, 900);
+    story = (earlier ? `【前几幕回顾（摘要）】\n${earlier}\n\n` : "")
+      + `【当前这一幕：第${acts.toCn(cur.index)}幕${cur.title ? " " + cur.title : ""}】\n${clampStory(String(cur.body || ""))}`;
+  } else {
+    story = clampStory(rawStory);
+  }
+  story = story || "（你没有更多详细记忆）";
   const secret = String(role.secret || scr.secret || "").substring(0, 1200) || "（无特殊秘密）";
   // 性格/语气与个人目标来自大纲，经 assembleScript → parseScript → 切分数据一路带到运行时。
   // 没有语气抓手时六个人的发言会趋同，玩家一眼就看出"都是同一个模型在说话"。

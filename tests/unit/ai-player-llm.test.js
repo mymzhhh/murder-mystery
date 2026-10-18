@@ -20,6 +20,8 @@ Module._load = function (request, parent, isMain) {
       getClues: async () => stubs.clues,
       getPlayers: async () => stubs.players,
       getChatMessages: async () => stubs.messages,
+      // buildKnowledge 现在会取房间拿 phase（分幕剧本按阶段只给已解锁的幕）
+      getRoom: async () => ({ phase: stubs.phase || "round1" }),
     };
   }
   if (request.endsWith("agnes-client")) {
@@ -105,6 +107,23 @@ test("knowledgePrompt 承载易变内容；同一角色的 system 段必须逐�
   const changed = { ...base, myClues: ["【A9】新发现的一条线索"], transcript: "张三: 新的一句话" };
   assert.equal(systemPrompt(base), systemPrompt(changed), "线索/公屏变化不得影响 system 段");
   assert.notEqual(knowledgePrompt(base), knowledgePrompt(changed), "易变段必须随线索/公屏变化");
+});
+
+test("超长角色正文保留头尾（时间线/秘密在后半段，不能被一刀切掉）", () => {
+  const tailMark = "【时间线】23:40 我在神社后山";
+  // 必须超过 9000 字上限才会触发"头尾保留"（第一版这里只造了 8007 字，没触发，测试自然失败）
+  const long = "开".repeat(5000) + "中".repeat(5000) + tailMark;   // 10000+ 字
+  const p = systemPrompt({
+    role: { playerScript: long }, name: "X",
+    myClues: [], otherClues: [], allChars: [], myStatements: [], transcript: "", room: {},
+  });
+  assert.ok(p.includes("开".repeat(50)), "头部必须保留");
+  assert.ok(p.includes("（……中段省略……）"), "超长时应标出省略");
+  assert.ok(p.includes(tailMark), "尾部必须保留 —— 原 substring(0,4000) 正是把它截掉了");
+
+  // 不超限时不得出现省略标记
+  const p2 = systemPrompt({ role: { playerScript: "短正文" }, name: "X", room: {} });
+  assert.ok(!p2.includes("（……中段省略……）"), "短正文不该被加省略标记");
 });
 
 test("信息隔离红线：不携带他人剧本、DM 真相、凶手姓名", () => {
@@ -225,6 +244,7 @@ test("buildKnowledge：依赖读取失败时不抛异常（降级为空知识）
         getClues: async () => { throw new Error("redis down"); },
         getPlayers: async () => { throw new Error("redis down"); },
         getChatMessages: async () => { throw new Error("redis down"); },
+        getRoom: async () => { throw new Error("redis down"); },
       };
     }
     return savedLoad.apply(this, arguments);

@@ -7,6 +7,7 @@ const { generatePersonalReview } = require("../game/review-agent");
 const { determineOutcome, getPhaseConfig, getPhaseRound } = require("../game/game-engine");
 const { buildRoundSearchLocations } = require("../game/search-locations");
 const { computeScores } = require("../game/scoring");
+const acts = require("../script/acts");
 
 /** 个性化复盘的缓存时长（7 天）：真相已固定，同一玩家重复刷新不必重复花 LLM 配额 */
 const PERSONAL_REVIEW_TTL = 7 * 24 * 3600;
@@ -82,12 +83,20 @@ const { createGameRoom } = require("../game/game-room-creator");
       // "[object Object]"，整页剧本都变成这个；同时秘密也没带出来
       // （split 路径下秘密在 char.script.secret，char.secret 是 undefined）。
       const { script, secret } = normalizeCharacterScript(char);
+      // 分幕剧本：只下发**已解锁的幕**（累计保留前面的幕），未解锁的幕不下发 ——
+      // 否则开局就把后面几幕"我后来去做了什么"提前剧透，分幕本的沉浸感就没了。
+      // 无幕标记的剧本 → acts 只有 1 幕 → 返回原文，与改造前完全一致。
+      const byAct = acts.scriptForPhase(script, room.phase);
       res.json({
         characterName: char.name,
         occupation: char.occupation || "",
-        script,
+        script: byAct.script,
         secret,
         isMurderer: !!char.isMurderer,
+        // 分幕信息：前端可据此显示"第 N 幕将在 X 阶段解锁"
+        actTotal: byAct.totalActs,
+        actUnlocked: byAct.unlocked,
+        nextUnlockPhase: byAct.nextPhase,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });
