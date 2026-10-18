@@ -732,6 +732,14 @@ function setupGameSocket(io) {
         const target = players.find(p => p.playerId === targetPlayerId);
         if (!target) return socket.emit("error", { code: "NO_TARGET", message: "找不到该玩家" });
         if (target.playerId === socket.id) return socket.emit("error", { code: "SELF_WHISPER", message: "不能和自己私聊" });
+        // 私聊**只对真人开放**（用户要求）。两个理由：
+        //   1) AI 的私下应答等于给玩家一条绕过「审讯全场可见」的免费套话通道 ——
+        //      同一个 AI 在公屏上守口如瓶，在私聊里却没有人监督它守什么；
+        //   2) 私聊的定位是"见不得光的小动作"，只该发生在真人之间。
+        // 前端已经不列出 AI，这里再挡一次：前端拦不住的 socket 调用照样能绕过去。
+        if (target.isAI || target.isNPC) {
+          return socket.emit("error", { code: "AI_WHISPER_DISABLED", message: "私聊只能和真人玩家进行" });
+        }
         const text = String(content || "").trim();
         if (!text) return socket.emit("error", { code: "EMPTY", message: "请输入内容" });
         if (text.length > 300) return socket.emit("error", { code: "TOO_LONG", message: "私聊内容请控制在 300 字以内" });
@@ -740,23 +748,7 @@ function setupGameSocket(io) {
         const toName = target.characterName || target.playerName || "某人";
         const msg = await addWhisper(roomCode, socket.id, myName, target.playerId, toName, text, room.phase);
         socket.emit("whisper_message", { ...msg, self: true });
-        // AI 玩家没有 socket，跳过 —— 它的回复在下面单独发给发送者
-        if (!target.isAI) io.to(target.playerId).emit("whisper_message", { ...msg, self: false });
-
-        // 目标是 AI：让它私下回一句（与 ask_ai_player 共用同一套知识构建与提示词）
-        if (target.isAI) {
-          let answer = null;
-          try {
-            const aiLlm = require("../game/ai-player-llm");
-            const parsed = JSON.parse(room.parsedScript || "{}");
-            const k = await aiLlm.buildKnowledge(roomCode, target, parsed);
-            answer = await aiLlm.answerLLM(k, myName, text);
-          } catch (e) { console.warn("[whisper] AI 私下应答失败:", e.message); }
-          if (answer) {
-            const reply = await addWhisper(roomCode, target.playerId, toName, socket.id, myName, answer, room.phase);
-            socket.emit("whisper_message", { ...reply, self: false });
-          }
-        }
+        io.to(target.playerId).emit("whisper_message", { ...msg, self: false });
       } catch (e) { socket.emit("error", { code: "WHISPER_FAILED", message: e.message }); }
     });
 

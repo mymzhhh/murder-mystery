@@ -1289,6 +1289,11 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   const railItems = GAME_PANELS
     .filter(([k]) => k !== "map" || hasMap)
     .map(([k, icon, label, full]) => ({ key: k, icon, label, title: `打开「${full}」` }));
+  // 私聊只对真人开放（用户要求）：候选里排除 AI 与 NPC。
+  // 注意 AI 补位的角色同时带 isAI 与 isNPC，两个条件都要判。
+  const humanTargets = (players || []).filter(
+    (p) => !p.isAI && !p.isNPC && (p.characterName || p.playerName) && p.characterName !== myChar?.name
+  );
   // 私聊对话框标题里显示"正在和谁聊"——比只写"私聊"清楚得多
   const whisperTargetPlayer = (players || []).find((p) => p.playerId === whisperTo);
   const whisperTargetName = whisperTargetPlayer
@@ -1524,11 +1529,13 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
 
               {openPanel === "whisper" ? (
                 <div className="panel">
-                  {/* 私聊：只有收发双方能看到。公屏发言会进 AI 的上下文，私聊不会 —— 所以这里是真正"见不得光"的渠道 */}
+                  {/* 私聊：只有收发双方能看到，而且**只对真人开放**（用户要求）。
+                      AI 玩家不在候选里 —— 给 AI 开私聊等于留了一条绕过「审讯全场可见」的
+                      套话通道（同一个 AI 公屏上守口如瓶，私下却没人监督它守什么）。 */}
                   <div className="panel-head">
                     <strong>私聊</strong>
                     <span className="text-xs text-dim">
-                      {whisperTargetName ? `与 ${whisperTargetName} 的对话 · 仅你与对方可见` : "仅你和对方可见"}
+                      {whisperTargetName ? `与 ${whisperTargetName} 的对话 · 仅你与对方可见` : "仅限真人玩家之间 · 仅你与对方可见"}
                     </span>
                   </div>
                   <div style={{ display: "flex", gap: 6, marginBottom: 8, flexWrap: "wrap" }}>
@@ -1540,13 +1547,11 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                       aria-label="私聊对象"
                     >
                       <option value="">选择对象…</option>
-                      {(players || [])
-                        .filter((p) => (p.characterName || p.playerName) && p.characterName !== myChar?.name)
-                        .map((p) => (
-                          <option key={p.playerId} value={p.playerId}>
-                            {p.characterName || p.playerName}{p.isAI ? "（AI）" : ""}
-                          </option>
-                        ))}
+                      {humanTargets.map((p) => (
+                        <option key={p.playerId} value={p.playerId}>
+                          {p.characterName || p.playerName}
+                        </option>
+                      ))}
                     </select>
                     <input
                       className="form-input"
@@ -1560,7 +1565,12 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                     <button className="btn btn-outline btn-sm btn-auto" disabled={!whisperTo || !whisperText.trim()} onClick={doWhisper}>发送</button>
                   </div>
                   <div style={{ maxHeight: 360, overflowY: "auto", fontSize: 12, lineHeight: 1.8 }}>
-                    {!whisperTo && <div className="text-muted">先选一个私聊对象</div>}
+                    {humanTargets.length === 0 && (
+                      <div className="text-muted">
+                        本局没有其他真人玩家，私聊不可用 —— AI 玩家只能通过「审讯」公开提问（全场可见）。
+                      </div>
+                    )}
+                    {humanTargets.length > 0 && !whisperTo && <div className="text-muted">先选一个私聊对象</div>}
                     {whisperTo && thread.length === 0 && <div className="text-muted">还没有私聊记录</div>}
                     {thread.map((m, i) => (
                       <div key={i} style={{ padding: "4px 0", borderTop: i ? "1px dashed rgba(255,255,255,.07)" : "none" }}>
