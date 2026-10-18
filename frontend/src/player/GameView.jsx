@@ -1231,12 +1231,21 @@ function ReadingView({ script, char, scriptId, iAmReady, onReady }) {
 // 布局：**左侧竖栏（模块）+ 右侧宽主列（场景地图 / 全屋讨论 / 在场玩家 / 情报台）**，
 // 与测试剧本页同一形态（共用 components/SideRail.jsx）。搜证 / 审讯 / 私聊收进弹框：
 // 这三个都是"做一件事"的入口，常驻窄列反而白占讨论的横向空间。
+// 竖栏模块：主区**只留全屋讨论**，其余全部收进这里，点开用弹框展示。
+// 地图只在剧本真的带布局图时才出现在竖栏里（见下面 railItems）——避免点开一个空框。
 const GAME_PANELS = [
-  ["search", "🔍", "搜证"],
-  ["ask", "💬", "审讯"],
-  ["whisper", "✉️", "私聊"],
+  ["search", "🔍", "搜证", "搜证"],
+  ["ask", "💬", "审讯", "审讯"],
+  ["whisper", "✉️", "私聊", "私聊"],
+  ["map", "🗺", "地图", "场景地图"],
+  ["roster", "👥", "玩家", "在场玩家"],
+  ["desk", "📋", "情报", "情报台"],
 ];
-const panelLabel = (k) => (GAME_PANELS.find(([key]) => key === k) || [k, "", k])[2];
+/** 弹框标题用完整名（"场景地图"而不是"地图"） */
+const panelLabel = (k) => {
+  const row = GAME_PANELS.find(([key]) => key === k);
+  return row ? row[3] : k;
+};
 function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper, scriptId }) {
   const [msg, setMsg] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
@@ -1253,6 +1262,25 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   // 并在新聊天消息到达时清掉。
   const [askPending, setAskPending] = useState("");
   useEffect(() => { if (askPending) setAskPending(""); }, [chats.length]);
+
+  // 剧本有没有 map- 布局图。有这个才把「地图」放进竖栏 —— 否则点开是个空框。
+  const [hasMap, setHasMap] = useState(false);
+  useEffect(() => {
+    if (!scriptId) { setHasMap(false); return; }
+    let cancelled = false;
+    fetch(`/api/scripts/${encodeURIComponent(String(scriptId))}/images`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        const imgs = (d && Array.isArray(d.images)) ? d.images : [];
+        setHasMap(imgs.some((x) => String(x.imgKey || "").startsWith("map-")));
+      })
+      .catch(() => { /* 取不到就当没有地图：竖栏少一项，不影响对局 */ });
+    return () => { cancelled = true; };
+  }, [scriptId]);
+  const railItems = GAME_PANELS
+    .filter(([k]) => k !== "map" || hasMap)
+    .map(([k, icon, label, full]) => ({ key: k, icon, label, title: `打开「${full}」` }));
 
   // AI 补位玩家的标记是 isNPC:true + isAI:true，两个条件同时成立。
   // 原写法 npcs/ais 都包含 AI 玩家 → 下拉框重复项，且点击时被 npcs 先命中而路由到 ask_npc，
@@ -1282,17 +1310,15 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   return (
     <div style={{ display: "flex", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
       {/* 左侧模块栏：与测试剧本页共用 components/SideRail.jsx（用户要求两边样式一致）。
-          搜证/审讯/私聊做成弹框后，主列能整幅留给全屋讨论。 */}
+          主区**只留全屋讨论**，其余（搜证/审讯/私聊/场景地图/在场玩家/情报台）全部收进竖栏，
+          点开用弹框展示。 */}
       <SideRail
-        items={GAME_PANELS.map(([k, icon, label]) => ({ key: k, icon, label, title: `打开「${label}」` }))}
+        items={railItems}
         onSelect={(k) => setOpenPanel(k)}
         active={openPanel}
         ariaLabel="对局模块栏"
       />
       <div style={{ flex: "1 1 560px", minWidth: 0, display: "flex", flexDirection: "column", gap: 12 }}>
-        {/* 场景地图：**只在搜证/讨论阶段**出现（用户要求）—— 这个组件本来就在搜证/讨论视图里，
-            所以放进这里就自然满足了"只有讨论阶段可见"，不再占大厅和阅读阶段的地方。 */}
-        <SceneMap scriptId={scriptId} />
         <div className="panel">
           <div className="panel-head">
             <strong>全屋讨论</strong>
@@ -1344,40 +1370,6 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
             <button className="btn btn-primary btn-auto" onClick={doChat}>发送</button>
           </div>
         </div>
-
-        <div className="panel">
-          <div className="panel-head">
-            <strong>在场玩家</strong>
-            <span className="text-xs text-dim">{players.length} 人</span>
-          </div>
-          <div className="roster">
-            {players.map((p, i) => (
-              <div key={p.playerId || p.playerName} className={`roster-row${p.isAI || p.isNPC ? " is-ai" : ""}`}>
-                <span className="roster-seat">{i + 1}</span>
-                <span className="roster-name">{p.characterName || p.playerName}</span>
-                {p.isNPC ? <span className="tag tag-npc">NPC</span>
-                  : p.isAI ? <span className="tag tag-npc">AI</span>
-                    : null}
-                <span className="roster-role">
-                  {!p.isNPC && !p.isAI && <VoiceTag playerId={p.playerId} voice={voice} speaking={speaking} />}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 「情报台」：左列下方原本是成片空白（实测右列 5229px 时左列只有 920px，
-            下方 4309px × 868px 命中 0 个元素）。这块小组件栏用 sticky 钉住，
-            滚到线索列表深处时左半屏仍有线索目录 / 人物 / 进度可查。
-            数据全部来自本组件已有的状态，没有新增接口。 */}
-        <IntelDesk
-          phase={phase}
-          myChar={myChar}
-          players={players}
-          myClues={myClues}
-          chats={chats}
-          searchInfo={searchInfo}
-        />
       </div>
 
       {/* ============ 右列（窄）：搜证 / 证物 / 审讯 / 私聊 ============ */}
@@ -1524,6 +1516,50 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
                     ))}
                   </div>
                 </div>
+              ) : null}
+
+              {/* 场景地图：只在搜证/讨论阶段能点到（这个组件本身只在这里挂载），
+                  剧本没有布局图时竖栏里不会出现「地图」这一项。 */}
+              {openPanel === "map" ? <SceneMap scriptId={scriptId} /> : null}
+
+              {openPanel === "roster" ? (
+                <div className="panel">
+                  <div className="panel-head">
+                    <strong>在场玩家</strong>
+                    <span className="text-xs text-dim">{players.length} 人</span>
+                  </div>
+                  <div className="roster">
+                    {players.map((p, i) => (
+                      <div key={p.playerId || p.playerName} className={`roster-row${p.isAI || p.isNPC ? " is-ai" : ""}`}>
+                        <span className="roster-seat">{i + 1}</span>
+                        <span className="roster-name">{p.characterName || p.playerName}</span>
+                        {p.isNPC ? <span className="tag tag-npc">NPC</span>
+                          : p.isAI ? <span className="tag tag-npc">AI</span>
+                            : null}
+                        <span className="roster-role">
+                          {!p.isNPC && !p.isAI && <VoiceTag playerId={p.playerId} voice={voice} speaking={speaking} />}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* 情报台：线索目录 / 在场人物 / 进度。放进弹框时用 compact ——
+                  它原本锁了「表头以下的整屏高」，装在弹框里会顶出去。 */}
+              {openPanel === "desk" ? (
+                <IntelDesk
+                  phase={phase}
+                  myChar={myChar}
+                  players={players}
+                  myClues={myClues}
+                  chats={chats}
+                  searchInfo={searchInfo}
+                  compact
+                  /* 「看全文」直接切到「搜证」模块 —— 线索全文现在在那里（原来的右列已移除），
+                     不接这个回调的话那个按钮会点了没反应。 */
+                  onShowFull={() => setOpenPanel("search")}
+                />
               ) : null}
             </div>
           </div>

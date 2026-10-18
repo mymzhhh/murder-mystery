@@ -35,7 +35,7 @@ function phaseLabelShort(p) {
   }[p] || String(p || "—");
 }
 
-export default function IntelDesk({ phase, myChar, players = [], myClues = [], chats = [], searchInfo = null }) {
+export default function IntelDesk({ phase, myChar, players = [], myClues = [], chats = [], searchInfo = null, compact = false, onShowFull = null }) {
   // 记录「被手动展开」的分组；默认全收起 = 一份地点目录（右列默认全展开，两边互补）。
   const [open, setOpen] = useState(() => new Set());
   const [cat, setCat] = useState("");
@@ -89,6 +89,17 @@ export default function IntelDesk({ phase, myChar, players = [], myClues = [], c
   const mySpeeches = (chats || []).filter((c) => myChar?.name && c.from === myChar.name).length;
 
   /**
+   * 「看全文」：优先交给调用方（对局页现在把线索全文放在「搜证」模块里，
+   * 这里回调一下就切过去）；没给回调时退回老办法 —— 找右列的 `.evidence-panel` 分组头跳过去。
+   * ⚠️ 改版后右列已经不存在了，所以老办法会**静默失效**；这就是为什么必须加回调，
+   * 否则按钮点了毫无反应（和"审讯没反馈"是同一类问题）。
+   */
+  function showFull(label) {
+    if (onShowFull) { try { onShowFull(label); } catch (e) { /* 不影响对局 */ } return; }
+    jumpToGroup(label);
+  }
+
+  /**
    * 跳到右侧「已发现的线索」里对应的分组：分组头永远在 DOM 里（收起的组只是不渲染 body），
    * 所以按分组名找得到；收起状态读 aria-expanded（GroupedClues 已经写好了这个属性）。
    * 这是纯粹的"读 DOM + 点已有控件"，不改右列任何状态与行为；找不到就安静地什么都不做。
@@ -114,7 +125,7 @@ export default function IntelDesk({ phase, myChar, players = [], myClues = [], c
   }
 
   return (
-    <div className="panel intel-desk" aria-label="情报台">
+    <div className={"panel intel-desk" + (compact ? " is-compact" : "")} aria-label="情报台">
       <div className="panel-head">
         <strong>🧭 情报台</strong>
         <span className="text-xs text-dim">随对局常驻，滚到下面也看得见</span>
@@ -134,7 +145,7 @@ export default function IntelDesk({ phase, myChar, players = [], myClues = [], c
           {(myClues || []).length === 0 ? (
             <div className="intel-desk-empty">
               还没有线索被发现。线索一被搜到就会自动公开给全场，
-              出现后这里会按大地点列成目录，点一行就跳到右边那一组看全文。
+              出现后这里会按大地点列成目录，点「看全文」就到「搜证」模块里读原文。
             </div>
           ) : (
             <div>
@@ -199,8 +210,8 @@ export default function IntelDesk({ phase, myChar, players = [], myClues = [], c
                         type="button"
                         className="btn btn-outline btn-xs"
                         style={{ flexShrink: 0 }}
-                        title="在右侧展开该分组并滚过去（看线索全文）"
-                        onClick={() => jumpToGroup(g.label)}
+                        title="看线索全文（打开「搜证」模块，里面按地点分组列了全文）"
+                        onClick={() => showFull(g.label)}
                       >
                         看全文 ↗
                       </button>
@@ -213,7 +224,7 @@ export default function IntelDesk({ phase, myChar, players = [], myClues = [], c
                             key={i}
                             type="button"
                             className="chip"
-                            title={`${clueLabel(c)}${c.foundByName ? " ｜ " + c.foundByName + " 发现" : ""}（跳到右侧看全文）`}
+                            title={`${clueLabel(c)}${c.foundByName ? " ｜ " + c.foundByName + " 发现" : ""}（在「搜证」里看全文）`}
                             onClick={() => jumpToGroup(g.label)}
                           >
                             {clueLabel(c)}

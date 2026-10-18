@@ -1236,6 +1236,14 @@
    滚动行为与改造前一致 —— 所以这里刻意**不加** max-height，不给线索列表套内部滚动条。 */
 .game-col-pin { position: sticky; top: calc(var(--header-h) + var(--s-4)); }
 
+/* 情报台放进弹框时的形态：去掉「表头以下整屏高」的高度锁与 sticky ——
+   弹框自己的 body 已经在滚动，再叠一层内部滚动会把内容挤成一条窄缝。 */
+.intel-desk.is-compact {
+  position: static;
+  height: auto;
+  min-height: 0;
+}
+
 /* 窄屏是单列：sticky 与"满视口高"都没有意义，退回普通面板 */
 @media (max-width: 1100px) {
   .intel-desk { position: static; height: auto; min-height: 0; }
