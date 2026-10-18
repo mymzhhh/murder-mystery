@@ -146,10 +146,22 @@ if (!rawScript) continue;
 
   if (allClues.length > 0) {
     onProgress("clue", `提取线索 (共 ${allClues.length} 条)...`);
-    for (const c of allClues) {
+    // 地点兜底：空 location 的线索在游戏里**永远搜不到**（搜证池按 location 生成）。
+    // 实测《停表的修表铺》44 条里 6 条因缺「发现地点」落成空串，玩家少拿 14% 的线索。
+    const { fillMissingClueLocations } = require("./clue-locations");
+    const { clues: filledClues, filled } = fillMissingClueLocations(allClues, {
+      places: String(parsed.layoutDescription || parsed.meta?.layoutDescription || "")
+        .split(/[｜|\/、,，\n]/).map((s) => s.trim()).filter(Boolean),
+      fallback: "现场",
+    });
+    if (filled.length) {
+      console.warn(`[splitter] 补全了 ${filled.length} 条缺失地点的线索：` +
+        filled.map((f) => `${allClues[f.index].id}→${f.location}(${f.reason})`).join("，"));
+    }
+    for (const c of filledClues) {
       result.clues.push({
         id: c.id, name: "", content: (c.content || "").substring(0, 500),
-        location: c.location || "", round: c.round, clueType: c.clueType || ""
+        location: c.location || "现场", round: c.round, clueType: c.clueType || ""
       });
     }
   }
@@ -212,7 +224,7 @@ async function saveToRedis(sessionId, result) {
   pipeline.hset(`split:${sessionId}:dm`, {
     openingMonologue: result.dm.openingMonologue?.substring(0, 5000) || "",
     fullTimeline: result.dm.fullTimeline?.substring(0, 5000) || "",
-    truthReveal: result.dm.truthReveal?.substring(0, 5000) || "",
+    truthReveal: result.dm.truthReveal?.substring(0, 12000) || "",
     murdererName: result.dm.murdererInfo?.name || "",
     murdererMotive: result.dm.murdererInfo?.motive?.substring(0, 2000) || "",
     murdererMethod: result.dm.murdererInfo?.method?.substring(0, 2000) || "",

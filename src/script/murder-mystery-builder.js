@@ -1165,33 +1165,51 @@ function checkDateAgreement(sections, outline) {
 async function ensureTimelineComplete(charName, content, retryFn, onProgress, opts) {
   const o = opts || {};
   const min = Number.isFinite(o.min) ? o.min : MIN_TIMELINE_POINTS;
+  // 字数下限（2026-10-18 新增）：实测《停表的修表铺》四个角色本只有 2473–2804 字，
+  // 而预算是 3400–5200、真本中位 5929 —— 时间线点数是够的，**正文本身就薄**，
+  // 原来的门只看时间线条数，所以一句都没拦。传 0 表示不检查（保持旧行为）。
+  const minChars = Number.isFinite(o.minChars) ? o.minChars : 0;
+  const charsOf = (s) => String(s || "").replace(/\s+/g, "").length;
   const section = o.section || "二、你的时间线";
-  const body = extractCharacterTimeline(content);
-  const points = body === null ? 0 : countTimelinePoints(body);
-  if (body !== null && points >= min) return content;
+  const evaluate = (txt) => {
+    const b = extractCharacterTimeline(txt);
+    const p = b === null ? 0 : countTimelinePoints(b);
+    const c = charsOf(txt);
+    const ok = b !== null && p >= min && (minChars === 0 || c >= minChars);
+    return { p, c, ok, hasSection: b !== null };
+  };
+  const cur = evaluate(content);
+  if (cur.ok) return content;
 
-  const problem = body === null
-    ? `完全没有「${section}」章节`
-    : `「${section}」只有 ${points} 个时间点（要求至少 ${min} 个）`;
+  const problems = [];
+  if (!cur.hasSection) problems.push(`完全没有「${section}」章节`);
+  else if (cur.p < min) problems.push(`「${section}」只有 ${cur.p} 个时间点（要求至少 ${min} 个）`);
+  if (minChars > 0 && cur.c < minChars) problems.push(`正文只有 ${cur.c} 字（要求至少 ${minChars} 字：背景、时间线、任务都要写足，不要压缩）`);
+  const problem = problems.join("；");
   const headings = o.headings
     || '必须包含 "### 一、你的背景故事" / "### 二、你的时间线" / "### 三、你的任务" 三个三级标题，顺序不可变。';
   const cover = o.cover || "覆盖案发前一日晚间到案发后";
-  const note = `\n\n## ⚠️ 上一次输出不合格，必须重写\n上一次的问题：${problem}。\n请重新输出**完整**角色剧本（保留上一版其它章节的要点，不要压缩它们），并严格遵守格式约束：\n- ${headings}\n- 「${section}」必须独立成章、**至少 ${min} 个时间点**，${cover}，格式 "- **月日 时刻**：房间名 — 事件"（月日/时刻/房间名都要换成真实值；**禁止把"日期""时间""地点"这三个词写进条目**）。\n- 不得把行动轨迹写进其它章节。`;
+  const lenNote = minChars > 0 ? `\n- 全篇正文（去掉标题与空白）**不少于 ${minChars} 字**。` : "";
+  const note = `\n\n## ⚠️ 上一次输出不合格，必须重写\n上一次的问题：${problem}。\n请重新输出**完整**角色剧本（保留上一版其它章节的要点，不要压缩它们），并严格遵守格式约束：\n- ${headings}\n- 「${section}」必须独立成章、**至少 ${min} 个时间点**，${cover}，格式 "- **月日 时刻**：房间名 — 事件"（月日/时刻/房间名都要换成真实值；**禁止把"日期""时间""地点"这三个词写进条目**）。\n- 不得把行动轨迹写进其它章节。${lenNote}`;
 
-  if (onProgress) onProgress(o.progressStage || "player_script", `${charName} 时间线不达标（${problem}），正在补写...`);
-  console.warn(`[builder] ${charName} 时间线不达标：${problem}，触发补写`);
+  if (onProgress) onProgress(o.progressStage || "player_script", `${charName} 不达标（${problem}），正在补写...`);
+  console.warn(`[builder] ${charName} 不达标：${problem}，触发补写`);
 
   try {
     const retried = await retryFn(note);
-    const rBody = extractCharacterTimeline(retried);
-    const rPoints = rBody === null ? 0 : countTimelinePoints(rBody);
-    if (rBody !== null && rPoints > points) {
-      console.warn(`[builder] ${charName} 补写后时间点：${rPoints} 个`);
+    const got = evaluate(retried);
+    if (got.ok) {
+      console.warn(`[builder] ${charName} 补写后达标：${got.p} 个时间点 / ${got.c} 字`);
       return retried;
     }
-    console.warn(`[builder] ${charName} 补写仍未达标（${rPoints} 个时间点），保留原稿`);
+    // 没完全达标，但明显更好（时间线更多 或 字数更多，且另一项不退步）就用新的
+    if ((got.p > cur.p && got.c >= cur.c) || (got.c > cur.c && got.p >= cur.p)) {
+      console.warn(`[builder] ${charName} 补写后仍未达标但更好（${got.p} 点 / ${got.c} 字），采用新稿`);
+      return retried;
+    }
+    console.warn(`[builder] ${charName} 补写无改善（${got.p} 点 / ${got.c} 字），保留原稿`);
   } catch (e) {
-    console.warn(`[builder] ${charName} 时间线补写失败，保留原稿:`, e.message);
+    console.warn(`[builder] ${charName} 补写失败，保留原稿:`, e.message);
   }
   return content;
 }
@@ -1218,9 +1236,27 @@ function buildSectionDigest(fullScript, maxChars = 24000) {
  * 定位策略：先精确匹配；失败则按"忽略所有空白"归一化后再匹配（容忍换行/全角空格差异）。
  * 返回 { text, applied, skipped }
  */
+/** 归一化并保留"归一化下标 → 原文下标"的映射，供模糊定位把替换区间映射回原文 */
+function normWithMap(s) {
+  const norm = [];
+  const map = [];
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (/\s/.test(ch)) continue;
+    // 引号/标点/全角半角差异不参与匹配：模型抄原文时最容易改的就是这些。
+    // ⚠️ 第一版漏了全角「！？」—— 测试里 oldText 以「！」结尾，尾部锚点因此永远匹配不上，
+    // 模糊定位形同虚设（正是这条 bug 让"标点差异也能量"的用例挂了）。
+    const c = ch.replace(/[“”"‘’'，,。；;：:、！？!?（）()【】\[\]{}《》〈〉—–\-·…~～]/g, "");
+    if (!c) continue;
+    norm.push(c);
+    map.push(i);
+  }
+  return { norm: norm.join(""), map };
+}
+
 function applyPatches(text, patches) {
   let out = String(text || "");
-  let applied = 0, skipped = 0;
+  let applied = 0, skipped = 0, fuzzy = 0;
   for (const p of (Array.isArray(patches) ? patches : [])) {
     if (!p || typeof p !== "object") { skipped++; continue; }
     const oldText = p.oldText || p.old || p.find || p.anchor;
@@ -1240,19 +1276,45 @@ function applyPatches(text, patches) {
     const nOld = norm(oldText);
     if (nOld.length < 8) { skipped++; continue; }
     const pos = norm(out).indexOf(nOld);
-    if (pos < 0) { skipped++; continue; }
-    let oi = 0, start = -1, end = -1;
-    for (let i = 0; i < out.length; i++) {
-      if (/\s/.test(out[i])) continue;
-      if (oi === pos && start < 0) start = i;
-      if (oi === pos + nOld.length - 1) { end = i + 1; break; }
-      oi++;
+    if (pos >= 0) {
+      let oi = 0, start = -1, end = -1;
+      for (let i = 0; i < out.length; i++) {
+        if (/\s/.test(out[i])) continue;
+        if (oi === pos && start < 0) start = i;
+        if (oi === pos + nOld.length - 1) { end = i + 1; break; }
+        oi++;
+      }
+      if (start >= 0 && end >= 0) {
+        out = out.slice(0, start) + newText + out.slice(end);
+        applied++;
+        continue;
+      }
     }
-    if (start < 0 || end < 0) { skipped++; continue; }
-    out = out.slice(0, start) + newText + out.slice(end);
+
+    // 策略三：**前后锚点模糊定位**（2026-10-18 实测）
+    // 《停表的修表铺》那次 5 条补丁全部 skipped，矛盾原样留在成稿里 ——
+    // 根因是模型抄 oldText 时把引号/逗号/破折号改了型，逐字和"只去空白"都对不上。
+    // 这里改成：归一化后取前段/后段当锚点，命中即整段替换。
+    // 只放宽"怎么找到这段"，替换范围仍由原文锚点界定，不会误伤别处。
+    const { norm: nOut, map } = normWithMap(out);
+    const nOldFull = normWithMap(oldText).norm;
+    if (nOldFull.length < 8) { skipped++; continue; }
+    const headLen = Math.min(14, Math.max(8, Math.floor(nOldFull.length * 0.5)));
+    const tailLen = Math.min(12, Math.max(6, Math.floor(nOldFull.length * 0.3)));
+    const head = nOldFull.slice(0, headLen);
+    const tail = nOldFull.slice(-tailLen);
+    const startPos = nOut.indexOf(head);
+    if (startPos < 0) { skipped++; continue; }
+    const tailPos = nOut.indexOf(tail, startPos + headLen);
+    if (tailPos < 0) { skipped++; continue; }
+    const startIdx = map[startPos];
+    const endIdx = map[Math.min(tailPos + tailLen - 1, map.length - 1)] + 1;
+    if (!(endIdx > startIdx)) { skipped++; continue; }
+    out = out.slice(0, startIdx) + newText + out.slice(endIdx);
     applied++;
+    fuzzy++;
   }
-  return { text: out, applied, skipped };
+  return { text: out, applied, skipped, fuzzy };
 }
 
 const REVISE_SYSTEM = `你是剧本杀剧本修订编辑。你会收到一份剧本的若干逻辑漏洞清单，以及剧本原文。
@@ -1907,7 +1969,11 @@ async function buildMurderMystery(userInput, onProgress, config) {
         const withTimeline = await ensureTimelineComplete(ch.name, result.content, async (note) => {
           const r = await runStage(`玩家剧本补写(${ch.name})`, () => generate(systemPrompt, prompt + note, { maxTokens: TOKENS_PER_STAGE, temperature: 0.7 }), onProgress);
           return r.content;
-        }, onProgress);
+        }, onProgress, {
+          // 玩家角色本的正文下限：实测 2473–2804 字的稿子"时间线够、正文太薄"，
+          // 而真本中位 5929 字。4200 是"明显厚实但仍可在一次重写内完成"的门槛。
+          minChars: 4200,
+        });
         // 生成后校验：死者死亡之后不得再被描写成活动（实测复验里反复出现的致命漏洞）
         const deathAt = deathMoment;   // 循环外算好（含"算不出来就告警"）
         const afterDeath = await ensureDeathConsistent(
@@ -1978,6 +2044,8 @@ async function buildMurderMystery(userInput, onProgress, config) {
         progressStage: "npc_script",
         headings: npcHeadings,
         cover: "覆盖案发当日及前一日的完整行动轨迹",
+        // NPC 的目击信息是玩家推理的输入，太薄同样削弱可推理度（实测出现过 374 字）
+        minChars: 1200,
       },
     );
     characterResults[ch.name] = npcTimeline;
@@ -2207,8 +2275,42 @@ async function buildMurderMystery(userInput, onProgress, config) {
     let dmPrompt = stages.dmGuide.replace("{frameworkSummary}", dmSummary.substring(0, 6000))
       .replace("{murdererName}", (report.outline && report.outline.murderer && report.outline.murderer.name) || (report.characters || []).find(c => c.isMurderer)?.name || "见设定集")
       + stageDirective(cfg.advancedMode, "dm");
-    const dmResult = await runStage("dmGuide", () => generate(getDMSystemPrompt(), dmPrompt, { maxTokens: TOKENS_LIGHT }), onProgress);
+    let dmResult = await runStage("dmGuide", () => generate(getDMSystemPrompt(), dmPrompt, { maxTokens: TOKENS_LIGHT }), onProgress);
     report.dmGuide = dmResult.content;
+    // ===== 真相复盘字数下限 =====
+    // 实测（2026-10-18，《停表的修表铺》）：不设下限时模型交过来的真相复盘只有 **587 字**，
+    // 而真本《吉普赛女郎之死》是 **11242 字**（5%）。真相复盘是这类本的价值核心，
+    // 短了整本就没有"回扣线索"的可读性。这里给下限 + 补写一次，仍然太短就保留较长的那个。
+    const truthLenOf = (s) => {
+      const t = String(s || "");
+      const i = t.search(/真相复盘/);
+      if (i < 0) return 0;
+      const rest = t.slice(i);
+      const end = rest.search(/\n#{2,4}\s*(?=[^\n]*(QA|问答|结局|注意事项|注意事项))/);
+      return (end > 0 ? rest.slice(0, end) : rest).replace(/\s+/g, "").length;
+    };
+    const MIN_TRUTH_CHARS = 4000;
+    if (truthLenOf(report.dmGuide) < MIN_TRUTH_CHARS) {
+      const shortLen = truthLenOf(report.dmGuide);
+      if (onProgress) onProgress("dmGuide", `真相复盘仅 ${shortLen} 字（要求 ≥${MIN_TRUTH_CHARS}），正在补写...`);
+      try {
+        const retryPrompt = dmPrompt + `\n\n## ⚠️ 上一次的「真相复盘」写得太短（只有 ${shortLen} 字）
+必须重写整份手册，并且「真相复盘」**不少于 ${MIN_TRUTH_CHARS} 字**，必须包含：
+1. 凶手完整作案过程（分钟级，与设定集一致）
+2. **逐条列出全部线索的编号与意义**（含误导/红鲱鱼线索的真实作用）——一条都不要漏
+3. 推理逻辑链：每条结论写明"由哪几条线索推出"
+4. 可能的多种结局`;
+        const retry = await runStage("dmGuide", () => generate(getDMSystemPrompt(), retryPrompt, { maxTokens: TOKENS_PER_STAGE }), onProgress);
+        if (truthLenOf(retry.content) > shortLen) {
+          report.dmGuide = retry.content;
+          if (onProgress) onProgress("dmGuide", `真相复盘已补写到 ${truthLenOf(report.dmGuide)} 字`);
+        } else {
+          console.warn(`[dmGuide] 真相复盘补写无效（${truthLenOf(retry.content)} 字），保留原稿`);
+        }
+      } catch (e) {
+        console.warn("[dmGuide] 真相复盘补写失败，保留原稿:", e.message);
+      }
+    }
   } catch (e) {
     console.error("[dmGuide] 生成失败:", e.message, e.name, e.status);
     throw new Error("DM手册生成失败: " + (e.message || "未知错误"));

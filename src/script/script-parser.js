@@ -214,7 +214,9 @@ function parseScript(markdown) {
     result.dmGuide = {
       openingMonologue: extractSection(markdown, "DM开场白", 2000),
       fullTimeline: extractSection(markdown, "完整时间线", 3000),
-      truthReveal: extractSection(markdown, "真相复盘", 3000),
+      // 3000 → 12000：真本的真相复盘能到 1.1 万字（《吉普赛女郎之死》11242 字），
+    // 原来 3000 字的上限会把长复盘**从中间截断**，而且截断后没有任何提示。
+    truthReveal: extractSection(markdown, "真相复盘", 12000),
       endings: {
         trueEnding: extractSection(markdown, "真结局", 500),
         escapeEnding: extractSection(markdown, "凶手逃脱", 500),
