@@ -197,8 +197,12 @@ export default function PlayerApp() {
               {scripts.map((s) => {
                 const sid = s.sessionId || s.id;
                 return (
-                  <div key={sid} className="card card-static" style={{ padding: 14 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                  <div key={sid} className="card card-static" style={{ padding: 0, display: "flex", alignItems: "stretch", overflow: "hidden" }}>
+                    {/* 封面图取自剧本图片表的 `cover` 键。没有图时整块不渲染 ——
+                        卡片退回原来的纯文字形态；onError 也是隐藏而不是留个破图图标，
+                        这样"图挂了"和"本来没图"在页面上不会混淆。 */}
+                    <ScriptCover scriptId={sid} />
+                    <div style={{ flex: "1 1 auto", minWidth: 0, padding: 14, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, letterSpacing: ".06em" }}>
                           {s.title || s.topic || "未命名"}
@@ -229,7 +233,15 @@ export default function PlayerApp() {
               {rooms.length > 0 && <span className="tag tag-success">{rooms.length} 个可加入</span>}
             </div>
             <div className="stagger" style={{ display: "grid", gap: 8 }}>
-              {rooms.length === 0 && <div className="state-empty">暂无活跃房间</div>}
+              {rooms.length === 0 && (
+                <div className="state-empty">
+                  暂无活跃房间
+                  {/* 与「可选剧本」的空态保持同一种写法：空状态要给下一步动作，不能只说"没有" */}
+                  <div className="text-xs" style={{ marginTop: 6, letterSpacing: 0 }}>
+                    把房号发给朋友一起去，或在左边点「创建房间」自己开局
+                  </div>
+                </div>
+              )}
               {rooms.map((r) => (
                 <div key={r.roomCode} className="card card-static" style={{ padding: 14 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -251,10 +263,62 @@ export default function PlayerApp() {
             </div>
           </div>
         </div>
+
+        {/* 一局会经历什么：大厅内容少，1500×1000 下 y≈610 以下原本是整片空白
+            （实测约 390×1450px 的纯背景）。这里补一条流程说明，既填版面，
+            也让第一次进来的人知道每局要做什么，不用先问房主。 */}
+        <div className="panel" style={{ marginTop: 14 }}>
+          <div className="panel-head">
+            <strong>一局会经历什么</strong>
+            <span className="text-xs text-dim">AI 负责推进，你只负责推理</span>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10 }}>
+            {GAME_STEPS.map(([n, title, desc]) => (
+              <div key={n} className="card card-static" style={{ padding: 12, display: "flex", gap: 10 }}>
+                <span style={{
+                  flex: "0 0 22px", height: 22, borderRadius: 999, display: "grid", placeItems: "center",
+                  fontSize: 12, fontFamily: "var(--font-mono)", color: "var(--brass, #c9a45f)",
+                  border: "1px solid var(--brass-line, rgba(201,164,95,.35))",
+                }}>{n}</span>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 14, color: "var(--text)" }}>{title}</div>
+                  <div className="text-xs text-dim" style={{ marginTop: 3, lineHeight: 1.7 }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
 }
+
+/** 剧本封面缩略图。
+ *  键名固定为 `cover`，字节存在 PG 的 script_images 表里（与线索配图同一套管道，
+ *  所以不需要静态目录、也不会因为镜像重建丢图）。取不到就整块不渲染，卡片退回纯文字。 */
+function ScriptCover({ scriptId }) {
+  const [failed, setFailed] = useState(false);
+  if (!scriptId || failed) return null;
+  return (
+    <img
+      src={`/api/scripts/${encodeURIComponent(scriptId)}/images/cover`}
+      alt=""
+      aria-hidden="true"
+      onError={() => setFailed(true)}
+      style={{
+        flex: "0 0 132px", width: 132, alignSelf: "stretch", objectFit: "cover", display: "block",
+        borderRight: "1px solid var(--ink-600, rgba(255,255,255,.08))",
+      }}
+    />
+  );
+}
+
+/** 大厅底部的流程说明（三步）。写成常量而不是内联，避免每次渲染重建数组。 */
+const GAME_STEPS = [
+  ["1", "拿到剧本", "你会拿到身份、秘密和一份时间线 —— 先弄清「我是谁、我隐瞒什么」。"],
+  ["2", "搜证与审问", "去地点搜线索，再拿线索去对质别人的时间线；AI 玩家会说谎，也会抓你的漏洞。"],
+  ["3", "投票与复盘", "指认真凶，然后看完整真相：谁在隐瞒、哪句是谎话、真凶是怎么做到的。"],
+];
 
 const PHASE_TEXT = {
   lobby: "等待开局", reading: "阅读剧本", intro: "自我介绍",
