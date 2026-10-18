@@ -19,17 +19,17 @@ function fakeQuery(text, params) {
   const p = params || [];
   seen.push({ sql, params: p });
   if (/^INSERT INTO script_images/i.test(sql)) {
-    rows.set(key(p[0], p[1]), { scriptId: p[0], imgKey: p[1], mime: p[2], bytes: p[3] });
+    rows.set(key(p[0], p[1]), { scriptId: p[0], imgKey: p[1], mime: p[2], bytes: p[3], alt: p[4] || "" });
     return { rows: [], rowCount: 1 };
   }
   if (/^SELECT mime, bytes FROM script_images/i.test(sql)) {
     const found = rows.get(key(p[0], p[1]));
     return { rows: found ? [{ mime: found.mime, bytes: found.bytes }] : [], rowCount: found ? 1 : 0 };
   }
-  if (/^SELECT img_key, mime, octet_length\(bytes\) AS size FROM script_images/i.test(sql)) {
+  if (/^SELECT img_key, mime, alt, octet_length\(bytes\) AS size FROM script_images/i.test(sql)) {
     const list = [...rows.values()].filter((r) => r.scriptId === p[0])
       .sort((a, b) => a.imgKey.localeCompare(b.imgKey))
-      .map((r) => ({ img_key: r.imgKey, mime: r.mime, size: r.bytes.length }));
+      .map((r) => ({ img_key: r.imgKey, mime: r.mime, alt: r.alt, size: r.bytes.length }));
     return { rows: list, rowCount: list.length };
   }
   return { rows: [], rowCount: 0 };
@@ -108,15 +108,27 @@ test("saveScriptImage 非 Buffer 直接拒绝（防把 base64 字符串当字节
     /必须是 Buffer/);
 });
 
-test("listScriptImages：只回键名/mime/体积，按剧本隔离，不带字节", async () => {
-  await db.saveScriptImage("script-b", "map-b2", "image/png", PNG);
+test("listScriptImages：只回键名/mime/体积/说明，按剧本隔离，不带字节", async () => {
+  await db.saveScriptImage("script-b", "map-b2", "image/png", PNG, "案发现场布局");
   await db.saveScriptImage("script-b", "map-b1", "image/png", PNG);
   await db.saveScriptImage("script-b", "portrait-lin", "image/webp", PNG2);
   const list = await db.listScriptImages("script-b");
   assert.deepStrictEqual(list.map((x) => x.imgKey), ["map-b1", "map-b2", "portrait-lin"], "按键名排序");
-  assert.deepStrictEqual(list[0], { imgKey: "map-b1", mime: "image/png", size: PNG.length });
+  // 说明文字必须随列表返回：地图类图片不在正文里被引用，前端只能靠它做图注，
+  // 否则界面上会印出原始键名（"map-2"）。
+  assert.deepStrictEqual(list[0], { imgKey: "map-b1", mime: "image/png", alt: "", size: PNG.length });
+  assert.strictEqual(list[1].alt, "案发现场布局");
   for (const x of list) assert.strictEqual(x.bytes, undefined, "列表接口不能把图片字节带出来");
   assert.deepStrictEqual((await db.listScriptImages("no-such-script")), []);
+});
+
+test("saveScriptImage 的 upsert 不会用空 alt 抹掉已有说明", async () => {
+  await db.saveScriptImage("script-c", "map-c1", "image/png", PNG, "港口吉普赛营地地图");
+  const insert = seen.filter((s) => /^INSERT INTO script_images/i.test(s.sql)).pop();
+  assert.ok(
+    /COALESCE\(NULLIF\(EXCLUDED\.alt, ''\), script_images\.alt\)/.test(insert.sql),
+    "重新写入图片（例如换图/重压缩）时，必须保留库里已有的说明文字"
+  );
 });
 
 test("导出的取图相关函数齐全（路由依赖这些名字）", () => {

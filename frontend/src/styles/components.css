@@ -548,7 +548,7 @@
   text-align: center;
 }
 
-/* 房间里的场景地图：多张布局图并排，窄屏自动落成单列 */
+/* 房间里的场景地图：多张布局图并排，窄屏自动换行 */
 .scene-map-text {
   margin: 0 0 12px;
   font-size: var(--fs-sm);
@@ -556,13 +556,26 @@
   line-height: 1.8;
   white-space: pre-wrap;
 }
+/* 多张布局图并排：按**自然宽高比**排，不拉伸、不裁切、也不做等框留白。
+   实测这个剧本两张图比例差极大（1080×1853 竖版帐篷剖面 vs 1100×734 营地分布）：
+   · 用等列网格 + width:100% → 竖版那张独自把面板撑到 800px 高；
+   · 用 object-fit:contain 装进等高框 → 竖版左右各留一大条底色，图变小更难读。
+   平面图/剖面图最要紧的是看得清，所以只限高度上限、宽度跟着比例走；窄屏自然换行。 */
 .scene-map-grid {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  align-items: flex-start;
 }
-.scene-map-figure { margin: 0; }
-.scene-map-figure .script-img { width: 100%; }
+.scene-map-figure { margin: 0; flex: 0 1 auto; max-width: 100%; }
+.scene-map-figure .script-img {
+  max-height: 440px;
+  max-width: 100%;
+  width: auto;
+  height: auto;
+  display: block;
+  border-radius: var(--r-sm, 4px);
+}
 
 /* 纸面上换成深墨色。用变量覆盖而不是后代选择器，
    这样任何嵌在纸面里的正文块（包括以后新增的）都自动跟着变。 */

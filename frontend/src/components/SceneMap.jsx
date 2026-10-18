@@ -43,8 +43,11 @@ export function SceneMap({ scriptId, layoutText = "", altText = "" }) {
       </div>
       {layoutText ? <p className="scene-map-text">{layoutText}</p> : null}
       <div className="scene-map-grid">
-        {maps.map((m) => {
-          const caption = alts.get(m.imgKey) || m.imgKey;
+        {maps.map((m, i) => {
+          // 说明文字的三级回退：库里存的 alt（原剧本给的标题，如"案发现场布局"）
+          // → 正文里能捞到的 alt → 序号。**绝不能显示原始键名**（"map-2"对玩家毫无意义，
+          // 实测就是这么印在界面上的）。
+          const caption = (m.alt && String(m.alt).trim()) || alts.get(m.imgKey) || `布局图 ${i + 1}`;
           return (
             <figure key={m.imgKey} className="script-figure scene-map-figure">
               <img

@@ -126,6 +126,10 @@ async function initDB() {
   // 幂等迁移：中间产物（推理链/大纲/交叉校验问题）。
   // 用 ALTER 而不是只改上面的 CREATE TABLE —— 已有部署的表不会因为 IF NOT EXISTS 而补列。
   await query(`ALTER TABLE scripts ADD COLUMN IF NOT EXISTS artifacts JSONB`);
+  // 配图的说明文字（原剧本里给这张图的标题，如"案发现场布局"）。
+  // 用 ALTER 补列而不是只改上面的 CREATE TABLE —— 已有部署的 script_images 表不会因为
+  // IF NOT EXISTS 而补列，那样新代码一读 alt 就报错。
+  await query(`ALTER TABLE script_images ADD COLUMN IF NOT EXISTS alt TEXT DEFAULT ''`);
   console.log("[db] PostgreSQL 表已就绪");
 }
 
@@ -208,14 +212,18 @@ function isValidImageKey(imgKey) {
   return IMG_KEY_RE.test(String(imgKey === null || imgKey === undefined ? "" : imgKey));
 }
 
-/** 保存剧本配图（同一剧本同一键名覆盖写入） */
-async function saveScriptImage(scriptId, imgKey, mime, buffer) {
+/** 保存剧本配图（同一剧本同一键名覆盖写入）。
+ *  `alt` 是这个剧本原文里给这张图的说明（如"案发现场布局"）。存它而不是让前端猜：
+ *  地图类图片不在正文里被引用，前端拿不到说明文字，只能退回显示原始键名（"map-2"），
+ *  而原始键名对玩家没有任何意义。 */
+async function saveScriptImage(scriptId, imgKey, mime, buffer, alt) {
   if (!isValidImageKey(imgKey)) throw new Error("图片键名不合法（只允许 A-Za-z0-9_-）");
   if (!Buffer.isBuffer(buffer)) throw new Error("图片数据必须是 Buffer");
   await query(
-    `INSERT INTO script_images (script_id, img_key, mime, bytes) VALUES ($1,$2,$3,$4)
-     ON CONFLICT (script_id, img_key) DO UPDATE SET mime=$3, bytes=$4`,
-    [scriptId, imgKey, mime || "application/octet-stream", buffer]
+    `INSERT INTO script_images (script_id, img_key, mime, bytes, alt) VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (script_id, img_key) DO UPDATE SET mime=$3, bytes=$4,
+       alt = COALESCE(NULLIF(EXCLUDED.alt, ''), script_images.alt)`,
+    [scriptId, imgKey, mime || "application/octet-stream", buffer, String(alt || "")]
   );
 }
 
@@ -226,14 +234,15 @@ async function getScriptImage(scriptId, imgKey) {
   return { mime: r.rows[0].mime, bytes: r.rows[0].bytes };
 }
 
-/** 列出某剧本的全部配图（只回键名/mime/体积，**不带字节**）。
- *  房间里的"场景地图"要靠它筛 map- 前缀的图 —— 把整张图都读出来只为拿个键名没有意义。 */
+/** 列出某剧本的全部配图（只回键名/mime/体积/**说明**，**不带字节**）。
+ *  房间里的"场景地图"要靠它筛 map- 前缀的图 —— 把整张图都读出来只为拿个键名没有意义。
+ *  带上 alt 是因为地图类图片不在正文里被引用，前端无法从正文里捞说明文字。 */
 async function listScriptImages(scriptId) {
   const r = await query(
-    "SELECT img_key, mime, octet_length(bytes) AS size FROM script_images WHERE script_id=$1 ORDER BY img_key",
+    "SELECT img_key, mime, alt, octet_length(bytes) AS size FROM script_images WHERE script_id=$1 ORDER BY img_key",
     [scriptId]
   );
-  return r.rows.map((x) => ({ imgKey: x.img_key, mime: x.mime, size: Number(x.size) || 0 }));
+  return r.rows.map((x) => ({ imgKey: x.img_key, mime: x.mime, alt: x.alt || "", size: Number(x.size) || 0 }));
 }
 
 /** 注册用户 */
