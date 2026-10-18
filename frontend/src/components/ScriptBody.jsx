@@ -70,7 +70,10 @@ export function ScriptBody({ text, scriptId }) {
           // 也用在纸面（剧本正文 / 真相）上，而黄铜压米色纸的对比度明显不够。
           // 让 surface 决定颜色，渲染器只负责结构。
           const lvl = Math.min(4, Math.max(1, c.level));
-          return <div key={i} className={`md-h md-l${lvl}`}>{c.text}</div>;
+          // 「你的任务」单独一档：它是玩家要执行的目标，必须比普通小标题更跳
+          //（真实剧本里任务和正文一样大，玩家翻半天找不到要干什么 —— 实测反馈过）
+          const isTask = /^你的任务/.test(String(c.text || "").trim());
+          return <div key={i} className={`md-h md-l${lvl}${isTask ? " md-task" : ""}`}>{c.text}</div>;
         }
         if (c.kind === "subheading") {
           return <div key={i} className="md-sub">{c.text}</div>;

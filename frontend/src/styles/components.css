@@ -496,6 +496,15 @@
 .md-h.md-l2 { font-size: var(--fs-lg); }
 .md-h.md-l3 { font-size: var(--fs-base); }
 .md-h.md-l4 { font-size: var(--fs-md); }
+/* 「你的任务」：玩家要执行的目标，必须比普通小标题更跳。
+   用左侧粗竖条 + 字距拉开 + 放大一档，颜色仍交给 surface 的 --md-strong（纸面上够深、墨底上够亮）。 */
+.md-h.md-task {
+  border-left: 3px solid var(--md-rule);
+  padding-left: 10px;
+  letter-spacing: 0.14em;
+  margin-top: 18px;
+  font-size: var(--fs-lg);
+}
 .md-sub {
   font-family: var(--font-serif);
   font-size: var(--fs-base);
