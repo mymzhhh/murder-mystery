@@ -122,17 +122,25 @@ function systemPrompt(k) {
   const clampStory = (s) => (s.length > STORY_LIMIT
     ? s.slice(0, STORY_HEAD) + "\n\n（……中段省略……）\n\n" + s.slice(s.length - STORY_TAIL)
     : s);
-  // ---- 分幕剧本：只给"已解锁的幕"，前几幕压成摘要（省 token，也避免剧透后面几幕）----
-  // 无幕标记的剧本 actList 长度为 1 → 走下面的老逻辑，行为完全不变。
+  // ---- 分幕剧本：只给"已解锁的幕"，未解锁的不给（避免剧透后几幕）----
+  // 无延后标记的剧本 actList 长度为 1 → 走下面的老逻辑，行为完全不变。
+  // 预算策略：**能放下就给全文**（AI 的剧情锚点不能丢），只有超过上限时才把靠前的幕压成摘要。
+  // 反例（踩过）：读本 8000 字 + 延后 1 幕时，若一律只给摘要，AI 会丢掉几乎全部已知剧情。
   const actList = acts.splitActs(rawStory);
   let story;
   if (actList.length > 1) {
     const point = acts.unlockPointForPhase(K.phase);
-    const unlocked = Math.max(1, acts.unlockedActCount(actList.length, point));
-    const cur = actList[Math.min(unlocked, actList.length) - 1];
-    const earlier = acts.summarizeActs(actList, Math.min(unlocked, actList.length) - 1, 900);
-    story = (earlier ? `【前几幕回顾（摘要）】\n${earlier}\n\n` : "")
-      + `【当前这一幕：第${acts.toCn(cur.index)}幕${cur.title ? " " + cur.title : ""}】\n${clampStory(String(cur.body || ""))}`;
+    const unlocked = Math.max(1, Math.min(actList.length, acts.unlockedActCount(actList.length, point)));
+    const shown = actList.slice(0, unlocked);
+    const full = shown.map((a) => `【第${acts.toCn(a.index)}幕${a.title ? " " + a.title : ""}】\n${String(a.body || "")}`).join("\n\n");
+    if (full.length <= STORY_LIMIT) {
+      story = full;
+    } else {
+      const cur = shown[shown.length - 1];
+      const earlier = acts.summarizeActs(shown, shown.length - 1, 3000);
+      story = (earlier ? `【前几幕回顾（摘要）】\n${earlier}\n\n` : "")
+        + `【当前这一幕：第${acts.toCn(cur.index)}幕${cur.title ? " " + cur.title : ""}】\n${clampStory(String(cur.body || ""))}`;
+    }
   } else {
     story = clampStory(rawStory);
   }
