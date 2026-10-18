@@ -13,6 +13,15 @@
 /** 阶段轴上的 5 个解锁点（与前端 phase bar 一致；intro 归入第 1 点） */
 const UNLOCK_PHASES = ["reading", "round1", "round2", "voting", "truth_reveal"];
 
+/**
+ * 延后解锁标记（切分点由剧本显式声明，而不是"看见第N幕就切"）：
+ *   【延后解锁：第三幕】        → 从这里开始的内容延后到后续阶段
+ *   【延后解锁 第二案】         → 没有"第N幕"时，标记里的文字当标题
+ * 之所以要显式声明：案子通常发生在某一幕的**结尾**（《吉普赛女郎之死》是第四幕），
+ * 机械按幕切会让玩家在搜证时"案件还没发生、证据在剧本里没有"。
+ */
+const DEFER_RE = /^[ \t　]*【\s*延后解锁\s*(?:[：:][ \t]*|[ \t]+)?(?:第\s*([一二三四五六七八九十\d]+)\s*幕)?\s*([^】]*)】[ \t]*$/m;
+
 const CN_NUM = { 零: 0, 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
 
 /** "一"/"十二"/"3" → 数字；解析不出返回 0 */
@@ -28,15 +37,45 @@ function actNumber(label) {
 }
 
 /**
- * 把角色本切成幕。
- * 支持的行形态（实测都出现过）：
- *   `【第一幕 初识】`   `## 第二幕`   `第三幕：真相`
- * @returns {Array<{index:number,title:string,body:string}>} 无标记时返回**单幕**（整篇）
+ * 把角色本切成"读本部分 / 延后部分"。
+ *
+ * ⚠️ 语义修正（实测踩过的坑）：**不能一看到「第N幕」就切**。
+ * 《吉普赛女郎之死》每个角色本有 4 幕，但**案子在第四幕才发生** —— 按幕切分会让玩家
+ * 在搜证阶段"案件还没发生、搜到的证据在剧本里根本没有"，完全无从推理。
+ * 真实的分幕需求是：读本阶段必须给到**案发结束**，只有案发之后**新的案件/新内容**
+ * 才值得单独放到后续阶段解锁。
+ *
+ * 所以切分点由剧本**显式声明**（人工/导入时判定），标记形如：
+ *     【延后解锁：第三幕】
+ *     【延后解锁 第二案】
+ * 没有这个标记 → **整篇当作一幕**（读本阶段全给），与"不分幕"完全一致。
+ * @returns {Array<{index:number,title:string,body:string}>}
  */
 function splitActs(text) {
   const raw = String(text === null || text === undefined ? "" : text);
   if (!raw.trim()) return [];
 
+  const m = DEFER_RE.exec(raw);
+  if (!m) return [{ index: 1, title: "", body: raw.trim() }];
+
+  const pre = raw.slice(0, m.index).trim();
+  let post = raw.slice(m.index + m[0].length).trim();
+  // 延后部分里若还带「第N幕」标题，就按标题再分成几幕（否则整段作一幕）
+  const inner = splitByActHeads(post);
+  const acts = [];
+  if (pre) acts.push({ index: 1, title: "读本（含案发）", body: pre });
+  if (inner.length > 1) {
+    inner.forEach((a) => acts.push({ index: acts.length + 1, title: a.title, body: a.body }));
+  } else if (post) {
+    acts.push({ index: acts.length + 1, title: (m[2] || "").trim(), body: post });
+  }
+  return acts.length ? acts : [{ index: 1, title: "", body: raw.trim() }];
+}
+
+/** 按「第N幕」标题行把文本切成幕（只用于**延后部分**的内部分节） */
+function splitByActHeads(text) {
+  const raw = String(text === null || text === undefined ? "" : text);
+  if (!raw.trim()) return [];
   const lines = raw.split(/\r?\n/);
   const heads = [];
   lines.forEach((line, i) => {
@@ -46,26 +85,18 @@ function splitActs(text) {
     // 否则 8 幕会被切成 16 段（实测踩过：正文行被误判成幕标题）。
     if (/[。！？；]/.test(t)) return;
     // 必须**以幕标记开头**（允许 # 标题符与【】括号），避免"23:10 我在营地【第二幕】"这种行被误判
-    const m = t.match(/^[#>*\s]*【?\s*第\s*([一二三四五六七八九十\d]+)\s*幕\s*([^】。！？；]*?)】?\s*[】]?$/);
-    if (!m) return;
-    const n = actNumber(m[1]);
+    const mm = t.match(/^[#>*\s]*【?\s*第\s*([一二三四五六七八九十\d]+)\s*幕\s*([^】。！？；]*?)】?\s*[】]?$/);
+    if (!mm) return;
+    const n = actNumber(mm[1]);
     if (!n) return;
-    heads.push({ line: i, index: n, title: (m[2] || "").replace(/^[：:\s-]+/, "").trim() });
+    heads.push({ line: i, index: n, title: (mm[2] || "").replace(/^[：:\s-]+/, "").trim() });
   });
 
-  if (heads.length < 2) {
-    // 单幕（或只有一个幕标记 —— 视作普通标题）：整篇返回，保持老行为
-    return [{ index: 1, title: "", body: raw.trim() }];
-  }
-  const acts = [];
-  heads.forEach((h, k) => {
-    const start = h.line;
+  if (heads.length < 2) return [{ index: 1, title: "", body: raw.trim() }];
+  return heads.map((h, k) => {
     const end = k + 1 < heads.length ? heads[k + 1].line : lines.length;
-    // body 从标题行的**下一行**开始（标题本身当 title，避免玩家看到重复文字）
-    const body = lines.slice(start + 1, end).join("\n").trim();
-    acts.push({ index: h.index, title: h.title, body });
-  });
-  return acts.filter((a) => a.body || a.title);
+    return { index: h.index, title: h.title, body: lines.slice(h.line + 1, end).join("\n").trim() };
+  }).filter((a) => a.body || a.title);
 }
 
 /** 阶段 → 解锁点下标（0..4）；lobby 返回 -1（还没开始，什么都不解锁） */
@@ -149,8 +180,10 @@ function toCn(n) {
 
 module.exports = {
   UNLOCK_PHASES,
+  DEFER_RE,
   actNumber,
   splitActs,
+  splitByActHeads,
   unlockPointForPhase,
   unlockedActCount,
   visibleActCount,
