@@ -1,4 +1,4 @@
-// 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
+﻿// 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
 
 /** 去掉 markdown 强调符与全角标记，仅用于"匹配"，不用于输出 */
 function stripMd(s) {
@@ -287,15 +287,43 @@ function extractGameMode(markdown) {
 }
 
 function extractSection(text, heading, maxLen = 2000) {
-  // 支持多种标题格式
-  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const pattern = new RegExp(
-    `(?:#{1,4}\\s*)?${escaped}[：:]?[\\s\\S]*?(?=\\n#{1,4}\\s+(?:${escaped}|第[一二三四五六]|角色\\s*\\d|一[、.]|二[、.]|三[、.]|四[、.]|五[、.]|六[、.])|\\n---|$)`,
-    "i"
-  );
-  const m = text.match(pattern);
-  if (!m) return "";
-  let content = m[0].replace(new RegExp(`^#{1,4}\\s*${escaped}[：:]?\\s*`, "i"), "").trim();
+  const t = String(text || "");
+  if (!t) return "";
+  const lines = t.split("\n");
+  // 1) 找到**第一处包含该标题词的行**（标题行常带序号，如 `### 四、真相复盘`，
+  //    所以不能要求行首直接是标题词 —— 第一版就是这么写的，导致一律返回空串）
+  let lineIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(heading)) { lineIdx = i; break; }
+  }
+  if (lineIdx < 0) return "";
+  const hm = lines[lineIdx].match(/^(#{1,4})\s+/);
+  const level = hm ? hm[1].length : 0;
+
+  // 2) 正文起点 = 标题行之后
+  let offset = 0;
+  for (let i = 0; i <= lineIdx; i++) offset += lines[i].length + 1;
+  const startIdx = Math.min(offset, t.length);
+
+  // 3) 边界：后面第一个**层级不深于本节**的标题行；
+  //    绝不能按"第X""一、"这类字样判边界 —— 实测 `#### 第一轮线索` 会命中，
+  //    于是 27000 字的成稿里「真相复盘」只被抠出 718 字（长复盘被静默丢掉）。
+  let endIdx = t.length;
+  if (level > 0) {
+    let off = startIdx;
+    for (let i = lineIdx + 1; i < lines.length; i++) {
+      const m = lines[i].match(/^(#{1,4})\s+\S/);
+      if (m && m[1].length <= level) { endIdx = off; break; }
+      off += lines[i].length + 1;
+    }
+  } else {
+    const rest = t.slice(startIdx);
+    const stop = rest.search(/\n#{1,4}\s+[一二三四五六七八九十\d]+[、.．]/);
+    if (stop >= 0) endIdx = startIdx + stop;
+  }
+
+  let content = t.slice(startIdx, endIdx).trim();
+  content = content.replace(/^[-—]{3,}\s*$/m, "").trim();
   if (content.length > maxLen) content = content.substring(0, maxLen) + "...";
   return content;
 }
@@ -644,7 +672,7 @@ function normalizeCharacterScript(char) {
 // 提角色名单时踩的是同一个坑（2~6 / 2~8 字上限），必须共用同一份判据，
 // 否则"生成时算出来的名单"和"切分时解析出的名单"会长得不一样，两边各修各的就会复发。
 module.exports = {
-  parseScript, normalizeCharacterScript, extractSecretFromScript, extractAllClues,
+  parseScript, normalizeCharacterScript, extractSecretFromScript, extractAllClues, extractSection,
   cutCharacterName, isValidCharacterName, checkCharacterCoverage,
   // 导出给单测：这个函数的"空值会吞下一行"曾经污染过真稿的结构化数据（见其注释），
   // 值得直接钉住，而不是只从 parseScript 的间接结果去推断。
