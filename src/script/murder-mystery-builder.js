@@ -1516,8 +1516,7 @@ async function reviseByCrossCheck(fullScript, issues, onProgress, maxRounds = 2,
       console.warn(`[builder] 交叉校验修订第 ${round} 轮补丁均无法定位（跳过 ${res.skipped} 条）`);
       if (onProgress) onProgress("revise", "修订补丁无法在原文定位，已跳过");
       break;
-    }
-    const before = text;
+    }    const before = text;
     text = res.text;
     appliedTotal += res.applied;
     if (onProgress) onProgress("revise", `第 ${round} 轮应用修订 ${res.applied}/${patches.length} 条`);
@@ -1549,7 +1548,139 @@ async function reviseByCrossCheck(fullScript, issues, onProgress, maxRounds = 2,
     }
   }
   if (appliedTotal && onProgress) onProgress("revise", `交叉校验定向修订完成：共应用 ${appliedTotal} 条`);
+
+  // ===== 整段重写兜底 =====
+  // 走到这里还有 list（复检剩下的问题）时，不再收工：补丁机制对"抄错 oldText"没辙，
+  // 而实测每次都有 4–10 个问题因此被留在成稿里。改成让模型交回整段、由代码定位替换。
+  if (list.length && typeof opts.finalRewrite === "function") {
+    try {
+      const rw = await opts.finalRewrite({ text, issues: list, onProgress });
+      if (rw && rw.text) {
+        text = rw.text;
+        if (Array.isArray(record)) {
+          record.push({
+            round: "整段重写", issueCount: list.length, issues: list.slice(0, 60).map((s) => String(s)),
+            applied: rw.fixed || 0, skipped: (rw.attempts || 0) - (rw.fixed || 0),
+            patches: [], note: "补丁定位不到的残留问题改走整段重写", details: rw.details || [],
+          });
+        }
+        if (rw.fixed && onProgress) onProgress("revise", `残留问题整段重写：修好 ${rw.fixed}/${rw.attempts} 段`);
+      }
+    } catch (e) {
+      console.warn("[builder] 整段重写兜底失败（保留现状）:", e.message);
+    }
+  }
+  if (Array.isArray(record)) record.residual = list;   // 留档：最后仍未被修掉的问题
   return text;
+}
+
+/**
+ * 把成稿按 "### 玩家角色 N：某某" / "### NPC N：某某" 这类三级标题切成段。
+ * 用于「整段重写兜底」：补丁定位不到时，退化成"整段交回改好的版本再按标题换回去"。
+ */
+function splitScriptSections(text) {
+  const lines = String(text || "").split("\n");
+  const sections = [];
+  let cur = null;
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^###\s*(玩家角色|NPC|角色)\s*[一二三四五六七八九十\d]+\s*[：:]\s*(.+?)\s*$/);
+    if (m) {
+      if (cur) { cur.end = i; sections.push(cur); }
+      cur = { header: lines[i], kind: m[1], title: m[2].trim(), start: i, end: lines.length };
+    }
+  }
+  if (cur) sections.push(cur);
+  return sections.map((s) => {
+    const body = lines.slice(s.start + 1, s.end).join("\n");
+    return { ...s, body, name: cutCharacterName(s.title) || s.title };
+  });
+}
+
+/** 用新正文替换掉某段的正文（保留标题行与段外内容） */
+function replaceSectionBody(text, section, newBody) {
+  const lines = String(text || "").split("\n");
+  const before = lines.slice(0, section.start + 1);
+  const after = lines.slice(section.end);
+  return [...before, String(newBody).replace(/\s+$/, ""), ...after].join("\n");
+}
+
+/**
+ * 整段重写兜底（2026-10-18 新增）。
+ *
+ * 为什么必须有它：实测两轮定向修订之后**仍有 4–10 个问题没修掉**，而且日志里
+ * 反复出现"修订补丁无法在原文定位，已跳过" —— 补丁机制靠模型抄对 oldText，
+ * 一旦抄错（改标点/漏字）就整条作废，**检测出来的问题就此留在成稿里**。
+ * 这里换成另一条路：不问"改哪几句"，而是让模型**交回整段改好的正文**，
+ * 再按三级标题确定性替换 —— 定位由代码负责，不再依赖模型抄写。
+ *
+ * 安全边界：
+ *   · 只碰 issues 里点名的角色段，最多 maxSections 段；
+ *   · 新正文长度不得低于原来的 50%（防"交回一小段"把剧本改瘦）；
+ *   · 每段重写后跑一次确定性体检（opts.snapshot/regressions），一旦改红就回退这一段。
+ */
+async function finalRewriteBySection(fullScript, issues, generateFn, onProgress, opts) {
+  const o = opts || {};
+  const list = (Array.isArray(issues) ? issues : []).filter((s) => typeof s === "string" && s.trim());
+  if (!list.length) return { text: fullScript, fixed: 0, attempts: 0, details: [] };
+  const sections = splitScriptSections(fullScript);
+  if (!sections.length) return { text: fullScript, fixed: 0, attempts: 0, details: [] };
+
+  // 认领：哪些角色段被 issues 点名（按角色名出现在问题描述里）
+  const targets = [];
+  for (const sec of sections) {
+    const mine = list.filter((s) => sec.name && s.includes(sec.name));
+    if (mine.length) targets.push({ sec, issues: mine });
+  }
+  const maxSections = Number.isFinite(o.maxSections) ? o.maxSections : 3;
+  const chosen = targets.slice(0, maxSections);
+  if (!chosen.length) return { text: fullScript, fixed: 0, attempts: 0, details: [] };
+
+  let text = fullScript;
+  let fixed = 0;
+  const details = [];
+  for (const t of chosen) {
+    // 每段都重新定位（前面的替换会改变下标）
+    const cur = splitScriptSections(text).find((s) => s.name === t.sec.name);
+    if (!cur) { details.push({ name: t.sec.name, ok: false, reason: "重写前找不到该段" }); continue; }
+    if (onProgress) onProgress("revise", `${t.sec.name} 的剧本有 ${t.issues.length} 个问题未能靠补丁修复，正在整段重写...`);
+    let newBody = "";
+    try {
+      const sys = `你是剧本杀剧本校对。用户给你**某个角色的完整剧本**、以及它违反设定集的具体问题。
+请输出**修改后的完整剧本正文**（不要标题行、不要任何解释、不要代码块），要求：
+① 只修掉列出的问题，其余内容、结构、字段格式与篇幅一律保持；
+② 时间线条目必须与该角色真实经历一致（与设定集凶手/手法/时间线不冲突）；
+③ 不得删减章节：原来有的「背景故事/时间线/任务」等章节都要在，篇幅不得明显变短。`;
+      const user = `【角色剧本正文】\n${cur.body}\n\n【必须修掉的问题】\n${t.issues.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\n请输出修改后的完整正文：`;
+      const r = await runStage(`整段重写(${t.sec.name})`, () => generateFn(sys, user, { maxTokens: TOKENS_PER_STAGE, temperature: 0.6 }), onProgress);
+      newBody = String(r.content || "").trim();
+    } catch (e) {
+      details.push({ name: t.sec.name, ok: false, reason: "调用失败：" + e.message });
+      continue;
+    }
+    if (!newBody || newBody.length < cur.body.length * 0.5) {
+      details.push({ name: t.sec.name, ok: false, reason: `交回的正文太短（${newBody.length} < 原文一半 ${Math.round(cur.body.length * 0.5)}），已放弃` });
+      continue;
+    }
+    const candidate = replaceSectionBody(text, cur, newBody);
+    // 确定性体检：改红就回退这一段（宁可留问题，不可改坏）
+    // 只要求传了 snapshot/regressions 两个函数即可 —— snapCtx 合法地可以是 undefined，
+    // 第一版把它也写成必要条件，结果"体检"整段被跳过（被单测当场抓出）。
+    if (o.snapshot && o.regressions) {
+      try {
+        const broke = o.regressions(o.snapshot(text, o.snapCtx), o.snapshot(candidate, o.snapCtx));
+        if (broke && broke.length) {
+          details.push({ name: t.sec.name, ok: false, reason: "整段重写会使确定性校验变红：" + broke.join("；") });
+          if (onProgress) onProgress("revise", `${t.sec.name} 的整段重写被否决（会改坏已有内容），已撤销`);
+          continue;
+        }
+      } catch (e) { /* 体检失败不阻塞，继续采用 */ }
+    }
+    text = candidate;
+    fixed++;
+    details.push({ name: t.sec.name, ok: true, issues: t.issues.length, before: cur.body.length, after: newBody.length });
+    if (onProgress) onProgress("revise", `${t.sec.name} 整段重写完成（${cur.body.length} → ${newBody.length} 字）`);
+  }
+  return { text, fixed, attempts: chosen.length, details };
 }
 
 /**
@@ -2499,6 +2630,16 @@ async function buildMurderMystery(userInput, onProgress, config) {
     fullScript = await reviseByCrossCheck(
       fullScript, report.crossCheck && report.crossCheck.issues, onProgress, 2, revisionLog,
       {
+        // 补丁定位不到的残留问题 → 整段重写兜底（定位交给代码，不再依赖模型抄对原文）
+        finalRewrite: async ({ text, issues, onProgress: op }) => finalRewriteBySection(
+          text, issues, generate, op,
+          {
+            maxSections: 3,
+            snapshot: deterministicSnapshot,
+            regressions: snapshotRegressions,
+            snapCtx,
+          },
+        ),
         recheck: async ({ before, after, round }) => {
           // ① 确定性护栏：用**既有、已被信任**的判据体检，避免"修订把已经对了的地方改坏"。
           //    任何一项从"通过"变"不通过" → 整轮回退（宁可少改，不可改坏）。
@@ -4473,4 +4614,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
+module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, splitScriptSections, replaceSectionBody, finalRewriteBySection, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
