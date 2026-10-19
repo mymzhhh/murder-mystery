@@ -1,4 +1,4 @@
-// 剧本杀多阶段生成流水线（v3：动态玩家数2-6、NPC 0-3）
+﻿// 剧本杀多阶段生成流水线（v3：动态玩家数2-6、NPC 0-3）
 
 const { generate } = require("../llm/generator");
 const { extractJsonStrict, repairTruncatedJson } = require("./json-extract");
@@ -2686,6 +2686,24 @@ async function buildMurderMystery(userInput, onProgress, config) {
     console.warn("[builder] 交叉校验定向修订跳过:", e.message);
   }
 
+  // ===== 角色标题完整性兜底（2026-10-19，实测事故）=====
+  // 修订/整段重写会把「### 玩家角色 3：林小满」这一行吃掉，正文变成无主的孤儿段，
+  // 切分时该角色**彻底消失**（实测：生成报 4 人，落库只有 3 人，玩家选角选不到）。
+  // 标题是切分的唯一锚点，必须在保存前保证"每个角色都有且只有一个标题"。
+  try {
+    const rep = repairMissingCharacterHeadings(fullScript, report.characters || []);
+    if (rep.fixed.length) {
+      fullScript = rep.text;
+      const names = rep.fixed.map((f) => f.name).join("、");
+      console.warn(`[builder] 角色标题缺失已补回 ${rep.fixed.length} 个：${names}`);
+      if (onProgress) onProgress("revise", `角色标题缺失已修复：${names}（否则这个角色会在切分后消失）`);
+      if (!report.structureRepairs) report.structureRepairs = [];
+      report.structureRepairs.push({ kind: "missing-character-heading", names: rep.fixed.map((f) => f.name) });
+    }
+  } catch (e) {
+    console.warn("[builder] 角色标题完整性检查跳过:", e.message);
+  }
+
   // ========== 阶段 4.7：时间线一致性后处理（长期校准；失败静默保留原文） ==========
   // 放在定向修订之后，让时间线校准对时间线有最终话语权
   try {
@@ -4391,6 +4409,74 @@ function stripSectionByKeyword(text, keywordRe) {
   return out.join("\n").trim();
 }
 
+/**
+ * 角色标题行（宽松）：`### 玩家角色 3：林小满` / `### 玩家角色3:林小满` 都算。
+ * 之所以放宽到"可选空格 + 半角冒号"，是因为修订补丁会改写标题行附近的内容，
+ * 严格正则一旦认不出，整段就会被当成上一段的一部分（实测事故见 repairMissingCharacterHeadings）。
+ */
+function isCharacterHeadingLine(line) {
+  return /^###\s*(玩家角色|NPC|角色)\s*[一二三四五六七八九十\d]+\s*[：:]\s*\S/.test(String(line || "").trim());
+}
+
+/**
+ * 修复"角色标题被修订吃掉"的事故（2026-10-19 实测《沪西照相馆除夕谜案》）：
+ *
+ * 现象：成稿里 `### 玩家角色 3：林小满` 这一行没了，她的 `### 一、你的背景故事` 等正文
+ *       成了**没有归属的孤儿段**留在王大富之后；切分时她整个人消失
+ *       （库里 3 个角色，而生成时报的是 4 人），玩家选角选不到、AI 也补不上位。
+ *
+ * 归因：定向修订的补丁 / 整段重写会重写标题附近的一大段文本，模型交回来的正文
+ *       常常把中间的标题行丢掉；而**标题行是切分的唯一锚点**，丢了就等于丢角色。
+ *
+ * 修法（确定性，不靠模型）：按 `report.characters` 的名单比对成稿里已有的标题，
+ * 缺谁就把缺的标题补回对应的孤儿段前面。孤儿段按出现顺序与缺失角色按名单顺序配对。
+ * @returns {{text:string, fixed:Array<{name:string, at:number}>}}
+ */
+function repairMissingCharacterHeadings(fullScript, characters) {
+  const text = String(fullScript || "");
+  const chars = (characters || []).filter((c) => c && c.name);
+  if (!chars.length) return { text, fixed: [] };
+  const lines = text.split("\n");
+
+  // 已成稿里已经有的角色标题（按名字）
+  const present = new Set();
+  for (const l of lines) {
+    if (!isCharacterHeadingLine(l)) continue;
+    const m = l.match(/[：:]\s*(.+?)\s*$/);
+    if (!m) continue;
+    const nm = cutCharacterName(m[1]) || m[1].trim();
+    if (nm) present.add(nm);
+  }
+  const missing = chars.filter((c) => !present.has(c.name));
+  if (!missing.length) return { text, fixed: [] };
+
+  // 孤儿段：以「### 一、你的背景故事/你的时间线」开头，且上方最近的非空行不是角色标题
+  const orphans = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^###\s*一、你的(背景故事|时间线|任务)/.test(lines[i].trim())) continue;
+    let j = i - 1;
+    while (j >= 0 && !lines[j].trim()) j--;
+    const prev = j >= 0 ? lines[j] : "";
+    if (!isCharacterHeadingLine(prev)) orphans.push(i);
+  }
+  if (!orphans.length) return { text, fixed: [] };
+
+  // 从后往前插入，避免下标错位；孤儿段与缺失角色按顺序配对
+  const fixed = [];
+  const pairs = orphans.map((at, k) => ({ at, ch: missing[k] })).filter((p) => p.ch);
+  for (let k = pairs.length - 1; k >= 0; k--) {
+    const { at, ch } = pairs[k];
+    const tag = ch.isMurderer ? " [凶手]" : "";
+    // 编号用该角色在名单里的序号，与 assembleScript 一致
+    const idx = chars.findIndex((c) => c.name === ch.name) + 1;
+    const isNpc = ch.type === "npc";
+    lines.splice(at, 0, `${isNpc ? "### NPC" : "### 玩家角色"} ${idx}：${ch.name}${tag}`);
+    fixed.push({ name: ch.name, at });
+  }
+  fixed.reverse();
+  return { text: lines.join("\n"), fixed };
+}
+
 function assembleScript(report, userInput) {
   const parts = [];
   const chars = report.characters || [];
@@ -4619,4 +4705,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, splitScriptSections, replaceSectionBody, finalRewriteBySection, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
+module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, splitScriptSections, replaceSectionBody, finalRewriteBySection, isCharacterHeadingLine, repairMissingCharacterHeadings, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };

@@ -172,6 +172,26 @@ ${existingSummaries.map(s => `- 避免：凶手${s.murderer || '?'}的手法 —
  * @param {function} onProgress - 进度回调
  * @param {object} [scriptConfig] - 可选：prompt-agent 输出的 {playerCount, npcCount, isPVE}
  */
+/**
+ * 构造传给 buildMurderMystery 的配置。
+ *
+ * ⚠️ 抽成纯函数是为了可测：这里曾经是**内联重新构造**的一个对象字面量，
+ * 漏了 `images` 字段 —— 调用方明明传了 `images:{enabled:true}`，builder 里却是 null，
+ * 整轮生成跑完 108 分钟，「配图」阶段一次都没执行，日志里也一行都没有
+ * （hook 的判断是 `if (imgCfg.enabled)`，假值静默跳过）。
+ * 这类"重新构造配置时漏字段"的坑，只有让它可测才防得住。
+ */
+function buildGenConfig(base, scriptConfig) {
+  const b = base || {};
+  const sc = scriptConfig || {};
+  return {
+    playerCount: b.playerCount,
+    npcCount: b.npcCount,
+    isPVE: b.isPVE,
+    advancedMode: ["hardcore", "emotional"].includes(sc.advancedMode) ? sc.advancedMode : "standard",
+    images: sc.images && typeof sc.images === "object" ? sc.images : null,
+  };
+}
 async function writeScript(userInput, onProgress, scriptConfig) {
   // 0. 内容审核 —— 放在最前面，作为所有调用方的统一卡点
   // （路由层也会先拦一次以便返回规范的 400；这里是防止绕过路由直接调用的安全网）
@@ -247,12 +267,7 @@ async function writeScript(userInput, onProgress, scriptConfig) {
   }
 
   // 3. 构建生成配置
-  const genConfig = {
-    playerCount,
-    npcCount,
-    isPVE,
-    advancedMode: ["hardcore", "emotional"].includes(scriptConfig?.advancedMode) ? scriptConfig.advancedMode : "standard",
-  };
+  const genConfig = buildGenConfig({ playerCount, npcCount, isPVE }, scriptConfig);
   const enhancedInput = buildConstraints(userInput, playerCount, npcCount, isPVE, existing);
 
   let result, session, characters;
@@ -381,4 +396,4 @@ async function writeScript(userInput, onProgress, scriptConfig) {
 // 导出三个纯解析函数供单测钉住：
 // "4名玩家 + 1名NPC" 曾因不认"名"而返回 0 玩家、并被"正文提到NPC"误判成 PVE，
 // 最终把用户要的 4+1 静默变成 6+2 —— 这类回归必须由测试锁死。
-module.exports = { writeScript, detectPlayerCount, detectNpcCount, detectPVE };
+module.exports = { writeScript, buildGenConfig, detectPlayerCount, detectNpcCount, detectPVE };
