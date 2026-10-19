@@ -77,3 +77,22 @@ test("旧格式（- 隐藏线索：字段）仍兼容解析", () => {
   const b3 = [...(p.clues.round1 || []), ...(p.clues.round2 || [])].find((c) => c.id === "B3");
   assert.ok(b3.hiddenContent.includes("土制爆炸"), "旧格式的隐藏正文仍要能解析出来");
 });
+
+test("旧格式（- 隐藏线索：字段）也要标成可挖掘", () => {
+  // 有隐藏正文却没有标记的线索，如果不标 diggable，前端就不显示「深入调查」按钮，
+  // 玩家永远拿不到那条隐藏线索 —— 实测《冬至钟影》5 条隐藏线索正是这种。
+  const md = [
+    "## 第三部分：线索系统",
+    "## 第一轮线索",
+    "### A3：乙｜大堂（第1轮）",
+    "- 线索类型：物证",
+    "- 发现地点：大堂",
+    "- 线索内容：地板上有一道划痕。",
+    "- 隐藏线索：划痕下藏着一枚铜钥匙。",
+    "",
+  ].join("\n");
+  const p = parseScript(md);
+  const a3 = [...(p.clues.round1 || []), ...(p.clues.round2 || [])].find((c) => c.id === "A3");
+  assert.strictEqual(a3.diggable, true, "有隐藏正文就必须可挖掘");
+  assert.ok(a3.hiddenContent.includes("铜钥匙"));
+});

@@ -119,3 +119,17 @@ test("空输入不炸", () => {
   assert.deepStrictEqual(L.checkTruthArithmetic(""), []);
   assert.deepStrictEqual(L.checkTruthClueCoverage("", []), []);
 });
+
+test("时间线条目要认得「日期 + 【真实】 + 时刻」这种真实写法", () => {
+  // 真实生成稿（《冬至钟影》沈砚）就是这么写的：日期与时刻之间夹了【真实】标注。
+  // 第一版正则抽不到这种行，导致"凶手手法落地"校验误报"时间线里没有这个时刻的条目"。
+  const text = [
+    "### 二、你的时间线",
+    "- **12月21日 【真实】19:30**：西厢房 — 我整理待修钟表零件。",
+    "- **12月22日 【座钟】21:00**：西厢房 — 我擦拭机芯。",
+    "- **10月21日 21:30（真实，座钟21:15）**：维修间 — 我调慢了挂钟。",
+  ].join("\n");
+  const entries = L.timelineEntries(text);
+  assert.strictEqual(entries.length, 3, "三种写法都要能抽到");
+  assert.deepStrictEqual(entries.map((e) => L.fmtHM(e.minutes)), ["19:30", "21:00", "21:30"]);
+});

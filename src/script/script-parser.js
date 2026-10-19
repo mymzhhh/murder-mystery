@@ -618,6 +618,9 @@ function parseClueSection(text, prefix, roundNum) {
       }
       const behind = whole.match(/（\s*通过深入调查\s*([A-CM]\d{1,3})/);
       if (behind) clue.hiddenBehind = behind[1];
+      // 只要真的有隐藏内容可挖，就一定标成可挖掘 —— 否则前端不会显示「深入调查」按钮，
+      // 玩家永远拿不到那条隐藏线索（旧格式 `- 隐藏线索：` 走的就是这条路）。
+      if (clue.hiddenContent && String(clue.hiddenContent).trim()) clue.diggable = true;
     }
 
     if (clue.content || clue.pointsTo) clues.push(clue);
