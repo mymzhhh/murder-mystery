@@ -147,6 +147,10 @@ async function initDB() {
 }
 
 /** 保存切分后的剧本 */
+/** 把"可能是字符串"的布尔值归一化（Redis hash 的值都是字符串："false" 不能用 !! 判） */
+function toBool(v) {
+  return v === true || v === 1 || v === "1" || v === "true";
+}
 async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
   const c = await getPool().connect();
   try {
@@ -170,7 +174,9 @@ async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
     for (const clue of clues) {
       await c.query(
         "INSERT INTO clues (script_id, clue_id, content, location, round, clue_type, hidden_content, diggable, hidden_behind) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-        [scriptId, clue.id, clue.content || "", clue.location || "", parseInt(clue.round) || 1, clue.clueType || "", clue.hiddenContent || "", !!clue.diggable, clue.hiddenBehind || ""]
+        // ⚠️ 绝不能用 `!!clue.diggable`：来源可能是 Redis hash（值都是字符串），
+        //    于是 `"false"` 会被判成 true —— 实测导致"全部线索都可深入调查"。
+        [scriptId, clue.id, clue.content || "", clue.location || "", parseInt(clue.round) || 1, clue.clueType || "", clue.hiddenContent || "", toBool(clue.diggable), clue.hiddenBehind || ""]
       );
     }
     await c.query(

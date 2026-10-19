@@ -284,6 +284,32 @@ async function saveToRedis(sessionId, result) {
 /**
  * 获取已切分的剧本数据
  */
+/**
+ * 把 Redis hash 里的线索字段还原成正确的类型。
+ *
+ * ⚠️ 这是个真实事故（2026-10-19）：Redis hash 的字段值**都是字符串**，
+ * 之前的 `clues.push(data)` 直接把原始 hash 塞回去，于是
+ *   diggable: "false"、round: "1"
+ * 到了落库时 `!!clue.diggable` → `!!"false"` → **true**，
+ * 结果《冬至钟影》《沪西照相馆除夕谜案》两本都是"全部 46 条线索都可深入调查"，
+ * 玩家对任意线索点「深入调查」都会报错。
+ * 布尔/数字字段必须在这里显式归一化，不能指望下游用 !! 判断。
+ */
+function normalizeSplitClue(raw) {
+  const d = raw || {};
+  const truthy = (v) => v === true || v === 1 || v === "1" || v === "true";
+  return {
+    id: d.id,
+    name: d.name || "",
+    content: d.content || "",
+    location: d.location || "",
+    round: Number(d.round) || 1,
+    clueType: d.clueType || d.clue_type || "",
+    hiddenContent: d.hiddenContent || d.hidden_content || "",
+    diggable: truthy(d.diggable),
+    hiddenBehind: d.hiddenBehind || d.hidden_behind || "",
+  };
+}
 async function getSplitData(sessionId) {
   const { getRedis, scanKeys } = require("../core/redis-client");
   const redis = await getRedis();
@@ -319,7 +345,7 @@ async function getSplitData(sessionId) {
         age: data.age,
       };
     } else {
-      clues.push(data);
+      clues.push(normalizeSplitClue(data));
     }
   }
 
@@ -335,4 +361,4 @@ async function getSplitData(sessionId) {
   };
 }
 
-module.exports = { splitScript, getSplitData };
+module.exports = { splitScript, getSplitData, normalizeSplitClue };

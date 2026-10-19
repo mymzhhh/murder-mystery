@@ -91,3 +91,44 @@ test("多个缺失按名单顺序与孤儿段顺序配对", () => {
   const r = repairMissingCharacterHeadings(text, chars);
   assert.deepStrictEqual(r.fixed.map((f) => f.name), ["乙乙", "丙丙"]);
 });
+
+test("真实成稿形态：标题与正文之间夹着元数据行/凶手提示，不得误判成孤儿", () => {
+  // 这正是 assembleScript 的真实输出形态：
+  //   ### 玩家角色 1：陈阿生 [凶手]
+  //   > ⚠️ 你就是凶手！…
+  //
+  //   > 职业/身份：… ｜ 语气：… ｜ 个人任务：…
+  //
+  //   ### 一、你的背景故事
+  // 第一版只跳过空行，于是**每个角色都被判成孤儿**，标题会被插到别人正文前面。
+  const text = [
+    "### 玩家角色 1：陈阿生 [凶手]",
+    "> ⚠️ 你就是凶手！你的处境与真实过程见下方剧本。",
+    "",
+    "> 职业/身份：照相馆帮工 ｜ 语气：语速偏快 ｜ 个人任务：隐瞒",
+    "",
+    "",
+    "### 一、你的背景故事",
+    "我叫陈阿生。",
+    "### 玩家角色 2：张秀娥",
+    "> 职业/身份：裁缝铺老板",
+    "",
+    "### 一、你的背景故事",
+    "我是张秀娥。",
+    // 林小满的标题被吃掉，正文孤儿
+    "",
+    "### 一、你的背景故事",
+    "我是林小满。",
+  ].join("\n");
+  const r = repairMissingCharacterHeadings(text, [
+    { name: "陈阿生", type: "player", isMurderer: true },
+    { name: "张秀娥", type: "player" },
+    { name: "林小满", type: "player" },
+  ]);
+  assert.deepStrictEqual(r.fixed.map((f) => f.name), ["林小满"], "只该补林小满一个");
+  assert.ok(r.text.includes("### 玩家角色 3：林小满"));
+  // 补的标题必须紧邻林小满的正文，而不是插到陈阿生前面
+  const idx = r.text.indexOf("### 玩家角色 3：林小满");
+  assert.ok(r.text.slice(idx, idx + 200).includes("我是林小满"), "标题要紧邻她的正文");
+  assert.ok(r.text.indexOf("我叫陈阿生") < r.text.indexOf("### 玩家角色 3：林小满"), "不能插到最前面");
+});

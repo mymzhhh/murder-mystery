@@ -1,4 +1,4 @@
-﻿// 剧本杀多阶段生成流水线（v3：动态玩家数2-6、NPC 0-3）
+// 剧本杀多阶段生成流水线（v3：动态玩家数2-6、NPC 0-3）
 
 const { generate } = require("../llm/generator");
 const { extractJsonStrict, repairTruncatedJson } = require("./json-extract");
@@ -4454,8 +4454,16 @@ function repairMissingCharacterHeadings(fullScript, characters) {
   const orphans = [];
   for (let i = 0; i < lines.length; i++) {
     if (!/^###\s*一、你的(背景故事|时间线|任务)/.test(lines[i].trim())) continue;
+    // 向上跳过空行、`> 职业/身份：…` 元数据行、凶手提示行，再看是否命中角色标题。
+    // ⚠️ 不跳这些行会把**每个角色**都误判成孤儿（assembleScript 在标题和正文之间正好有
+    //    `> ⚠️ 你就是凶手！…` 和 `> 职业/身份：…` 两行）—— 实测一跑就把 4 个全判成孤儿，
+    //    标题会被插到别人正文前面，比不修更糟。
     let j = i - 1;
-    while (j >= 0 && !lines[j].trim()) j--;
+    while (j >= 0) {
+      const t = lines[j].trim();
+      if (!t || t.startsWith(">")) { j--; continue; }
+      break;
+    }
     const prev = j >= 0 ? lines[j] : "";
     if (!isCharacterHeadingLine(prev)) orphans.push(i);
   }
