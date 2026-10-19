@@ -23,7 +23,9 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       allClues = (pgData.clues || []).map(c => ({
         id: c.clue_id, content: c.content, location: c.location, round: c.round, clueType: c.clue_type,
         // 隐藏层：玩家花一次额外搜证机会「深入调查」才拿到（生成端只会写进这里，不会公开）
-        hiddenContent: c.hidden_content || ""
+        hiddenContent: c.hidden_content || "",
+        // 真本格式：父线索 diggable=true；子线索 hiddenBehind='A6'（平时不进搜证池）
+        diggable: !!c.diggable, hiddenBehind: c.hidden_behind || ""
       }));
       parsed = {
         title: pgData.title,

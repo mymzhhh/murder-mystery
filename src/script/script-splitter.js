@@ -1,4 +1,4 @@
-﻿// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis（优化版）
+// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis（优化版）
 
 const { getSession, getSessionArtifacts } = require("../core/history-manager");
 const { parseScript, checkCharacterCoverage } = require("./script-parser");
@@ -171,7 +171,7 @@ if (!rawScript) continue;
     for (const c of col.clues) {
       result.clues.push({
         id: c.id, name: "", content: (c.content || "").substring(0, 500),
-        location: c.location || "现场", round: c.round, clueType: c.clueType || "", hiddenContent: c.hiddenContent || ""
+        location: c.location || "现场", round: c.round, clueType: c.clueType || "", hiddenContent: c.hiddenContent || "", diggable: !!c.diggable, hiddenBehind: c.hiddenBehind || ""
       });
     }
   }

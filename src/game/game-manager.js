@@ -1,4 +1,4 @@
-﻿// 游戏房间管理 — Redis 持久化（并发安全版）
+// 游戏房间管理 — Redis 持久化（并发安全版）
 // 使用 WATCH+MULTI 乐观锁 + 独立 key 设计避免误冲突
 const { getRedis, scanKeys, ensureRedis } = require("../core/redis-client");
 const { v4: uuidv4 } = require("uuid");
@@ -333,16 +333,22 @@ async function digClue(code, clueId, playerId) {
   if (!raw) return { ok: false, error: "CLUE_NOT_FOUND" };
   const clue = JSON.parse(raw);
   const hidden = String(clue.hiddenContent || "").trim();
-  if (!hidden) return { ok: false, error: "NO_HIDDEN" };
+  // 真本格式：隐藏内容是**独立编号的子线索**（正文标「通过深入调查 A6「…」获取」），
+  // 它们平时不在搜证池里（见 search-locations.availableClues）。
+  // 所以挖父线索要做两件事：放出子线索 +（若有）附带隐藏正文。
+  const all = await getClues(code);
+  const children = (all || []).filter((c) => c && String(c.hiddenBehind || "").trim() === String(clueId).trim());
+  if (!hidden && !children.length) return { ok: false, error: "NO_HIDDEN" };
   const finders = await r.smembers(clueFoundByKey(code, clueId));
   if (!finders.length) return { ok: false, error: "NOT_FOUND_YET" };
   // SET NX：并发只会成功一次
   const claimed = await r.set(`game:${code}:clue:${clueId}:dug`, playerId, "NX");
   if (!claimed) return { ok: false, error: "ALREADY_DUG" };
   clue.dugBy = playerId;
-  clue.dugContent = hidden;
+  if (hidden) clue.dugContent = hidden;
+  if (children.length) clue.dugChildren = children.map((c) => c.id);
   await r.set(contentKey, JSON.stringify(clue));
-  return { ok: true, clue, hiddenContent: hidden };
+  return { ok: true, clue, hiddenContent: hidden, children };
 }
 
 /**

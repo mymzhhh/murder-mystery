@@ -1,4 +1,4 @@
-﻿// WebSocket 游戏事件处理
+// WebSocket 游戏事件处理
 
 const { verifyToken } = require("../core/auth");
 const { getRedis } = require("../core/redis-client");
@@ -688,11 +688,13 @@ function setupGameSocket(io) {
         const me = players.find(p => p.playerId === socket.id);
         const quotaId = (me && me.playerName) || socket.id;
 
-        // 先查有没有隐藏层，避免白扣配额
+        // 先查有没有隐藏层，避免白扣配额。
+        // 真本格式的隐藏内容是**独立编号的子线索**（子线索 hiddenBehind=父编号），也要认。
         const allClues = await getClues(roomCode);
         const target = (allClues || []).find(c => c.id === clueId);
         if (!target) return socket.emit("error", { code: "CLUE_NOT_FOUND", message: "线索不存在" });
-        if (!String(target.hiddenContent || "").trim()) {
+        const hasChildren = (allClues || []).some(c => String(c.hiddenBehind || "").trim() === String(clueId).trim());
+        if (!String(target.hiddenContent || "").trim() && !hasChildren) {
           return socket.emit("error", { code: "NO_HIDDEN", message: "这条线索没有更深的可查内容" });
         }
 
@@ -713,9 +715,21 @@ function setupGameSocket(io) {
                 : "深入调查失败";
           return socket.emit("error", { code: res.error, message: msg });
         }
+        // 真本格式：挖出来的子线索是**独立编号的线索**，要作为新线索发给全场
+        for (const child of (res.children || [])) {
+          await assignClue(roomCode, child.id, socket.id);
+          const rev = await revealClue(roomCode, child.id, socket.id);
+          io.to(roomCode).emit("clue_received", {
+            clue: rev.ok ? rev.clue : child,
+            foundBy: me?.characterName || me?.playerName || "未知",
+            revealed: true,
+            dugFrom: clueId,
+          });
+        }
         io.to(roomCode).emit("clue_dug", {
           clueId,
           hiddenContent: res.hiddenContent,
+          childIds: (res.children || []).map((c) => c.id),
           byName: me?.characterName || me?.playerName || "某人",
           clue: res.clue,
         });

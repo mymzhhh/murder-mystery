@@ -563,7 +563,12 @@ function parseClueSection(text, prefix, roundNum) {
 
     const id = idMatch[1];
     const roundForClue = id.startsWith("M") ? roundNum : roundNum; // 误导线索归入当前轮
-    const clue = { id, round: roundForClue, content: "", pointsTo: "", clueType: "", location: "", hiddenContent: "" };
+    const clue = {
+      id, round: roundForClue, content: "", pointsTo: "", clueType: "", location: "",
+      hiddenContent: "",     // 我们自家格式：同一线索块内的 `- 隐藏线索：…`
+      diggable: false,       // 真本格式：正文标「（发现隐藏线索，可深入调查）」
+      hiddenBehind: "",      // 真本格式：正文标「（通过深入调查 A6「…」获取）」→ 挖 A6 才拿到
+    };
 
     // 逐行解析字段（兼容 **加粗** 与 普通 两种标签格式）
     // 字段行："- 线索类型：xxx" / "- **发现地点**：xxx" 等
@@ -597,6 +602,22 @@ function parseClueSection(text, prefix, roundNum) {
       if (bodyMatch) {
         clue.content = bodyMatch[1].trim().substring(0, 500);
       }
+    }
+
+    // ===== 真本格式的隐藏线索标记（2026-10-18 核对 344 原文后补上）=====
+    // 真本的写法不是在块里加字段，而是：
+    //   父线索：口袋里有一只空瓶。（发现隐藏线索，可深入调查）
+    //   子线索：瓶壁上残留着微量红色粉末 （通过深入调查 A6「口袋里有一只空瓶。」获取）
+    // 子线索是**独立编号**的一条线索（344 共 45 条 = 37 普通 + 8 隐藏），
+    // 平时不在搜证池里，只有对父线索做「深入调查」才拿到。
+    {
+      const whole = `${clue.content || ""}`;
+      if (/（\s*发现隐藏线索\s*[，,]?\s*可深入调查\s*）/.test(whole)
+        || /发现隐藏线索/.test(whole)) {
+        clue.diggable = true;
+      }
+      const behind = whole.match(/（\s*通过深入调查\s*([A-CM]\d{1,3})/);
+      if (behind) clue.hiddenBehind = behind[1];
     }
 
     if (clue.content || clue.pointsTo) clues.push(clue);
