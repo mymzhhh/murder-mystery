@@ -1685,6 +1685,9 @@ async function buildMurderMystery(userInput, onProgress, config) {
     npcCount: config?.npcCount ?? (config?.isPVE ? 2 : 0),
     isPVE: config?.isPVE ?? (config?.npcCount > 0),
     advancedMode: ["hardcore", "emotional"].includes(config?.advancedMode) ? config.advancedMode : "standard",
+    // 配图（可选）：默认关闭 —— 本机 Qwen-Image 单张约 40s 起，不该让每次生成都默认多花几分钟。
+    // 调用方显式传 { images: { enabled: true, cover: true, characters: false, clues: 0 } } 才出图。
+    images: config?.images && typeof config.images === "object" ? config.images : null,
   };
   // 约束到合法范围
   cfg.playerCount = Math.max(LIMITS.minPlayers, Math.min(LIMITS.maxPlayers, cfg.playerCount));
@@ -2437,6 +2440,43 @@ async function buildMurderMystery(userInput, onProgress, config) {
       }
     } catch (e) {
       console.warn("[builder] 逻辑校验跳过:", e.message);
+    }
+    // ===== 配图（可选，2026-10-18 新增）=====
+    // 真本《吉普赛女郎之死》带 24 张图（角色立绘/线索文档/真相时间线），生成稿是 0 张 ——
+    // 这是"看起来不像真本"最直观的一块。用本机 ComfyUI（Qwen-Image 2.1 + 8step LoRA）出图。
+    // 约束：本机单张约 40s–数分钟，所以**默认只出封面一张**（别人的机器可以开 characters/clues）；
+    // ComfyUI 没起来时**直接跳过**，绝不因为配图失败而拖垮整篇生成。
+    try {
+      const imgCfg = (cfg && cfg.images) || {};
+      if (imgCfg.enabled) {
+        const { attachScriptImages } = require("./script-images");
+        const { saveScriptImage } = require("../core/db");
+        if (onProgress) onProgress("images", "正在生成封面配图（本机 ComfyUI）...");
+        const imgRes = await attachScriptImages({
+          scriptId: report.sessionId || report.scriptId || "",
+          outline: report.outline,
+          meta: { location: (report.outline && report.outline.setting && report.outline.setting.location) || "", era: (report.outline && report.outline.setting && report.outline.setting.era) || "" },
+          characters: (report.characters || []).map((c) => ({ name: c.name, occupation: c.occupation })),
+          options: {
+            cover: imgCfg.cover !== false,
+            characters: !!imgCfg.characters,
+            clues: Number(imgCfg.clues) || 0,
+            width: Number(imgCfg.width) || 768,
+            height: Number(imgCfg.height) || 768,
+          },
+          save: saveScriptImage,
+          onProgress: (m) => { if (onProgress) onProgress("images", m); },
+        });
+        report.images = imgRes;
+        if (imgRes.generated.length) {
+          console.log(`[builder] 配图完成 ${imgRes.generated.length} 张：` + imgRes.generated.map((g) => g.key).join("、"));
+        }
+        if (imgRes.skipped.length) {
+          console.warn("[builder] 配图跳过/失败：" + imgRes.skipped.map((s) => `${s.key}(${s.reason})`).join("；"));
+        }
+      }
+    } catch (e) {
+      console.warn("[builder] 配图跳过:", e.message);
     }
   } catch (e) {
     console.warn("[builder] 交叉校验跳过:", e.message);

@@ -1,0 +1,288 @@
+// 剧本配图：用本机 ComfyUI（Qwen-Image 2.1）给生成的剧本出封面 / 角色立绘 / 线索卡。
+//
+// 为什么需要（2026-10-18 对标结果）：真本《吉普赛女郎之死》带 **24 张图**
+// （角色立绘 char-*、线索文档 cluedoc-*、真相时间线 manual-*），
+// 而我们生成的本是 **0 张** —— 这是"看起来不像真本"最直观的一块。
+//
+// 现实约束（本机 RTX 4060 Laptop 8GB + Qwen-Image int8）：
+//   · 必然走 CPU offload，**每张图都要重新把十几 GB 权重读进显存**，单张几分钟；
+//   · 所以默认只出 **封面 1 张**，角色立绘/线索图按需开启（`images.characters` / `images.clues`）。
+//   · ComfyUI 没起来时**绝不阻塞生成**：直接跳过并如实打日志（图是加分项，不是交付前提）。
+//
+// 驱动方式与 `D:\dsh\dsh-comfyui.ps1` 一致：直连 ComfyUI HTTP API（/prompt → /history → /view），
+// 不依赖任何第三方插件。
+const fs = require("fs");
+const path = require("path");
+const http = require("http");
+
+// ⚠️ 必须用**挂了 8step 加速 LoRA** 的工作流（2026-10-18 实测）：
+// 本机原始工作流 steps=8 但没有加速 LoRA，而 Qwen-Image 2.1 不是蒸馏模型 ——
+// 8 步等于几乎没有引导，出来的图和提示词完全无关（要"夜晚钟表铺"，出的是湖边枯树与鸟）。
+// qwen-image-2.1-8step.json = 原工作流 + LoraLoaderModelOnly(p_qwen_image_2.1_8step_v0.1) + cfg 3.0。
+const DEFAULT_HOST = process.env.COMFYUI_HOST || "";
+const DEFAULT_PORT = Number(process.env.COMFYUI_PORT || 8188);
+const WORKFLOW = process.env.COMFYUI_WORKFLOW || path.join(__dirname, "workflows", "qwen-image-2.1-8step.json");
+
+// ComfyUI 跑在**宿主机**上，而应用跑在 Docker 容器里 —— 容器内的 127.0.0.1 是容器自己，
+// 连不到宿主机的 8188（实测：容器里连 127.0.0.1 报"无响应"，连 host.docker.internal 48ms 通）。
+// 所以这里按顺序探测，谁通用谁；两边都能跑（本地直跑时 127.0.0.1 通，容器里 host.docker.internal 通）。
+const HOST_CANDIDATES = DEFAULT_HOST
+  ? [DEFAULT_HOST]
+  : ["host.docker.internal", "127.0.0.1"];
+
+/** 探测可用主机（结果缓存，避免每张图都探一遍） */
+let _resolvedHost = null;
+async function resolveHost(port) {
+  if (_resolvedHost) return _resolvedHost;
+  for (const h of HOST_CANDIDATES) {
+    try {
+      await httpJSON({ host: h, port: port || DEFAULT_PORT, path: "/system_stats", method: "GET" });
+      _resolvedHost = h;
+      return h;
+    } catch (e) { /* 试下一个 */ }
+  }
+  return null;
+}
+
+/** 读工作流模板（API 格式）。找不到就返回 null —— 调用方据此跳过。 */
+function loadWorkflow(file) {
+  try {
+    const raw = fs.readFileSync(file || WORKFLOW, "utf8");
+    return JSON.parse(raw);
+  } catch (e) {
+    return null;
+  }
+}
+
+/** 按 class_type 定位节点，不依赖固定节点号（工作流改结构也不会错位） */
+function findByClass(wf, cls) {
+  for (const id of Object.keys(wf)) {
+    if (wf[id] && wf[id].class_type === cls) return id;
+  }
+  return null;
+}
+
+function inject(wf, { prompt, negative, width, height, seed, steps }) {
+  const copy = JSON.parse(JSON.stringify(wf));
+  const pos = findByClass(copy, "CLIPTextEncode");
+  const negs = Object.keys(copy).filter((id) => copy[id].class_type === "CLIPTextEncode" && id !== pos);
+  const lat = findByClass(copy, "EmptySD3LatentImage") || findByClass(copy, "EmptyLatentImage");
+  const ksampler = findByClass(copy, "KSampler");
+  if (pos && prompt) copy[pos].inputs.text = prompt;
+  if (negs.length && negative !== undefined) copy[negs[0]].inputs.text = negative;
+  if (lat) {
+    if (width) copy[lat].inputs.width = width;
+    if (height) copy[lat].inputs.height = height;
+  }
+  if (ksampler) {
+    if (Number.isFinite(seed)) copy[ksampler].inputs.seed = seed;
+    if (Number.isFinite(steps)) copy[ksampler].inputs.steps = steps;
+  }
+  return copy;
+}
+
+function httpJSON(opts, body) {
+  return new Promise((resolve, reject) => {
+    const data = body ? JSON.stringify(body) : null;
+    const req = http.request({
+      ...opts,
+      headers: {
+        "content-type": "application/json",
+        ...(data ? { "content-length": Buffer.byteLength(data) } : {}),
+        ...(opts.headers || {}),
+      },
+    }, (res) => {
+      let buf = "";
+      res.on("data", (c) => { buf += c; });
+      res.on("end", () => {
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}: ${buf.slice(0, 200)}`));
+        try { resolve(JSON.parse(buf || "{}")); } catch (e) { reject(new Error("返回不是 JSON: " + buf.slice(0, 120))); }
+      });
+    });
+    req.on("error", reject);
+    req.setTimeout(30000, () => req.destroy(new Error("连接 ComfyUI 超时")));
+    if (data) req.write(data);
+    req.end();
+  });
+}
+
+function httpBuffer(opts) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(opts, (res) => {
+      if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}`));
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => resolve(Buffer.concat(chunks)));
+    });
+    req.on("error", reject);
+    req.setTimeout(60000, () => req.destroy(new Error("下载图片超时")));
+    req.end();
+  });
+}
+
+/** ComfyUI 是否在线（逐个候选主机探测；都连不上返回 false） */
+async function isOnline(host, port) {
+  if (host) {
+    try {
+      await httpJSON({ host, port: port || DEFAULT_PORT, path: "/system_stats", method: "GET" });
+      return true;
+    } catch (e) { return false; }
+  }
+  return (await resolveHost(port)) !== null;
+}
+
+/**
+ * 出一张图，返回 { buffer, filename }。
+ * @param {{prompt:string, negative?:string, width?:number, height?:number, seed?:number, steps?:number,
+ *          workflow?:object, host?:string, port?:number, timeoutMs?:number}} opts
+ */
+async function generateImage(opts) {
+  const o = opts || {};
+  const port = o.port || DEFAULT_PORT;
+  const host = o.host || (await resolveHost(port));
+  if (!host) throw new Error("找不到可用的 ComfyUI 主机（试过 " + HOST_CANDIDATES.join("、") + "）");
+  const wf = o.workflow || loadWorkflow();
+  if (!wf) throw new Error("找不到 ComfyUI 工作流模板：" + WORKFLOW);
+  const promptGraph = inject(wf, o);
+  const clientId = "dsh-script-" + Math.random().toString(36).slice(2, 10);
+  const submit = await httpJSON({ host, port, path: "/prompt", method: "POST" }, { prompt: promptGraph, client_id: clientId });
+  const promptId = submit.prompt_id;
+  if (!promptId) throw new Error("ComfyUI 未返回 prompt_id");
+  const deadline = Date.now() + (o.timeoutMs || 15 * 60 * 1000);
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const hist = await httpJSON({ host, port, path: `/history/${promptId}`, method: "GET" });
+    const entry = hist[promptId];
+    if (!entry) continue;
+    const outputs = entry.outputs || {};
+    for (const nodeId of Object.keys(outputs)) {
+      const imgs = outputs[nodeId].images || [];
+      if (!imgs.length) continue;
+      const img = imgs[0];
+      const q = `filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || "")}&type=${img.type || "output"}`;
+      const buffer = await httpBuffer({ host, port, path: `/view?${q}`, method: "GET" });
+      return { buffer, filename: img.filename };
+    }
+  }
+  throw new Error(`出图超时（${Math.round((o.timeoutMs || 900000) / 1000)}s 内未完成）`);
+}
+
+/** 由大纲拼封面提示词（中英混合对 Qwen-Image 友好；明确要求"无文字"，避免乱码标题） */
+function buildCoverPrompt(outline, meta) {
+  const o = outline || {};
+  const era = String(o.era || o.setting?.era || "").trim();
+  const place = String(meta?.location || o.location || o.setting?.location || "").trim();
+  const trick = String(o.coreTrick || o.trickSpec?.trick || "").trim();
+  const victim = String(o.victim?.name || "").trim();
+  const bits = [
+    "悬疑推理剧本杀封面插画",
+    // ⚠️ 构图必须偏**室内近景/静物**（2026-10-18 两次实测）：
+    // 只要画面是"建筑门脸 + 街景"，模型必然在招牌上生成**乱码汉字**
+    // （第一版门头是"黌滙菁 畴…"，第二版是"手光光腈 金松 鋸"，连隔壁店铺都带乱码）。
+    // 只加负向词"文字/招牌"挡不住 —— 换成室内静物构图后（吊灯/工作台/挂钟）画面里一个错字都没有。
+    "室内近景构图，静物特写视角",
+    era ? `${era}背景` : "",
+    place ? `${place}内部` : "",
+    trick ? `氛围线索：${trick}` : "",
+    victim ? `（不要画出具体人物面部）` : "",
+    "暗调写实，电影感侧光，高细节，冷峻压抑的气氛",
+    "不要拍建筑外立面、门脸、街景、招牌",
+    "画面中不得出现招牌、店招、门头文字、标牌、书刊封面等任何带字的物件",
+    "无文字，无标题，无字幕，无水印，无logo",
+  ].filter(Boolean);
+  return bits.join("，");
+}
+
+/** 角色立绘提示词 */
+function buildCharacterPrompt(name, ch, meta) {
+  const occupation = String(ch?.occupation || "").trim();
+  return [
+    "剧本杀角色立绘，半身像",
+    name ? `角色：${name}` : "",
+    occupation ? `身份：${occupation}` : "",
+    String(meta?.era || "").trim() ? `${meta.era}时代服饰` : "",
+    "写实厚涂，暗调，侧光，背景虚化，情绪克制",
+    "无文字，无水印",
+  ].filter(Boolean).join("，");
+}
+
+/**
+ * 给一个剧本出图并落库（通过注入的 save 回调，避免本模块依赖 db）。
+ * @param {{scriptId:string, outline?:object, meta?:object, characters?:Array<{name:string}>,
+ *          options?:{cover?:boolean, characters?:boolean, clues?:number, width?:number, height?:number, steps?:number},
+ *          save:Function, onProgress?:Function, host?:string, port?:number}} args
+ * @returns {{generated:Array<{key:string,alt:string,bytes:number}>, skipped:Array<{key:string,reason:string}>}}
+ */
+/**
+ * 键名是否合法（与 script_images 的约束一致：只允许 [A-Za-z0-9_-]）。
+ * **出图前**先校验：实测踩过「用中文当键名 → 图出完了才在保存时被拒」，
+ * 白烧 4 次 GPU 生成（每次几十秒）。宁可在排队前就拦下来。
+ */
+const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
+function isValidKey(k) { return KEY_RE.test(String(k || "")); }
+
+async function attachScriptImages(args) {
+  const a = args || {};
+  const opt = a.options || {};
+  const out = { generated: [], skipped: [] };
+  const online = await isOnline(a.host, a.port);
+  if (!online) {
+    out.skipped.push({ key: "*", reason: "ComfyUI 未启动（8188 端口在候选主机上都无响应），跳过配图" });
+    return out;
+  }
+  const wf = loadWorkflow();
+  if (!wf) {
+    out.skipped.push({ key: "*", reason: "找不到工作流模板 " + WORKFLOW });
+    return out;
+  }
+  const base = {
+    workflow: wf, host: a.host, port: a.port,
+    width: opt.width || 768, height: opt.height || 768, steps: opt.steps || 8,
+  };
+  const jobs = [];
+  if (opt.cover !== false) {
+    jobs.push({ key: "cover", alt: "剧本封面", prompt: buildCoverPrompt(a.outline, a.meta) });
+  }
+  if (opt.characters) {
+    (a.characters || []).slice(0, opt.maxCharacters || 6).forEach((c, i) => {
+      // ⚠️ 键名只允许 ASCII（script_images 的约束，中文名会被整体拒绝）。
+      // 所以键名一律用序号，人名放进 alt（前端展示的是 alt，不是键名）。
+      jobs.push({
+        key: `char-${i + 1}-1`,
+        alt: `${c.name} 立绘`,
+        prompt: buildCharacterPrompt(c.name, c, a.meta),
+      });
+    });
+  }
+  for (let i = 0; i < (opt.clues || 0); i++) {
+    jobs.push({ key: `cluedoc-${i + 1}`, alt: `线索图 ${i + 1}`, prompt: `剧本杀线索道具照片，第${i + 1}号证物特写，桌面俯拍，暗调，细节清晰，无文字` });
+  }
+
+  // 负向词里必须显式点名"招牌/汉字/标牌"：实测只写"文字"挡不住模型在店招上写乱码汉字
+  const negative = "文字,汉字,招牌,店招,标牌,门头字,乱码,字幕,水印,logo,签名,低质量,模糊,畸形,多余肢体,恐怖,血腥";
+  for (const j of jobs) {
+    // 出图前先校验键名：不合法的当场跳过，不浪费一次 GPU 生成
+    if (!isValidKey(j.key)) {
+      out.skipped.push({ key: j.key, reason: "键名不合法（只允许 A-Za-z0-9_-），已在出图前拦下" });
+      if (a.onProgress) a.onProgress(`配图跳过：${j.alt}（键名 ${j.key} 不合法）`);
+      continue;
+    }
+    try {
+      if (a.onProgress) a.onProgress(`正在出图：${j.alt}…`);
+      const { buffer } = await generateImage({ ...base, prompt: j.prompt, negative, seed: Math.floor(Math.random() * 1e9) });
+      await a.save(a.scriptId, j.key, "image/png", buffer, j.alt);
+      out.generated.push({ key: j.key, alt: j.alt, bytes: buffer.length });
+      if (a.onProgress) a.onProgress(`配图完成：${j.alt}（${Math.round(buffer.length / 1024)}KB）`);
+    } catch (e) {
+      out.skipped.push({ key: j.key, reason: e.message });
+      if (a.onProgress) a.onProgress(`配图失败：${j.alt} —— ${e.message}`);
+    }
+  }
+  return out;
+}
+
+module.exports = {
+  loadWorkflow, findByClass, inject, isOnline, generateImage,
+  buildCoverPrompt, buildCharacterPrompt, attachScriptImages, isValidKey,
+  DEFAULT_HOST, DEFAULT_PORT, WORKFLOW, HOST_CANDIDATES, resolveHost,
+};
