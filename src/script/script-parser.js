@@ -290,11 +290,24 @@ function extractSection(text, heading, maxLen = 2000) {
   const t = String(text || "");
   if (!t) return "";
   const lines = t.split("\n");
-  // 1) 找到**第一处包含该标题词的行**（标题行常带序号，如 `### 四、真相复盘`，
-  //    所以不能要求行首直接是标题词 —— 第一版就是这么写的，导致一律返回空串）
+  // 1) 优先找**标题行**包含该词的（标题常带序号，如 `### 四、真相复盘（共6200字…）`，
+  //    所以不能要求行首直接是标题词）。
+  //
+  // ⚠️ 必须先认标题行，再退回"任意行"（2026-10-19 实测）：
+  //    《沪西照相馆除夕谜案》的 DM 手册里有一张流程表，某一格写着
+  //    「尾声·投票与复盘 | 90分钟 | 玩家投票、**真相复盘**、结局演绎」——
+  //    旧实现取"第一处包含该词的行"，正好命中这行表格，于是抠出来的是
+  //    "表格剩余部分 + 分隔线"，trim 完变成空串：**整份真相复盘落库为 0 字**，
+  //    复盘环节、线索覆盖校验全部连带失效。
   let lineIdx = -1;
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i].includes(heading)) { lineIdx = i; break; }
+    if (/^#{1,4}\s+\S/.test(lines[i]) && lines[i].includes(heading)) { lineIdx = i; break; }
+  }
+  // 2) 没有标题行时退回"任意包含该词的行"（保持历史行为，level 记 0 走启发式边界）
+  if (lineIdx < 0) {
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].includes(heading)) { lineIdx = i; break; }
+    }
   }
   if (lineIdx < 0) return "";
   const hm = lines[lineIdx].match(/^(#{1,4})\s+/);

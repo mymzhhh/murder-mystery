@@ -13,8 +13,12 @@
 // 这四类都**不需要 LLM**，纯字符串与算术就能判 —— 所以它们必须由确定性代码把关，
 // 否则会一路通过管道进入成稿（实测就是这样）。
 const CLOCK_RE = /(\d{1,2})\s*[:：]\s*(\d{1,2})/g;
-const METHOD_KW = /陷阱|发条|勒|调慢|调快|下毒|投毒|放毒|氰化物|扳机|动手|推下|砸|刺|掐|捂|挂钟|座钟/;
-const ACT_VERB = /做|制作|安装|布置|设定|固定|系上|系|绕|调|下|放|投|砸|勒|刺|推|捂|掐|动手|触发|拉|引|带|骗/;
+// 手法词 / 动作词。
+// ⚠️ 这两张表宁可宽一点，也不能让**真实写法**漏进来：实测《沪西照相馆除夕谜案》的
+// 凶手确认写的是「22:42 … 用暗房架子上的厚玻璃显影液瓶**击打**其后脑」，
+// 第一版词表里没有"击打/瓶"，于是校验器误报"找不到带时刻的手法声明"。
+const METHOD_KW = /陷阱|发条|勒|调慢|调快|下毒|投毒|放毒|氰化物|扳机|动手|推下|砸|刺|掐|捂|挂钟|座钟|击打|敲击|锤|刀|绳|瓶|凶器|重物|毒/;
+const ACT_VERB = /做|制作|安装|布置|设定|固定|系上|系|绕|调|下|放|投|砸|勒|刺|推|捂|掐|动手|触发|拉|引|带|骗|击打|敲击|砍|割|扔|抛|藏|销毁|拨快|拨慢|调快|调慢|放置|倒|注入/;
 
 /** 一行里出现的所有时刻 */
 function clocksIn(line) {
@@ -237,9 +241,22 @@ function checkTruthClueCoverage(truthText, clueIds) {
   if (mentioned.size && unknown.length > ids.length * 0.3) {
     issues.push(`【逻辑·线索覆盖】真相用了 ${unknown.length} 个不存在的线索编号（如 ${unknown.slice(0, 5).join("、")}），与库里的编号体系对不上`);
   }
-  const claim = t.match(/共\s*(\d+)\s*条/);
-  if (claim && Number(claim[1]) !== ids.length) {
-    issues.push(`【逻辑·线索覆盖】真相自称"共${claim[1]}条"，实际线索是 ${ids.length} 条`);
+  // "共N条" 的核对不能只跟**总数**比（2026-10-19 真实误报）：
+  // 《沪西照相馆除夕谜案》的真相写的是「#### A类线索（第一轮搜证，共22条…）」，
+  // 第一轮正好 22 条（总数 46）—— 拿总数比就会误报"自称共22条、实际46条"。
+  // 所以把**每一轮的条数**也纳入可接受值（轮次按编号前缀判定，与切分口径一致：A→第一轮，B/M→第二轮）。
+  const roundCounts = {
+    1: ids.filter((id) => /^A\d+$/.test(id)).length,
+    2: ids.filter((id) => /^(B|M|C)\d+$/.test(id)).length,
+  };
+  const acceptable = new Set([ids.length, ...Object.values(roundCounts).filter((n) => n > 0)]);
+  for (const m of t.matchAll(/共\s*(\d+)\s*条/g)) {
+    const n = Number(m[1]);
+    if (!acceptable.has(n)) {
+      issues.push(`【逻辑·线索覆盖】真相自称"共${n}条"，而实际是 ${ids.length} 条` +
+        `（分轮：第一轮 ${roundCounts[1]}、第二轮 ${roundCounts[2]}）`);
+      break;
+    }
   }
   return issues;
 }

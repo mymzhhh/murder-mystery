@@ -133,3 +133,48 @@ test("时间线条目要认得「日期 + 【真实】 + 时刻」这种真实�
   assert.strictEqual(entries.length, 3, "三种写法都要能抽到");
   assert.deepStrictEqual(entries.map((e) => L.fmtHM(e.minutes)), ["19:30", "21:00", "21:30"]);
 });
+
+test("真实写法：「用……瓶击打其后脑」必须被认成手法声明（不误报）", () => {
+  // 真实生成稿（《沪西照相馆除夕谜案》陈阿生）的凶手确认原文。
+  // 第一版词表没有"击打/瓶"，校验器误报"找不到带时刻的手法声明"。
+  const script = [
+    "### 四、凶手确认（仅你可见）",
+    "我是本案真凶陈阿生，真实作案时间为1月29日22:42，趁周福根背对门冲洗照片时，用暗房架子上的厚玻璃显影液瓶击打其后脑致其当场死亡。擦拭凶器表面指纹，因手抖留下半枚拇指印；22:55将大堂公共挂钟拨快15分钟，统一所有人的时间认知，制造不在场证明。",
+    "### 二、你的时间线",
+    "- **1月29日 【真实】22:42**：暗房 — 我用暗房架子上的厚玻璃显影液瓶击打周福根后脑。",
+    "- **1月29日 【真实】22:55**：大堂 — 我把公共挂钟拨快了15分钟。",
+  ].join("\n");
+  const issues = L.checkMurdererMethodInTimeline({ sections: [{ name: "陈阿生", text: script }], murdererName: "陈阿生" });
+  assert.deepStrictEqual(issues, [], "手法声明能认出来、时间线也确实落地了，不该报问题");
+});
+
+test("手法声明认出来了、但时间线没落地 → 仍然要报", () => {
+  const script = [
+    "### 四、凶手确认",
+    "我是真凶，真实作案时间22:42，用厚玻璃显影液瓶击打其后脑。",
+    "### 二、你的时间线",
+    "- **1月29日 22:42**：暗房 — 我在冲洗照片，听见外面有人说话。",
+  ].join("\n");
+  const issues = L.checkMurdererMethodInTimeline({ sections: [{ name: "甲", text: script }], murdererName: "甲" });
+  assert.ok(issues.some((s) => s.includes("22:42")), "时间线没写手法，必须报");
+});
+
+test("「共N条」按轮次核对，不能拿总数误报（真实误报）", () => {
+  // 真实真相原文：「#### A类线索（第一轮搜证，共22条…）」，而总数是 46、第一轮正好 22。
+  // 旧实现拿总数比 → 误报"自称共22条、实际46条"。
+  const ids = [
+    ...Array.from({ length: 22 }, (_, i) => "A" + (i + 1)),
+    ...Array.from({ length: 24 }, (_, i) => "B" + (i + 1)),
+  ];
+  const truth = "#### A类线索（第一轮搜证，共22条，为浅层关系类线索）\n" +
+    ids.map((id) => `${id}：某物证`).join("\n");
+  const issues = L.checkTruthClueCoverage(truth, ids);
+  assert.deepStrictEqual(issues, [], "22 是第一轮的条数，不该报");
+});
+
+test("「共N条」跟总数和任何轮次都对不上 → 仍然报", () => {
+  const ids = ["A1", "A2", "A3", "B1", "B2"];
+  const truth = "全部线索共 40 条，逐条解析如下：" + ids.map((id) => `${id}：内容`).join("\n");
+  const issues = L.checkTruthClueCoverage(truth, ids);
+  assert.ok(issues.some((s) => s.includes("共40条")), "40 既不是总数也不是任何一轮，必须报");
+});
