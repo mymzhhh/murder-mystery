@@ -36,8 +36,9 @@ test("收集正文里的 img: 引用（键名 + alt + 所在线索上下文）",
 test("出图提示词从线索内容推，而不是通用模板", () => {
   const refs = si.collectImageRefs(MD);
   const p = si.buildClueImagePrompt(refs[0]);
-  assert.ok(p.includes("转轮手枪"), "提示词要带上线索内容，否则出来的图与线索无关");
-  assert.ok(p.includes("无文字") || p.includes("不得出现任何文字"));
+  assert.ok(!p.includes("转轮手枪"), "**不能把线索正文当内容喂给模型**（实测会把字画到纸上）");
+  assert.ok(p.includes("物件") || p.includes("工具"), "应只描述物件类型");
+  assert.ok(p.includes("不可辨认") || p.includes("不得出现清晰的文字"));
 });
 
 test("按引用出图：引用过的键不再重复生成", () => {
