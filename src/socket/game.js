@@ -1,8 +1,8 @@
-// WebSocket 游戏事件处理
+﻿// WebSocket 游戏事件处理
 
 const { verifyToken } = require("../core/auth");
 const { getRedis } = require("../core/redis-client");
-const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions, claimClue, claimCharacter, releaseCharacterClaim, consumeSearchQuota, getSearchQuota, SEARCH_MAX_PER_ROUND, revealClue, shareClue, addWhisper, getWhispersFor } = require("../game/game-manager");
+const { getRoom, updateRoom, deleteRoom: deleteGameRoom, addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer, getClues, assignClue, getPlayerClues, recordVote, getVotes, addChatMessage, getChatMessages, addIntroduction, getIntroductions, claimClue, digClue, claimCharacter, releaseCharacterClaim, consumeSearchQuota, getSearchQuota, SEARCH_MAX_PER_ROUND, revealClue, shareClue, addWhisper, getWhispersFor } = require("../game/game-manager");
 const { buildRoundSearchLocations, cluesAtLocation, pickClueAtLocation, availableClues } = require("../game/search-locations");
 const { getPhaseConfig, getPhaseRound, getNextPhase, validateAction, visibleClues, clueVisibilityOf, PHASE_DEADLINE_MS, needsPhaseDeadline } = require("../game/game-engine");
 const { generatePhaseNarrative } = require("../game/dm-agent");
@@ -672,6 +672,54 @@ function setupGameSocket(io) {
         });
         socket.emit("investigate_ok", { clueId: clue.id, location: chosen, quota });
       } catch (e) { socket.emit("error", { code: "INVESTIGATE_FAILED", message: e.message }); }
+    });
+
+    // 深入调查：把一条线索的隐藏层翻出来（真本 45 条里有 8 条这类线索）。
+    // 代价 = 一次搜证配额，收益 = 一条会改变推理方向的深层信息，全员可见。
+    socket.on("dig_clue", async ({ roomCode, clueId }) => {
+      if (!checkRateLimit(socket, "dig_clue")) return;
+      try {
+        const room = await getRoom(roomCode);
+        if (!room) return socket.emit("error", { code: "ROOM_NOT_FOUND", message: "房间不存在" });
+        const players = await getPlayers(roomCode);
+        const val = validateAction("request_clue", { phase: room.phase, players }, socket.id);
+        if (!val.ok) return socket.emit("error", { code: val.error, message: val.message || "当前阶段无法深入调查" });
+        const round = getPhaseRound(room.phase);
+        const me = players.find(p => p.playerId === socket.id);
+        const quotaId = (me && me.playerName) || socket.id;
+
+        // 先查有没有隐藏层，避免白扣配额
+        const allClues = await getClues(roomCode);
+        const target = (allClues || []).find(c => c.id === clueId);
+        if (!target) return socket.emit("error", { code: "CLUE_NOT_FOUND", message: "线索不存在" });
+        if (!String(target.hiddenContent || "").trim()) {
+          return socket.emit("error", { code: "NO_HIDDEN", message: "这条线索没有更深的可查内容" });
+        }
+
+        const quota = await consumeSearchQuota(roomCode, round, quotaId);
+        if (!quota.allowed) {
+          return socket.emit("investigate_failed", {
+            reason: "QUOTA_EXHAUSTED",
+            message: `本轮搜证次数已用完（每人每轮 ${quota.max} 次），无法再深入调查。`,
+            quota,
+          });
+        }
+
+        const res = await digClue(roomCode, clueId, socket.id);
+        if (!res.ok) {
+          const msg = res.error === "ALREADY_DUG" ? "这条线索已经被人深入调查过了"
+            : res.error === "NO_HIDDEN" ? "这条线索没有更深的可查内容"
+              : res.error === "NOT_FOUND_YET" ? "这条线索还没被搜出来"
+                : "深入调查失败";
+          return socket.emit("error", { code: res.error, message: msg });
+        }
+        io.to(roomCode).emit("clue_dug", {
+          clueId,
+          hiddenContent: res.hiddenContent,
+          byName: me?.characterName || me?.playerName || "某人",
+          clue: res.clue,
+        });
+      } catch (e) { socket.emit("error", { code: "DIG_FAILED", message: e.message }); }
     });
 
     // 公开一条线索给全场。只有发现者本人能公开（服务端校验，不信任客户端）。

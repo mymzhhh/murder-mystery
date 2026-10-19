@@ -1,4 +1,4 @@
-// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis（优化版）
+﻿// 剧本切分 Agent — 将剧本拆分为玩家可见的纯净内容，存入 Redis（优化版）
 
 const { getSession, getSessionArtifacts } = require("../core/history-manager");
 const { parseScript, checkCharacterCoverage } = require("./script-parser");
@@ -149,19 +149,29 @@ if (!rawScript) continue;
     // 地点兜底：空 location 的线索在游戏里**永远搜不到**（搜证池按 location 生成）。
     // 实测《停表的修表铺》44 条里 6 条因缺「发现地点」落成空串，玩家少拿 14% 的线索。
     const { fillMissingClueLocations } = require("./clue-locations");
+    const layoutPlaces = String(parsed.layoutDescription || parsed.meta?.layoutDescription || "")
+      .split(/[｜|\/、,，\n]/).map((s) => s.trim()).filter(Boolean);
     const { clues: filledClues, filled } = fillMissingClueLocations(allClues, {
-      places: String(parsed.layoutDescription || parsed.meta?.layoutDescription || "")
-        .split(/[｜|\/、,，\n]/).map((s) => s.trim()).filter(Boolean),
+      places: layoutPlaces,
       fallback: "现场",
     });
     if (filled.length) {
       console.warn(`[splitter] 补全了 ${filled.length} 条缺失地点的线索：` +
         filled.map((f) => `${allClues[f.index].id}→${f.location}(${f.reason})`).join("，"));
     }
-    for (const c of filledClues) {
+    // 地点收敛：把"维修间挂钟转轴""死者指甲缝"这类子位置并回房间级。
+    // 实测生成稿 40 条线索碎成 36 个地点（每轮 18-20 个搜证点），玩家挑不过来；
+    // 真本《吉普赛女郎之死》是 45 条 / 7 个地点。合并只动 location，线索一条不丢。
+    const { collapseClueLocations } = require("./location-collapse");
+    const col = collapseClueLocations(filledClues, { places: layoutPlaces, maxLocations: 7 });
+    if (col.before !== col.after) {
+      console.warn(`[splitter] 地点收敛 ${col.before} → ${col.after} 个` +
+        (col.warnings.length ? `（${col.warnings.join("；")}）` : ""));
+    }
+    for (const c of col.clues) {
       result.clues.push({
         id: c.id, name: "", content: (c.content || "").substring(0, 500),
-        location: c.location || "现场", round: c.round, clueType: c.clueType || ""
+        location: c.location || "现场", round: c.round, clueType: c.clueType || "", hiddenContent: c.hiddenContent || ""
       });
     }
   }

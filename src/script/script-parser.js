@@ -1,4 +1,4 @@
-﻿// 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
+// 剧本解析器 — 将 Markdown 剧本转为结构化 JSON
 
 /** 去掉 markdown 强调符与全角标记，仅用于"匹配"，不用于输出 */
 function stripMd(s) {
@@ -563,11 +563,11 @@ function parseClueSection(text, prefix, roundNum) {
 
     const id = idMatch[1];
     const roundForClue = id.startsWith("M") ? roundNum : roundNum; // 误导线索归入当前轮
-    const clue = { id, round: roundForClue, content: "", pointsTo: "", clueType: "", location: "" };
+    const clue = { id, round: roundForClue, content: "", pointsTo: "", clueType: "", location: "", hiddenContent: "" };
 
     // 逐行解析字段（兼容 **加粗** 与 普通 两种标签格式）
     // 字段行："- 线索类型：xxx" / "- **发现地点**：xxx" 等
-    const fieldLine = /^\s*[-*]\s*(?:\*\*)?(线索类型|发现地点|线索内容|指向角色\/?事件)(?:\*\*)?[：:]\s*(.+)\s*$/;
+    const fieldLine = /^\s*[-*]\s*(?:\*\*)?(线索类型|发现地点|线索内容|指向角色\/?事件|隐藏线索)(?:\*\*)?[：:]\s*(.+)\s*$/;
     let pendingContent = null; // 遇到"线索内容"行后，把后续非字段行拼进来（支持多行内容）
     for (const line of block.split("\n")) {
       const fm = line.match(fieldLine);
@@ -575,12 +575,16 @@ function parseClueSection(text, prefix, roundNum) {
         if (fm[1] === "线索类型") clue.clueType = fm[2].trim();
         else if (fm[1] === "发现地点") clue.location = fm[2].trim();
         else if (fm[1] === "线索内容") { clue.content = fm[2].trim(); pendingContent = true; }
+        // 隐藏线索：需要玩家额外「深入调查」才拿到（真本 45 条里有 8 条）
+        else if (fm[1] === "隐藏线索") { clue.hiddenContent = fm[2].trim(); pendingContent = "hidden"; }
         else if (fm[1] === "指向角色" || fm[1] === "指向角色/事件") clue.pointsTo = fm[2].trim();
       } else if (pendingContent) {
         const t = line.trim();
         // 续行终止条件：空行 / "---"分隔线 / "#标题" / "|"表格行（防止把后续章节如"推理链总结"吞进线索内容）
-        if (!t || t === "---" || /^#{1,6}\s/.test(t) || /^\|/.test(t) || /^[-*]\s*(?:线索类型|发现地点|线索内容|指向角色\/?事件)/.test(t)) {
-          pendingContent = false;
+        if (!t || t === "---" || /^#{1,6}\s/.test(t) || /^\|/.test(t) || /^[-*]\s*(?:线索类型|发现地点|线索内容|指向角色\/?事件|隐藏线索)/.test(t)) {
+          pendingContent = null;
+        } else if (pendingContent === "hidden") {
+          clue.hiddenContent += " " + t;
         } else {
           clue.content += " " + t;
         }

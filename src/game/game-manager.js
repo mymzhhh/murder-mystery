@@ -1,4 +1,4 @@
-// 游戏房间管理 — Redis 持久化（并发安全版）
+﻿// 游戏房间管理 — Redis 持久化（并发安全版）
 // 使用 WATCH+MULTI 乐观锁 + 独立 key 设计避免误冲突
 const { getRedis, scanKeys, ensureRedis } = require("../core/redis-client");
 const { v4: uuidv4 } = require("uuid");
@@ -318,6 +318,34 @@ async function revealClue(code, clueId, playerId) {
 }
 
 /**
+ * 「深入调查」一条线索：把它藏着的隐藏层翻出来（真本 45 条里有 8 条这类线索）。
+ *
+ * 设计取舍：
+ *   · 只有**已经被搜出来**的线索才能深入 —— 否则等于让玩家盲挖未知线索；
+ *   · 每条线索只能被挖一次（全员共享结果），挖过就再挖不到，避免重复消耗；
+ *   · 是否扣配额由调用方决定（socket 层走 consumeSearchQuota），这里只负责状态与内容。
+ * @returns {{ ok:boolean, error?:string, clue?:object, hiddenContent?:string }}
+ */
+async function digClue(code, clueId, playerId) {
+  const r = await ensureConn();
+  const contentKey = clueKey(code, clueId);
+  const raw = await r.get(contentKey);
+  if (!raw) return { ok: false, error: "CLUE_NOT_FOUND" };
+  const clue = JSON.parse(raw);
+  const hidden = String(clue.hiddenContent || "").trim();
+  if (!hidden) return { ok: false, error: "NO_HIDDEN" };
+  const finders = await r.smembers(clueFoundByKey(code, clueId));
+  if (!finders.length) return { ok: false, error: "NOT_FOUND_YET" };
+  // SET NX：并发只会成功一次
+  const claimed = await r.set(`game:${code}:clue:${clueId}:dug`, playerId, "NX");
+  if (!claimed) return { ok: false, error: "ALREADY_DUG" };
+  clue.dugBy = playerId;
+  clue.dugContent = hidden;
+  await r.set(contentKey, JSON.stringify(clue));
+  return { ok: true, clue, hiddenContent: hidden };
+}
+
+/**
  * 把一条线索单独给某位玩家看。只有发现者本人可以分享。
  * @returns {{ ok: boolean, error?: string, clue?: object }}
  */
@@ -587,7 +615,7 @@ async function saveNotes(code, playerName, notes) {
 module.exports = {
   createRoom, getRoom, updateRoom, deleteRoom,
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
-  loadClues, getClues, assignClue, getPlayerClues, revealClue, shareClue,
+  loadClues, getClues, assignClue, getPlayerClues, revealClue, digClue, shareClue,
   claimClue, claimCharacter, releaseCharacterClaim, releaseCharacterClaims,
   recordVote, getVotes, clearVotes,
   SEARCH_MAX_PER_ROUND, getSearchQuota, consumeSearchQuota, clearSearchQuota, hasSearchBudget,

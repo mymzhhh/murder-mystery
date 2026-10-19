@@ -21,7 +21,9 @@ async function createGameRoom(scriptSessionId, maxPlayers) {
       }));
       characterNames = characters.map(c => c.name);
       allClues = (pgData.clues || []).map(c => ({
-        id: c.clue_id, content: c.content, location: c.location, round: c.round, clueType: c.clue_type
+        id: c.clue_id, content: c.content, location: c.location, round: c.round, clueType: c.clue_type,
+        // 隐藏层：玩家花一次额外搜证机会「深入调查」才拿到（生成端只会写进这里，不会公开）
+        hiddenContent: c.hidden_content || ""
       }));
       parsed = {
         title: pgData.title,

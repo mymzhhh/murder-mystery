@@ -153,6 +153,13 @@ export default function GameView({ game, socket, user, onLeave, online = true })
           ? c
           : [...c, { ...d.clue, visibility: "public", foundByName: d.foundBy }]));
       }),
+      // 深入调查的结果：把隐藏层并进对应线索，全场同步（每人每轮花一次配额换一条深层信息）
+      onSocket("clue_dug", (d) => {
+        if (!d.clueId) return;
+        setMyClues((c) => c.map((x) => (x.id === d.clueId
+          ? { ...x, dugContent: d.hiddenContent || x.dugContent, dugByName: d.byName }
+          : x)));
+      }),
       onSocket("whisper_message", (d) => {
         setWhispers((w) => [...w, d]);
       }),
@@ -381,6 +388,11 @@ export default function GameView({ game, socket, user, onLeave, online = true })
   // location 参数保留：AI 路径与需要按地点搜的场景仍然可用。
   function investigate(location) {
     emit("investigate", location ? { location } : {});
+  }
+  // 深入调查：花一次搜证机会翻出某条线索的隐藏层（服务端扣配额并广播结果）
+  function digClue(clueId) {
+    if (!clueId) return;
+    emit("dig_clue", { clueId });
   }
   function askNpc(npcName, q) { emit("ask_npc", { npcName, question: q }); }
   function askAiPlayer(characterName, q) { emit("ask_ai_player", { characterName, question: q }); }
@@ -643,6 +655,7 @@ export default function GameView({ game, socket, user, onLeave, online = true })
             chatRef={chatBoxRef}
             onSendChat={sendChat}
             onInvestigate={investigate}
+            onDigClue={digClue}
             searchInfo={searchInfo}
             whispers={whispers}
             onWhisper={sendWhisper}
@@ -1254,7 +1267,7 @@ const panelLabel = (k) => {
   const row = GAME_PANELS.find(([key]) => key === k);
   return row ? row[3] : k;
 };
-function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper, scriptId }) {
+function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat, onInvestigate, onDigClue, onAskNpc, onAskAi, players, voice, speaking, searchInfo, whispers, onWhisper, scriptId }) {
   const [msg, setMsg] = useState("");
   const [ask, setAsk] = useState({ npc: "", q: "" });
   // 私聊：与公屏完全分开，服务端按参与者过滤后才下发
@@ -1310,6 +1323,8 @@ function CombinedRoundView({ phase, myChar, chats, myClues, chatRef, onSendChat,
   const canSearch = !!(searchInfo && searchInfo.canSearch);
   // 不限次数时（默认）不显示计数、也不因次数禁用按钮
   const outOfQuota = !quota.unlimited && quota.remaining <= 0;
+  // 「深入调查」也要花配额，所以用它来决定按钮是否可点（不限次数时恒为 1）
+  const searchLeft = quota.unlimited ? 1 : Math.max(0, Number(quota.remaining) || 0);
 
   // 审讯问答（服务端打了 kind:"ask"）从公屏里摘出来，单独显示在「审讯」对话框里。
   // 为什么不在两边都显示：全屋讨论是"大家说了什么"，审讯是"我问了谁什么" ——
@@ -1747,6 +1762,32 @@ function GroupedClues({ clues, scriptId }) {
                         {c.foundByName ? <span className="text-xs text-muted" style={{ marginLeft: "auto" }}>{c.foundByName} 发现</span> : null}
                       </div>
                       <ClueBody clue={c} scriptId={scriptId} />
+                      {/* 深入调查：这条线索有隐藏层、还没被挖过时给一个按钮。
+                          代价是一次搜证配额（服务端权威校验），结果全场共享。 */}
+                      {(() => {
+                        const hidden = String(c.hiddenContent || "").trim();
+                        if (!hidden) return null;
+                        if (c.dugContent) {
+                          return (
+                            <div className="clue-hidden">
+                              <div className="clue-hidden-head">🔍 深入调查{c.dugByName ? `（${c.dugByName}）` : ""}</div>
+                              <div className="clue-hidden-body">{c.dugContent}</div>
+                            </div>
+                          );
+                        }
+                        const canDig = typeof onDigClue === "function" && searchLeft > 0;
+                        return (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm clue-dig-btn"
+                            disabled={!canDig}
+                            title={canDig ? "花费 1 次搜证机会，翻出这条线索更深一层的内容" : "本轮搜证次数已用完"}
+                            onClick={() => onDigClue(c.id)}
+                          >
+                            🔍 深入调查{canDig ? "（消耗 1 次搜证）" : ""}
+                          </button>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>

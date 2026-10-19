@@ -72,7 +72,8 @@ async function initDB() {
       content TEXT DEFAULT '',
       location TEXT DEFAULT '',
       round INT DEFAULT 1,
-      clue_type TEXT DEFAULT ''
+      clue_type TEXT DEFAULT '',
+      hidden_content TEXT DEFAULT ''
     );
     CREATE TABLE IF NOT EXISTS dm_manuals (
       script_id UUID PRIMARY KEY REFERENCES scripts(id) ON DELETE CASCADE,
@@ -135,6 +136,8 @@ async function initDB() {
   await query(`ALTER TABLE script_images ADD COLUMN IF NOT EXISTS alt TEXT DEFAULT ''`);
   // 玩家可见性开关：老库补列，默认 TRUE（= 现有剧本照旧对玩家可见，不会因为上线这个改动集体下架）
   await query(`ALTER TABLE scripts ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT TRUE`);
+  // 隐藏线索：老库补列，默认空串（= 该线索没有隐藏层，玩家端不显示「深入调查」）
+  await query(`ALTER TABLE clues ADD COLUMN IF NOT EXISTS hidden_content TEXT DEFAULT ''`);
   console.log("[db] PostgreSQL 表已就绪");
 }
 
@@ -161,8 +164,8 @@ async function saveSplitScript(scriptId, meta, characters, clues, dmData) {
     }
     for (const clue of clues) {
       await c.query(
-        "INSERT INTO clues (script_id, clue_id, content, location, round, clue_type) VALUES ($1,$2,$3,$4,$5,$6)",
-        [scriptId, clue.id, clue.content || "", clue.location || "", parseInt(clue.round) || 1, clue.clueType || ""]
+        "INSERT INTO clues (script_id, clue_id, content, location, round, clue_type, hidden_content) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        [scriptId, clue.id, clue.content || "", clue.location || "", parseInt(clue.round) || 1, clue.clueType || "", clue.hiddenContent || ""]
       );
     }
     await c.query(

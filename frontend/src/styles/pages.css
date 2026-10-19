@@ -638,6 +638,34 @@
 }
 .clue-item .clue-body { color: var(--text); }
 
+/* 深入调查：隐藏层内容与触发按钮。
+   真本 45 条里有 8 条带隐藏层，风格上要和普通线索正文区分开，
+   否则玩家会以为"深入调查出来的东西"本来就是公开线索的一部分。 */
+.clue-dig-btn {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  border-style: dashed;
+}
+.clue-hidden {
+  margin-top: 7px;
+  padding: 7px 10px;
+  border-left: 3px solid var(--brass);
+  border-radius: var(--r-xs);
+  background: var(--brass-tint);
+}
+.clue-hidden-head {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--brass);
+  margin-bottom: 3px;
+}
+.clue-hidden-body {
+  font-size: var(--fs-sm);
+  line-height: 1.7;
+  color: var(--text);
+}
+
 /* ===================== 投票 ===================== */
 .vote-grid {
   display: grid;
