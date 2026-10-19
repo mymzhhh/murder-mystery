@@ -1,4 +1,4 @@
-﻿// 地点搜证 — 把"打字猜关键词"换成"选地点"
+// 地点搜证 — 把"打字猜关键词"换成"选地点"
 //
 // 改造前的问题（老玩家第一眼就会吐槽）：
 //   1. 搜证没有失败状态。game-engine.searchClues 关键词匹配不上时照样随机给一条，
@@ -142,13 +142,21 @@ function mergeSublocations(list) {
  * @param {Array} clues
  * @param {number} [round] 限定轮次；不传则不限
  */
-function availableClues(clues, round) {
+/**
+ * 还能被搜到的线索。
+ * @param {Array} clues 本局全部线索
+ * @param {number} [round] 限定轮次
+ * @param {{includeHidden?:boolean}} [opts] includeHidden=true 把隐藏子线索也算进来（**仅测试局**）
+ */
+function availableClues(clues, round, opts) {
+  const includeHidden = !!(opts && opts.includeHidden);
   return (clues || []).filter((c) => {
     if (!c) return false;
     if (round !== undefined && round !== null && c.round != round) return false; // == 兼容 Redis 字符串轮次
     // 隐藏子线索（真本格式：正文标「通过深入调查 A6…获取」）不进普通搜证池 ——
     // 它只能通过「深入调查」父线索拿到，否则玩家不花额外行动点就白拿（344 共 45 条里 8 条是这种）。
-    if (c.hiddenBehind) return false;
+    // 测试局例外：那里要一次性把全部线索摊开（用户明确要求），见 game/auto-search。
+    if (c.hiddenBehind && !includeHidden) return false;
     return !(c.foundBy && c.foundBy.length > 0);
   });
 }
@@ -169,9 +177,12 @@ function hiddenChildrenOf(clues, parentId) {
  * @param {Array} clues 本局全部线索
  * @param {string} chosen 玩家选择的地点
  * @param {number} [round] 限定轮次；不传则不限
+ * @param {{includeHidden?:boolean}} [opts] includeHidden=true 时把隐藏子线索也算进池 ——
+ *        **只给测试局用**（测试局的目标是把全部线索直接摊开：见 game/auto-search）。
+ *        正常对局必须保持 false，否则隐藏线索不用「深入调查」就白拿，机制形同虚设。
  */
-function cluesAtLocation(clues, chosen, round) {
-  return availableClues(clues, round).filter(c => matchLocation(c.location, chosen));
+function cluesAtLocation(clues, chosen, round, opts) {
+  return availableClues(clues, round, opts).filter(c => matchLocation(c.location, chosen));
 }
 
 /**

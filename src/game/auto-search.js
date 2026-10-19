@@ -70,12 +70,19 @@ async function sweepRound(io, roomCode) {
 
   const by = {};
   let found = 0;
+  let hiddenFound = 0;
+  // ⚠️ 测试局策略（2026-10-19，用户明确要求）：**直接把能拿的线索全拿**，
+  //    包括隐藏子线索 —— 测试局是给管理端看"这本到底写了什么"的，
+  //    留着 5 条要手动「深入调查」才出来的线索，等于报告里永远缺一块。
+  //    隐藏线索的"要玩家自己发现"是对**正常对局**的要求，与此无关：
+  //    人类路径仍走 socket `dig_clue`（search-locations 默认不把子线索放进池）。
+  const sweepOpts = { includeHidden: true };
   // 轮询分配：线索均匀落在各个 AI 头上（不搞"全给第一个"）
   let cursor = 0;
   for (let guard = 0; guard < MAX_SWEEP; guard++) {
     const all = await getClues(roomCode);
     const ranked = buildSearchLocations(all, parsed.layoutDescription)
-      .map(loc => ({ loc, pool: cluesAtLocation(all, loc, round) }))
+      .map(loc => ({ loc, pool: cluesAtLocation(all, loc, round, sweepOpts) }))
       .filter(x => x.pool.length > 0)
       .sort((a, b) => b.pool.length - a.pool.length);   // 先从线索最多的地点搜起
     if (!ranked.length) break;                          // 本轮搜空
@@ -89,6 +96,11 @@ async function sweepRound(io, roomCode) {
         if (!(await claimClue(roomCode, cand.id, who.playerId))) continue;   // 被抢走 → 试下一条
         await assignClue(roomCode, cand.id, who.playerId);
         try { await revealClue(roomCode, cand.id, who.playerId); } catch (e) { /* 公开失败不影响入账 */ }
+        // 隐藏子线索在测试局是直接拿的：标一下 dugBy，免得管理端/per 玩家端还显示「深入调查」按钮
+        if (cand.hiddenBehind) {
+          hiddenFound++;
+          try { await require("./game-manager").markClueDug(roomCode, cand.hiddenBehind, who.playerId); } catch (e) { /* 标记失败不影响入账 */ }
+        }
         recordTurn(roomCode, who.characterName, "search");
         by[who.characterName] = (by[who.characterName] || 0) + 1;
         found++;

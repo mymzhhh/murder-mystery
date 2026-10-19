@@ -1763,10 +1763,14 @@ function GroupedClues({ clues, scriptId }) {
                       </div>
                       <ClueBody clue={c} scriptId={scriptId} />
                       {/* 深入调查：这条线索有隐藏层、还没被挖过时给一个按钮。
-                          代价是一次搜证配额（服务端权威校验），结果全场共享。 */}
+                          代价是一次搜证配额（服务端权威校验），结果全场共享。
+                          ⚠️ 判定必须同时认两种格式：① 有隐藏正文（hiddenContent）；
+                          ② 真本的 diggable 标记 —— 它的隐藏内容是**独立编号的子线索**，
+                             父线索本身没有 hiddenContent，只认① 的话按钮永远不出现。 */}
                       {(() => {
                         const hidden = String(c.hiddenContent || "").trim();
-                        if (!hidden) return null;
+                        const canDigThis = !!hidden || c.diggable === true;
+                        if (!canDigThis) return null;
                         if (c.dugContent) {
                           return (
                             <div className="clue-hidden">

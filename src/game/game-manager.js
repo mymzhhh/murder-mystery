@@ -1,4 +1,4 @@
-// 游戏房间管理 — Redis 持久化（并发安全版）
+﻿// 游戏房间管理 — Redis 持久化（并发安全版）
 // 使用 WATCH+MULTI 乐观锁 + 独立 key 设计避免误冲突
 const { getRedis, scanKeys, ensureRedis } = require("../core/redis-client");
 const { v4: uuidv4 } = require("uuid");
@@ -352,6 +352,27 @@ async function digClue(code, clueId, playerId) {
 }
 
 /**
+ * 把一条线索直接标记为"已被深入调查过"（不走配额、不做校验）。
+ *
+ * **只给测试局用**（game/auto-search）：测试局的策略是把全部线索一次摊开，
+ * 隐藏子线索被直接搜出来了，父线索若还挂着「深入调查」按钮就会前后不一致。
+ * 正常对局绝不能调用它 —— 那等于跳过"要玩家自己发现"的设计。
+ */
+async function markClueDug(code, clueId, playerId) {
+  const r = await ensureConn();
+  const contentKey = clueKey(code, clueId);
+  const raw = await r.get(contentKey);
+  if (!raw) return { ok: false, error: "CLUE_NOT_FOUND" };
+  const who = playerId || "auto-search";
+  await r.set(`game:${code}:clue:${clueId}:dug`, who);
+  const clue = JSON.parse(raw);
+  clue.dugBy = who;
+  if (String(clue.hiddenContent || "").trim()) clue.dugContent = clue.hiddenContent;
+  await r.set(contentKey, JSON.stringify(clue));
+  return { ok: true, clue };
+}
+
+/**
  * 把一条线索单独给某位玩家看。只有发现者本人可以分享。
  * @returns {{ ok: boolean, error?: string, clue?: object }}
  */
@@ -621,7 +642,7 @@ async function saveNotes(code, playerName, notes) {
 module.exports = {
   createRoom, getRoom, updateRoom, deleteRoom,
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
-  loadClues, getClues, assignClue, getPlayerClues, revealClue, digClue, shareClue,
+  loadClues, getClues, assignClue, getPlayerClues, revealClue, digClue, markClueDug, shareClue,
   claimClue, claimCharacter, releaseCharacterClaim, releaseCharacterClaims,
   recordVote, getVotes, clearVotes,
   SEARCH_MAX_PER_ROUND, getSearchQuota, consumeSearchQuota, clearSearchQuota, hasSearchBudget,
