@@ -2588,10 +2588,15 @@ async function buildMurderMystery(userInput, onProgress, config) {
           outline: report.outline,
           meta: { location: (report.outline && report.outline.setting && report.outline.setting.location) || "", era: (report.outline && report.outline.setting && report.outline.setting.era) || "" },
           characters: (report.characters || []).map((c) => ({ name: c.name, occupation: c.occupation })),
+          // ⚠️ 必须把成稿交给配图：正文里 `![线索·图片N](img:cluedoc-N)` 的引用要**按引用出图**，
+          //    否则引用指向不存在的图（碎图），或者图与线索内容无关。见 script-images.planImageJobs。
+          scriptText: fullScript,
           options: {
             cover: imgCfg.cover !== false,
             characters: !!imgCfg.characters,
             clues: Number(imgCfg.clues) || 0,
+            clueRefs: imgCfg.clueRefs !== false,
+            maxClueRefs: Number(imgCfg.maxClueRefs) || 6,
             width: Number(imgCfg.width) || 768,
             height: Number(imgCfg.height) || 768,
           },

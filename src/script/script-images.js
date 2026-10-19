@@ -1,4 +1,4 @@
-// 剧本配图：用本机 ComfyUI（Qwen-Image 2.1）给生成的剧本出封面 / 角色立绘 / 线索卡。
+﻿// 剧本配图：用本机 ComfyUI（Qwen-Image 2.1）给生成的剧本出封面 / 角色立绘 / 线索卡。
 //
 // 为什么需要（2026-10-18 对标结果）：真本《吉普赛女郎之死》带 **24 张图**
 // （角色立绘 char-*、线索文档 cluedoc-*、真相时间线 manual-*），
@@ -221,6 +221,91 @@ function buildCharacterPrompt(name, ch, meta) {
 const KEY_RE = /^[A-Za-z0-9_-]{1,64}$/;
 function isValidKey(k) { return KEY_RE.test(String(k || "")); }
 
+/**
+ * 从成稿里收集"正文引用的配图"：`![说明](img:键名)` 独立成行的那些。
+ *
+ * 为什么必须按引用来出图（2026-10-19）：真本的线索正文里就写着
+ * `![线索·图片3](img:cluedoc-3)`，前端 ScriptBody 会把它渲染成真图；
+ * 而我们是"先随便出几张图再挂上去"—— 正文一个引用都没有，图只是附加展示，
+ * 玩家推不出"弹道示意""账本笔迹"这类信息。所以出图必须**跟着引用走**，
+ * 否则要么引用指向不存在的图（碎图），要么图与线索无关。
+ *
+ * 同时把引用**所在的线索块正文**一起带回来 —— 出图提示词要从线索内容推，
+ * 不能用一句通用的"线索道具照片"（那样出来的图和线索毫无关系）。
+ * @returns {Array<{key:string, alt:string, context:string}>}
+ */
+function collectImageRefs(markdown) {
+  const text = String(markdown || "");
+  const out = [];
+  const seen = new Set();
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*!\[([^\]]*)\]\(\s*img:([A-Za-z0-9_-]{1,64})\s*\)\s*$/);
+    if (!m) continue;
+    const key = m[2];
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // 回取上下文：向上找最近的 ### 标题，向下取到空行/下一个 ### 为止
+    let start = i;
+    for (let j = i; j >= 0 && i - j < 12; j--) {
+      if (/^#{3,4}\s+\S/.test(lines[j])) { start = j; break; }
+    }
+    let end = i + 1;
+    for (let j = i + 1; j < lines.length && j - i < 12; j++) {
+      if (!lines[j].trim() || /^#{1,4}\s+\S/.test(lines[j])) break;
+      end = j + 1;
+    }
+    const ctx = lines.slice(start, end).join(" ").replace(/!\[[^\]]*\]\([^)]*\)/g, "").trim();
+    out.push({ key, alt: (m[1] || "").trim(), context: ctx.slice(0, 400) });
+  }
+  return out;
+}
+
+/** 由线索上下文拼出图提示词（信息图优先，不要装饰照） */
+function buildClueImagePrompt(ref) {
+  const r = ref || {};
+  const ctx = String(r.context || "").replace(/\s+/g, " ").trim();
+  const bits = [
+    "剧本杀线索证物图，勘查记录风格",
+    r.alt ? `图名：${r.alt}` : "",
+    ctx ? `线索内容：${ctx.slice(0, 180)}` : "",
+    "桌面俯拍特写，暗调，写实细节清晰，像现场勘查照片",
+    "画面内不得出现任何文字、标牌、书刊封面",
+  ].filter(Boolean);
+  return bits.join("，");
+}
+
+/**
+ * 把「线索／DM／封面」提示词拼成一组待出图任务。
+ * @param {{scriptText?:string, outline?:object, meta?:object, characters?:Array, options?:object}} args
+ */
+function planImageJobs(args) {
+  const a = args || {};
+  const opt = a.options || {};
+  const jobs = [];
+  if (opt.cover !== false) {
+    jobs.push({ key: "cover", alt: "剧本封面", prompt: buildCoverPrompt(a.outline, a.meta) });
+  }
+  // 正文引用的图**优先**：宁可少出立绘，也不能让正文里的引用指向不存在的图
+  if (opt.clueRefs !== false && a.scriptText) {
+    const refs = collectImageRefs(a.scriptText).slice(0, opt.maxClueRefs || 6);
+    for (const r of refs) {
+      jobs.push({ key: r.key, alt: r.alt || `线索配图 ${r.key}`, prompt: buildClueImagePrompt(r) });
+    }
+  }
+  if (opt.characters) {
+    (a.characters || []).slice(0, opt.maxCharacters || 6).forEach((c, i) => {
+      jobs.push({ key: `char-${i + 1}-1`, alt: `${c.name} 立绘`, prompt: buildCharacterPrompt(c.name, c, a.meta) });
+    });
+  }
+  for (let i = 0; i < (opt.clues || 0); i++) {
+    const key = `cluedoc-${i + 1}`;
+    if (jobs.some((j) => j.key === key)) continue;   // 正文已经引用过这个键，别重复出图
+    jobs.push({ key, alt: `线索图 ${i + 1}`, prompt: `剧本杀线索道具照片，第${i + 1}号证物特写，桌面俯拍，暗调，细节清晰，无文字` });
+  }
+  return jobs;
+}
+
 async function attachScriptImages(args) {
   const a = args || {};
   const opt = a.options || {};
@@ -239,24 +324,9 @@ async function attachScriptImages(args) {
     workflow: wf, host: a.host, port: a.port,
     width: opt.width || 768, height: opt.height || 768, steps: opt.steps || 8,
   };
-  const jobs = [];
-  if (opt.cover !== false) {
-    jobs.push({ key: "cover", alt: "剧本封面", prompt: buildCoverPrompt(a.outline, a.meta) });
-  }
-  if (opt.characters) {
-    (a.characters || []).slice(0, opt.maxCharacters || 6).forEach((c, i) => {
-      // ⚠️ 键名只允许 ASCII（script_images 的约束，中文名会被整体拒绝）。
-      // 所以键名一律用序号，人名放进 alt（前端展示的是 alt，不是键名）。
-      jobs.push({
-        key: `char-${i + 1}-1`,
-        alt: `${c.name} 立绘`,
-        prompt: buildCharacterPrompt(c.name, c, a.meta),
-      });
-    });
-  }
-  for (let i = 0; i < (opt.clues || 0); i++) {
-    jobs.push({ key: `cluedoc-${i + 1}`, alt: `线索图 ${i + 1}`, prompt: `剧本杀线索道具照片，第${i + 1}号证物特写，桌面俯拍，暗调，细节清晰，无文字` });
-  }
+  // 任务清单统一由 planImageJobs 产出：封面 → **正文引用的图（优先）** → 立绘 → 追加线索图。
+  // 正文引用的图排在最前，是因为"引用指向不存在的图"会直接碎图，比少几张立绘严重。
+  const jobs = planImageJobs(a);
 
   // 负向词里必须显式点名"招牌/汉字/标牌"：实测只写"文字"挡不住模型在店招上写乱码汉字
   const negative = "文字,汉字,招牌,店招,标牌,门头字,乱码,字幕,水印,logo,签名,低质量,模糊,畸形,多余肢体,恐怖,血腥";
@@ -283,6 +353,6 @@ async function attachScriptImages(args) {
 
 module.exports = {
   loadWorkflow, findByClass, inject, isOnline, generateImage,
-  buildCoverPrompt, buildCharacterPrompt, attachScriptImages, isValidKey,
+  buildCoverPrompt, buildCharacterPrompt, buildClueImagePrompt, collectImageRefs, planImageJobs, attachScriptImages, isValidKey,
   DEFAULT_HOST, DEFAULT_PORT, WORKFLOW, HOST_CANDIDATES, resolveHost,
 };
