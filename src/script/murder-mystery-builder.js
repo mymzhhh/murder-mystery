@@ -1816,6 +1816,12 @@ async function buildMurderMystery(userInput, onProgress, config) {
     npcCount: config?.npcCount ?? (config?.isPVE ? 2 : 0),
     isPVE: config?.isPVE ?? (config?.npcCount > 0),
     advancedMode: ["hardcore", "emotional"].includes(config?.advancedMode) ? config.advancedMode : "standard",
+    // ⚠️ 这里是**白名单重建**：函数后半段只认 cfg，因此凡是下游要用的字段都必须列进来。
+    //    2026-10-20 第二次踩坑：漏了 sessionId → 配图存到空 script_id（8 张图全成孤儿）。
+    //    这已是同类事故的第三次（前两次：script-writer 漏 images、getSplitData 漏类型归一）。
+    //    配套有元测试 tests/unit/builder-config-whitelist.test.js 自动比对"代码里用到的 cfg.* 字段
+    //    是否都在这个白名单里"，以后漏字段会直接测试失败。
+    sessionId: config?.sessionId || "",
     // 配图（可选）：默认关闭 —— 本机 Qwen-Image 单张约 40s 起，不该让每次生成都默认多花几分钟。
     // 调用方显式传 { images: { enabled: true, cover: true, characters: false, clues: 0 } } 才出图。
     images: config?.images && typeof config.images === "object" ? config.images : null,
