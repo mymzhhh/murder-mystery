@@ -71,12 +71,13 @@ function timelineEntries(text) {
   for (const line of String(text || "").split("\n")) {
     const s = line.trim();
     if (!s) continue;
-    // ⚠️ 必须容忍两种真实写法（都是实测生成稿里出现的）：
+    // ⚠️ 必须容忍三种真实写法（都是实测生成稿里出现的）：
     //   ① 日期前缀：`- **10月21日 21:30（真实，座钟21:15）**：…`
     //   ② 日期与时刻之间夹标注：`- **12月21日 【真实】19:30**：…`
-    // 第一版只认"日期+时刻"紧挨着，遇到 ② 一条都抽不到 —— 于是"凶手手法落地"那条校验
-    // 会误报"时间线里没有这个时刻的条目"（真实生成稿里 沈砚 16 条时间线被判成 0 条）。
-    const m = s.match(/^[-*•]?\s*\**\s*(?:\d{1,2}\s*月\s*\d{1,2}\s*日\s*)?(?:[【（(][^】）)]{0,12}[】）)]\s*)?(\d{1,2})\s*[:：]\s*(\d{2})/);
+    //   ③ **时刻后面跟标注**：`- **1937年1月14日 21:00【座钟】**：一楼大厅 — …`
+    //      2026-10-20《山坳雪夜烛影》整本都是 ③。前两版都不认 → 5 个角色时间线全被判 0 条
+    //      → "凶手手法落地"连报 9 条假问题 → 假问题送进修订 → 整段重写 → 吞掉 4 个角色。
+    const m = s.match(/^[-*•]?\s*\**\s*(?:(?:\d{2,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日\s*)?(?:[【（(][^】）)]{0,12}[】）)]\s*)?(\d{1,2})\s*[:：]\s*(\d{2})(?:\s*[【（(][^】）)]{0,12}[】）)])?/);
     if (!m) continue;
     out.push({ minutes: Number(m[1]) * 60 + Number(m[2]), text: s });
   }
@@ -96,8 +97,15 @@ function checkMurdererMethodInTimeline(opts) {
   if (!sec) return [];
   const text = String(sec.text || "");
   const issues = [];
-  // 手法声明：优先取「凶手确认」章节；没有就全文找
-  const mSection = text.split(/###\s*[^\n]*(?:凶手确认|作案过程|手法)[^\n]*\n/)[1] || text;
+  // 手法声明：优先取「凶手确认」章节。
+  // ⚠️ 没有该章节时**不能拿整篇当声明**（2026-10-20 实测事故）：
+  //    整篇里时间线本身就是一行一条带时刻的条目，且几乎每条都含"放/推/调"这类动词，
+  //    于是时间线条目被当成"手法声明"，再拿去和时间线比对 —— 自己和自己比却比对不上
+  //    （因为条目时刻解析失败），连报 9 条假问题；假问题进了修订，最终吞掉 4 个角色。
+  //    正确做法：退到"时间线之前的部分"（背景/任务/秘密），绝不包含时间线本身。
+  const mHead = text.split(/###\s*[^\n]*(?:凶手确认|作案过程|手法)[^\n]*\n/)[1];
+  const beforeTimeline = text.split(/###\s*[^\n]*(?:时间线|时间轴|时间线梳理)[^\n]*\n/)[0];
+  const mSection = mHead || beforeTimeline || "";
   const claims = [];
   for (const seg of mSection.split(/[；;\n]/)) {
     const cs = clocksIn(seg);
@@ -106,7 +114,9 @@ function checkMurdererMethodInTimeline(opts) {
     claims.push({ minutes: cs[0].minutes, text: seg.trim().slice(0, 80) });
   }
   if (!claims.length) {
-    return [`【逻辑·凶手手法】${name} 的「凶手确认」里找不到带时刻的手法声明，无法核对时间线是否落地`];
+    // 有「凶手确认」段却没有带时刻的声明 → 这是真问题（声明无法核对）；
+    // 压根没有这个段 → 无法核对，**静默跳过**（很多本没这个段，报了只会制造噪音）
+    return mHead ? [`【逻辑·凶手手法】${name} 的「凶手确认」里找不到带时刻的手法声明，无法核对时间线是否落地`] : [];
   }
   const entries = timelineEntries(text);
   for (const c of claims.slice(0, 8)) {

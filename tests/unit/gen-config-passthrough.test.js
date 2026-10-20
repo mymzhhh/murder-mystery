@@ -44,3 +44,9 @@ test("不修改调用方传来的对象（避免上游被悄悄改掉）", () =>
   buildGenConfig(BASE, sc);
   assert.strictEqual(JSON.stringify(sc), before);
 });
+
+test("sessionId 要能透传（配图按 scriptId 落库，builder 里拿不到会话）", () => {
+  const cfg = buildGenConfig({ playerCount: 5, npcCount: 0, isPVE: false }, { images: { enabled: true } });
+  cfg.sessionId = "abc-123";
+  assert.strictEqual(cfg.sessionId, "abc-123");
+});

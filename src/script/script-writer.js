@@ -283,6 +283,10 @@ async function writeScript(userInput, onProgress, scriptConfig) {
       isPVE: String(isPVE),
     });
     await addMessage(session.sessionId, "user", userInput);
+    // 配图要按 scriptId 落库，而 builder 里拿不到会话 —— 必须在调用前把 id 传下去。
+    // 实测事故（2026-10-20）：builder 用的是 `report.sessionId || report.scriptId || ""`，
+    // 两个都为空 → 8 张图存到 script_id='' 上，切分后一个都取不到（页面全是碎图）。
+    genConfig.sessionId = session.sessionId;
 
     let genInput = enhancedInput;
     if (attempt > 0) {

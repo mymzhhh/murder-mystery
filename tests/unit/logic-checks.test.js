@@ -178,3 +178,28 @@ test("「共N条」跟总数和任何轮次都对不上 → 仍然报", () => {
   const issues = L.checkTruthClueCoverage(truth, ids);
   assert.ok(issues.some((s) => s.includes("共40条")), "40 既不是总数也不是任何一轮，必须报");
 });
+
+test("时刻后面跟【座钟】的写法必须能解析（2026-10-20 山坳雪夜整本都是这个格式）", () => {
+  const t = [
+    "### 二、你的时间线",
+    "- **1937年1月14日 21:00【座钟】**：一楼大厅 — 我坐在桌边和在场的人寒暄。",
+    "- **1937年1月14日 21:15【真实】**：一楼大厅 — 我看见赵大山起身往后厨方向走。",
+  ].join("\n");
+  const es = L.timelineEntries(t);
+  assert.strictEqual(es.length, 2, "两条都要能解析出来");
+  assert.deepStrictEqual(es.map((e) => e.minutes), [21 * 60, 21 * 60 + 15]);
+});
+
+test("没有「凶手确认」段时，不能把自己的时间线当手法声明（否则连报假问题）", () => {
+  // 真实事故形态：凶手本只有背景 + 时间线，没有"凶手确认"章节。
+  // 旧实现拿整篇当声明 → 时间线条目被当声明 → 比对失败 → 9 条假问题 → 修订吞角色。
+  const script = [
+    "### 一、你的背景故事",
+    "我叫沈砚，来山区采风。",
+    "### 二、你的时间线",
+    "- **1937年1月14日 21:00【座钟】**：一楼大厅 — 我把茶碗放在桌上，转身离开。",
+    "- **1937年1月14日 22:10【座钟】**：地下室 — 我用铜烛台击打林桂兰后脑。",
+  ].join("\n");
+  const issues = L.checkMurdererMethodInTimeline({ sections: [{ name: "沈砚", text: script }], murdererName: "沈砚" });
+  assert.deepStrictEqual(issues, [], "不该把自己的时间线条目当声明来判自己");
+});

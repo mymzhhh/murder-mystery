@@ -2583,8 +2583,15 @@ async function buildMurderMystery(userInput, onProgress, config) {
         const { attachScriptImages } = require("./script-images");
         const { saveScriptImage } = require("../core/db");
         if (onProgress) onProgress("images", "正在生成封面配图（本机 ComfyUI）...");
+        // ⚠️ 必须拿到 scriptId，否则图片会存到空 id 上（2026-10-20 实测：8 张图全成孤儿）。
+        // 优先级：cfg.sessionId（script-writer 传入）→ report 上的 → 明确报错而不是静默存空。
+        const imgScriptId = (cfg && cfg.sessionId) || report.sessionId || report.scriptId || "";
+        if (!imgScriptId) {
+          console.warn("[builder] 配图缺少 scriptId，跳过（否则图片会存到空 id 上，切分后取不到）");
+          throw new Error("missing scriptId for images");
+        }
         const imgRes = await attachScriptImages({
-          scriptId: report.sessionId || report.scriptId || "",
+          scriptId: imgScriptId,
           outline: report.outline,
           meta: { location: (report.outline && report.outline.setting && report.outline.setting.location) || "", era: (report.outline && report.outline.setting && report.outline.setting.era) || "" },
           characters: (report.characters || []).map((c) => ({ name: c.name, occupation: c.occupation })),
@@ -2702,6 +2709,22 @@ async function buildMurderMystery(userInput, onProgress, config) {
     }
   } catch (e) {
     console.warn("[builder] 角色标题完整性检查跳过:", e.message);
+  }
+
+  // ===== 角色段落丢失的最后防线（正文也没了就从 characterScripts 整段重建）=====
+  // 实测：2026-10-20《山坳雪夜烛影》5 人本只剩 1 人 —— 修订整段重写把另外 4 段吞了。
+  try {
+    const re = restoreMissingCharacterSections(fullScript, report.characters || [], report.characterScripts || {});
+    if (re.restored.length) {
+      fullScript = re.text;
+      const names = re.restored.map((r) => `${r.name}(${r.chars}字)`).join("、");
+      console.warn(`[builder] ⚠️ 角色段落丢失，已从原文重建 ${re.restored.length} 个：${names}`);
+      if (onProgress) onProgress("revise", `⚠️ 修订误删了 ${re.restored.length} 个角色段落，已从原文重建：${names}`);
+      if (!report.structureRepairs) report.structureRepairs = [];
+      report.structureRepairs.push({ kind: "missing-character-section", names: re.restored.map((r) => r.name) });
+    }
+  } catch (e) {
+    console.warn("[builder] 角色段落恢复跳过:", e.message);
   }
 
   // ========== 阶段 4.7：时间线一致性后处理（长期校准；失败静默保留原文） ==========
@@ -4485,6 +4508,67 @@ function repairMissingCharacterHeadings(fullScript, characters) {
   return { text: lines.join("\n"), fixed };
 }
 
+/**
+ * 角色段落丢失的**最后防线**：正文也被吞掉时，从 report.characterScripts 整段重建。
+ *
+ * 2026-10-20《山坳雪夜烛影》实测事故：
+ *   5 个角色生成完毕，成稿里却只剩沈砚 1 个 —— 另外 4 个角色的**标题与正文全没了**
+ *   （原文从约 35k 掉到 21k）。链路是：逻辑校验误报 9 条假问题 → 送进修订 →
+ *   「整段重写」把沈砚那一段替换成了只含沈砚的正文，其余四段被一并吞掉。
+ *   repairMissingCharacterHeadings 只能补标题，补不了已经消失的正文 —— 所以要有这一层。
+ *
+ * 做法：缺谁就从 characterScripts 取回原文，按 assembleScript 的格式补在人物角色区块末尾。
+ * @returns {{text:string, restored:Array<{name:string, chars:number}>}}
+ */
+function restoreMissingCharacterSections(fullScript, characters, characterScripts) {
+  const text = String(fullScript || "");
+  const chars = (characters || []).filter((c) => c && c.name);
+  const scripts = characterScripts || {};
+  if (!chars.length) return { text, restored: [] };
+
+  const present = new Set();
+  for (const line of text.split("\n")) {
+    if (!isCharacterHeadingLine(line)) continue;
+    const m = line.match(/[：:]\s*(.+?)\s*$/);
+    if (!m) continue;
+    const nm = cutCharacterName(m[1]) || m[1].trim();
+    if (nm) present.add(nm);
+  }
+  const missing = chars.filter((c) => !present.has(c.name) && String(scripts[c.name] || "").trim());
+  if (!missing.length) return { text, restored: [] };
+
+  const lines = text.split("\n");
+  // 插到人物角色区块末尾：下一个一级标题（`# 第X部分`/`# 第三部分`…）之前
+  let insertAt = lines.length;
+  let seenCharacterBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s*玩家角色剧本/.test(lines[i].trim())) seenCharacterBlock = true;
+    if (seenCharacterBlock && /^#\s+\S/.test(lines[i]) && !/^#\s*第二部分/.test(lines[i])) {
+      insertAt = i;
+      break;
+    }
+  }
+
+  const block = [];
+  for (const ch of missing) {
+    const idx = chars.findIndex((c) => c.name === ch.name) + 1;
+    const isNpc = ch.type === "npc";
+    block.push(`${isNpc ? "### NPC" : "### 玩家角色"} ${idx}：${ch.name}${ch.isMurderer ? " [凶手]" : ""}`);
+    if (ch.isMurderer) block.push("> ⚠️ 你就是凶手！你的处境与真实过程见下方剧本。", "");
+    const meta = [];
+    if (ch.occupation) meta.push(`职业/身份：${ch.occupation}`);
+    if (ch.personality) meta.push(`语气：${ch.personality}`);
+    if (ch.goal) meta.push(`个人任务：${ch.goal}`);
+    if (meta.length) block.push(`> ${meta.join(" ｜ ")}`, "");
+    block.push(String(scripts[ch.name]).trim(), "");
+  }
+  lines.splice(insertAt, 0, ...block);
+  return {
+    text: lines.join("\n"),
+    restored: missing.map((c) => ({ name: c.name, chars: String(scripts[c.name]).replace(/\s+/g, "").length })),
+  };
+}
+
 function assembleScript(report, userInput) {
   const parts = [];
   const chars = report.characters || [];
@@ -4713,4 +4797,4 @@ function playerCharsCount(players) {
   return players && players.length ? String(players.length) : "";
 }
 
-module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, splitScriptSections, replaceSectionBody, finalRewriteBySection, isCharacterHeadingLine, repairMissingCharacterHeadings, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
+module.exports = { runStage, withTimeout, STAGE_TIMEOUT_MS, buildMurderMystery, LIMITS, extractLayoutPlaces, normalizeClueLocations, buildOutline, outlineToText, extractCharactersFromOutline, extractCharactersFallback, runModuleCrossCheck, assembleScript, fwSection, fwField, MIN_TIMELINE_POINTS, MIN_NPC_TIMELINE_POINTS, countTimelinePoints, extractCharacterTimeline, ensureTimelineComplete, buildCrossCheckDigest, applyPatches, splitScriptSections, replaceSectionBody, finalRewriteBySection, isCharacterHeadingLine, repairMissingCharacterHeadings, restoreMissingCharacterSections, buildSectionDigest, reviseByCrossCheck, buildCharacterPrompt, parseTimeOffset, shiftClock, buildTimeAxis, checkTrickObservability, parseCaseDate, buildFrameworkPrompt, checkEraCarriers, detectEra, checkRoundUnlock, replaceClueBlock, extractClueBlocks, findTamperMoment, minutesOf, findDeathMoment, characterAnchors, buildSharedFacts, checkVictimAfterDeath, buildEventTable, crossesMidnight, nextDayLabel, parseCnNum, cnNum, checkDateLabels, ensureDateConsistent, parseCnDay, parseDateLabel, compareDateLabels, victimActs, buildPublicEventTable, normalizePublicEvents, validatePublicEvents, ensurePublicEvents, checkPublicEventAnchors, rosterNames, midnightRuleText, MIN_PUBLIC_EVENTS, applyLineRewrites, checkDateAgreement, dateDiffDays, buildObjectStateTable, validateObjectStates, ensureObjectStates, MIN_OBJECT_STATES, nameAccuses, buildStructuredSummary, ensureDeathConsistent, onCaseNight, causeKeywords, extractCharacterSections, deterministicSnapshot, snapshotRegressions, hmOf };
