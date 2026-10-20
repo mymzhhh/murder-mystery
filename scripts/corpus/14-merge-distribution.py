@@ -20,7 +20,7 @@ BASE = r"C:\cluade code\ppt\text-gen-agent\data\corpus"
 SKILL_REF = r"C:\cluade code\ppt\text-gen-agent\skills\murder-mystery-distill\references"
 HOLDOUT = {"152-绝命阳光号（4人封闭）", "134-致命喷泉（4人封闭）"}
 
-A1_ONLY = ["线索条数", "线索分组数", "线索轮数", "线索字数", "隐藏线索标记"]
+A1_ONLY = ["线索条数", "线索段落数", "线索分组数", "线索轮数", "线索字数", "隐藏线索标记"]
 COMBINED = ["总字数", "角色本数", "角色本中位", "角色本最长", "角色本最短",
             "时间线时刻数", "真相字数", "手册字数", "手册首段字数", "分幕数", "图片文件数"]
 

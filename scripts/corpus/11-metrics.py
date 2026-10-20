@@ -29,7 +29,7 @@ ACT_RE = re.compile(r"【第\s*([一二三四五六七八九十\d]+)\s*幕")
 TIME_RE = re.compile(r"(\d{1,2}\s*[:：]\s*\d{2})|(\d{1,2}\s*点\s*(半|\d{1,2}\s*分)?)|([上下]午\s*\d{1,2}\s*点)")
 NUM_ITEM = re.compile(r"^\s*(\d{1,3})\s*[.、)]\s*\S", re.M)
 ROUND_RE = re.compile(r"第\s*([一二三四五六七八九十\d]+)\s*轮")
-HIDDEN_RE = re.compile(r"发现隐藏线索|深入调查")
+HIDDEN_RE = re.compile(r"发现隐藏线索|深入调查|隐藏线索|隐藏剧情|支线线索|特殊线索|可深挖")
 # AP：中文紧邻时 \b 不生效，改用 ASCII 边界
 AP_RE = re.compile(r"(?<![A-Za-z])AP(?![A-Za-z])|行动点|搜证次数|搜查次数")
 
@@ -140,10 +140,12 @@ def main():
             "分幕数": len(acts),
             "时间线时刻数": timeline_lines,
             "线索条数": len(NUM_ITEM.findall(clue_text)),
+            # 线索段落数：散文式线索文档没有 1./2. 编号，用"有实体内容的段落数"当条目数代理
+            "线索段落数": len([p for p in re.split(r"\n\s*\n", clue_text) if len(re.sub(r"\s+", "", p)) >= 12]),
             "线索分组数": len(groups),
             "线索轮数": len(set(ROUND_RE.findall(clue_text))),
             "线索字数": chars_of(clue_text),
-            "隐藏线索标记": len(HIDDEN_RE.findall(clue_text)),
+            "隐藏线索标记": len(HIDDEN_RE.findall(clue_text + "\\n" + "\\n".join(role))),
             # 真相：优先独立文件；很多本没有独立"真相.docx"，真相写在手册里
             # → 回退成"手册里从「真相/复盘/解析」那一行开始到结尾"的字数
             "真相字数": max(
@@ -163,7 +165,7 @@ def main():
 
     print(f"量化完成 {len(rows)} 本 → {OUT_CSV}\n")
     keys = ["总字数", "角色本数", "角色本中位", "角色本最长", "分幕数", "时间线时刻数",
-            "线索条数", "线索分组数", "线索轮数", "线索字数", "隐藏线索标记",
+            "线索条数", "线索段落数", "线索分组数", "线索轮数", "线索字数", "隐藏线索标记",
             "真相字数", "手册字数", "手册首段字数", "图片文件数"]
     print(f"{'指标':<14}{'有值':>5}{'最小':>8}{'中位':>8}{'最大':>8}")
     print("-" * 45)
