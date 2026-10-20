@@ -23,3 +23,4 @@ _verify/
 
 # 剧本库备份（含全部剧本文本，体积会持续增长；只留本地/异地，不入库）
 backups/
+scripts/corpus/__pycache__/
