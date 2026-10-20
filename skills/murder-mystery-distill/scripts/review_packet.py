@@ -22,7 +22,8 @@ DIST = os.path.join(HERE, "..", "references", "distribution.json")
 TIME_RE = re.compile(r"(\d{1,2})\s*[:：]\s*(\d{2})")
 CLUE_HEAD = re.compile(r"^#{3,4}\s*([ABC]\d{1,3})\s*[：:]\s*(.*)$", re.M)
 NUM_ITEM = re.compile(r"^\s*(\d{1,3})\s*[.、)]\s*\S", re.M)
-CONCLUSION = re.compile(r"说明|证明|表明|可见|因此|显然|毫无疑问")
+# 注意："可见"不算结论化 —— 中文里"拆开外罩后，可见机芯有划痕"是正常描述（实测误报）
+CONCLUSION = re.compile(r"说明|证明|表明|因此|显然|毫无疑问")
 # 父线索必须**在同一句里带括号标记**，不能在正文任意位置提到"深入调查"就算 ——
 # 实测：宽匹配会把 5 个父线索数成 22 个（正文里到处都在提这个机制）
 HIDDEN_PARENT = re.compile(r"[（(][^）)]{0,20}(?:发现隐藏线索|可深入调查|可深挖)[^）)]{0,20}[）)]")
@@ -116,11 +117,27 @@ def main():
     A("")
     flags = []
 
+    # 凶手识别顺序（2026-10-20 实测：用"真凶"当特征会认错人 ——
+    # 清白角色的任务里就写着"找出杀害 X 的真凶"，于是把好人判成凶手）：
+    #   ① 正文标题带 `[凶手]` 标记（最可靠）
+    #   ② 正文写「你就是凶手」/「你是本案真凶」
+    #   ③ 有「凶手确认」章节
+    # 「真凶」单独出现**不能**当特征。
     killer = None
     for n, t in roles:
-        if re.search(r"凶手确认|你就是凶手|你是本案真凶|真凶", t):
+        if re.search(r"^###\s*[^\n]*\[凶手\][^\n]*$", t, re.M):
             killer = (n, t)
             break
+    if not killer:
+        for n, t in roles:
+            if re.search(r"你就是凶手|你是本案真凶", t):
+                killer = (n, t)
+                break
+    if not killer:
+        for n, t in roles:
+            if re.search(r"凶手确认", t):
+                killer = (n, t)
+                break
     if not killer and roles:
         killer = roles[0]
 
