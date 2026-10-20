@@ -367,7 +367,7 @@ function trickDesignToText(design) {
 }
 
 /** 组装提示词。注意：不要求模型"输出思考过程"——要的是结构化的设计结论（见文件头注释）。 */
-function buildTrickPrompt(userInput, cfg, feedback) {
+function buildTrickPrompt(userInput, cfg, feedback, bannedTypes) {
   const { playerCount = 6, npcCount = 0, isPVE = false } = cfg || {};
   const system = `你是剧本杀核心诡计设计师。你的产出是**一份可直接施工的诡计设计书**，后续的大纲、角色剧本、线索、DM 手册全部以它为准。
 
@@ -386,10 +386,19 @@ function buildTrickPrompt(userInput, cfg, feedback) {
    - 一条 \`independent-time-source\`（独立时间源：怀表/手表的具体读数、尸检对死亡时间的判定、带时间戳的记录），
    - 一条 \`clock-anomaly\`（公共时钟本身的异常：机芯有近期拨动痕迹、与可靠时间源对不上）。
    注意：**停摆的钟不能充当时间基准**，它只能说明自己停在哪一刻。
-7. 禁止超自然设定（魔法/穿越/超能力/鬼魂等）。`;
+7. 禁止超自然设定（魔法/穿越/超能力/鬼魂等）。
+8. **类型多样性纪律**（用户实测反馈：连着几本全是时间诡计）：
+   - 若「用户需求」没有明确要求时钟/时间要素，**优先选密室 / 身份错位 / 不在场证明 / 叙述性诡计**；
+   - 时间诡计只在"其它类型确实做不到需求"时才允许，且必须在 coreTrick 里一句话说明为什么非它不可；
+   - 如果给了「本次禁止的类型」，那是硬约束，违反会被打回。`;
 
+  const banList = Array.isArray(bannedTypes) ? bannedTypes.filter((x) => TRICK_TYPES.includes(x)) : [];
   const user = `## 用户需求
 ${userInput}
+
+${banList.length ? `## 本次禁止的诡计类型（硬约束，违反会被打回）
+${banList.map((x) => `- ${x}`).join("\n")}
+（这些类型最近几本刚用过，玩家会觉得雷同。请在剩下的类型里选一个真能成立的。）` : ""}
 
 ## 规模约束
 - 玩家角色 ${playerCount} 人${npcCount > 0 ? `，NPC ${npcCount} 人` : "，无 NPC"}
@@ -444,11 +453,26 @@ async function designTrick(userInput, cfg, onProgress, opts = {}) {
   let feedback = [];
   let lastErrors = [];
 
+  // 类型多样性：把最近几本用过的类型禁掉（2026-10-20 用户反馈"全是时间诡计"）
+  let bannedTypes = Array.isArray(opts.bannedTypes) ? opts.bannedTypes.slice() : [];
+  if (!bannedTypes.length) {
+    try {
+      const mem = require("./trick-types-memory");
+      const recent = await mem.getRecentTrickTypes();
+      bannedTypes = mem.computeBannedTypes(recent, TRICK_TYPES);
+      if (bannedTypes.length) {
+        console.log(`[trick-design] 本次禁用类型（最近用过）：${bannedTypes.join("、")}`);
+      }
+    } catch (e) {
+      console.warn("[trick-design] 类型多样性记忆不可用（忽略）:", e.message);
+    }
+  }
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const tag = maxAttempts > 1 ? `（第 ${attempt}/${maxAttempts} 次）` : "";
     if (onProgress) onProgress("trick", `正在设计核心诡计与证明链${tag}...`);
 
-    const { system, user } = buildTrickPrompt(userInput, cfg, feedback);
+    const { system, user } = buildTrickPrompt(userInput, cfg, feedback, bannedTypes);
     let result;
     try {
       // 预算与升级策略与大纲阶段保持一致（同为本项目的"结构化 JSON + 推理型模型"场景）：
@@ -478,7 +502,13 @@ async function designTrick(userInput, cfg, onProgress, opts = {}) {
     }
 
     const v = validateTrickDesign(parsed);
+    // 禁用的类型即使其它项都合格也打回 —— 否则「多样性纪律」形同虚设
+    if (v.ok && bannedTypes.includes(String(parsed.type || "").trim())) {
+      v.ok = false;
+      v.errors = [...(v.errors || []), `type「${parsed.type}」本次被禁用（最近几本用过，需换类型）：${bannedTypes.join("、")}`];
+    }
     if (v.ok) {
+      try { await require("./trick-types-memory").rememberTrickType(parsed.type); } catch (e) { /* 忽略 */ }
       if (onProgress) onProgress("trick", `核心诡计已定稿并通过校验：${String(parsed.coreTrick || "").slice(0, 40)}`);
       console.log(`[trick-design] 第 ${attempt} 次通过校验：type=${parsed.type} chain=${(parsed.proofChain || []).length}`);
       return { design: parsed, attempts: attempt, lastErrors: [] };
