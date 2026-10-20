@@ -14,9 +14,14 @@ import csv
 import io
 import os
 import re
+import sys
 import statistics
 
 DIR = r"C:\cluade code\ppt\text-gen-agent\data\corpus\a1"
+if "--dir" in sys.argv:
+    _i = sys.argv.index("--dir")
+    if _i + 1 < len(sys.argv):
+        DIR = sys.argv[_i + 1]
 OUT_CSV = os.path.join(DIR, "_metrics.csv")
 CENSUS_CSV = r"C:\cluade code\ppt\text-gen-agent\docs\剧本语料-合格清单.csv"
 

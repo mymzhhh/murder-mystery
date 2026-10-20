@@ -22,7 +22,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = r"D:\play game\剧本杀剧本资源合集"
 CSV = r"C:\cluade code\ppt\text-gen-agent\docs\剧本语料-合格清单.csv"
 DUP_CSV = r"C:\cluade code\ppt\text-gen-agent\docs\剧本语料-重复本.csv"
-OUT_DIR = r"C:\cluade code\ppt\text-gen-agent\data\corpus\a1"
+TIER = "A1"
+if "--tier" in sys.argv:
+    _i = sys.argv.index("--tier")
+    if _i + 1 < len(sys.argv):
+        TIER = sys.argv[_i + 1].upper()
+OUT_DIR = r"C:\cluade code\ppt\text-gen-agent\data\corpus" + os.sep + TIER.lower()
 
 ORDER_KW = [
     ("公共信息", 0), ("背景", 1), ("主持人", 2), ("组织者", 3), ("手册", 4), ("游戏说明", 5),
@@ -96,11 +101,18 @@ def main():
     except FileNotFoundError:
         pass
 
-    targets = [
-        r for r in rows
-        if r["档位"] == "A" and int(r["线索文件字数"] or 0) > 0 and r["标题"] not in skip
-    ]
-    print(f"A1 目标: {len(targets)} 个")
+    if TIER == "A2":
+        # A2：docx 文本齐全但线索是图片/PDF —— 用来扩大「角色本/时间线」的样本量
+        targets = [
+            r for r in rows
+            if r["档位"] == "A" and int(r["线索文件字数"] or 0) == 0 and r["标题"] not in skip
+        ]
+    else:
+        targets = [
+            r for r in rows
+            if r["档位"] == "A" and int(r["线索文件字数"] or 0) > 0 and r["标题"] not in skip
+        ]
+    print(f"{TIER} 目标: {len(targets)} 个")
 
     os.makedirs(OUT_DIR, exist_ok=True)
     manifest = []
@@ -151,7 +163,7 @@ def main():
             "path": out_path,
             "chars": total,
             "files": files_meta,
-            "tier": "A1",
+            "tier": TIER,
         })
         print(f"  [{idx}/{len(targets)}] {title[:30]:<32} {len(files_meta)} 文件 {total} 字")
 
