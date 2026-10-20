@@ -727,6 +727,14 @@ async function actTurn(io, roomCode, ai, allChars) {
     .map(c => c.name);
 
   let decision = null;
+  // 提问账本：让 AI 知道自己问过谁、问过什么，并在扎堆时强制换目标。
+  // 2026-10-20 用户实测：一局里 8 次提问全砸在同一个人身上，且反复问同一段 5 分钟。
+  let ledger = null;
+  const roundNow = getPhaseRound(phase0) || getPhaseRound(room.phase) || 1;
+  try {
+    const ah = require("./ask-history");
+    ledger = await ah.readAsks(roomCode, roundNow);
+  } catch (e) { ledger = null; }
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
@@ -735,7 +743,46 @@ async function actTurn(io, roomCode, ai, allChars) {
     // ⚠️ 没有可问的人时**也要**调用：发言不需要候选人。
     // （写成"有候选人才调"会让 candidates 为空的房间彻底说不了话；
     //   而"提问"的合法性由 parseTurnOutput 自己校验——目标不在候选里就返回 null。）
-    decision = await llm.turnLLM(k, candidates);
+    decision = await llm.turnLLM(k, candidates, undefined, ledger ? { ledger, askerName: ai.characterName } : undefined);
+
+    // 轮转判定：先算"从这个 AI 自己视角看，各人有多可疑"——
+    // 用户校准过：嫌疑大的可以连续追问，只有"没证据还盯着一个人问"才要拦。
+    if (decision && decision.action === "ask" && ledger) {
+      const ah = require("./ask-history");
+      const mine = (ledger.byAsker || {})[ai.characterName] || {};
+      const askedByMe = Object.fromEntries(Object.entries(mine).map(([t, qs]) => [t, (qs || []).length]));
+      const prevQs = mine[decision.target] || [];
+      const maxSim = prevQs.reduce((m, q) => Math.max(m, ah.questionSimilarity(q, decision.question)), 0);
+      let suspicion = 0;
+      try {
+        const sus = ah.scoreSuspects({
+          clueLines: k.myClues || [],
+          transcript: k.transcript || "",
+          candidates,
+        });
+        suspicion = Number((sus[decision.target] || {}).score || 0);
+      } catch (e) { suspicion = 0; }
+      const rotate = ah.shouldRotate({
+        target: decision.target,
+        askerName: ai.characterName,
+        candidates,
+        targetCounts: ledger.targetCounts || {},
+        askedByMe,
+        askedQuestionsOfTarget: { similarity: maxSim },
+        lastTarget: (ledger.lastByAsker || {})[ai.characterName] || "",
+        suspicion,
+      });
+      if (rotate) {
+        const ranked = ah.rankTargets({ candidates, targetCounts: ledger.targetCounts || {}, askedByMe });
+        const forced = ranked.find((n) => n !== decision.target) || ranked[0];
+        if (forced) {
+          const retry = await llm.turnLLM(k, candidates, undefined,
+            { ledger, askerName: ai.characterName, forcedTarget: forced });
+          // 重试拿到合法提问就用它；否则退回"发言"，绝不再问同一个人
+          decision = retry && retry.action === "ask" && retry.target === forced ? retry : null;
+        }
+      }
+    }
   } catch (e) { console.warn("[ai-player] 出手 LLM 失败:", e.message); }
 
   if (decision && decision.action === "ask") {
@@ -755,6 +802,12 @@ async function askTurn(io, roomCode, ai, players, decision, phase0) {
   const target = decision.target;
   const text = `❓ 我想问 ${target}：${decision.question}`;
   if (await phaseChanged(roomCode, phase0)) return;   // 生成期间阶段已推进 → 这个提问作废
+  // 记账：谁问了谁、问了什么。下一手的 prompt 会带「你已经问过 X×2」，
+  // 并对被扎堆的目标做轮转（2026-10-20 用户实测：一局里 AI 全在问同一个人）。
+  try {
+    const { recordAsk } = require("./ask-history");
+    await recordAsk(roomCode, getPhaseRound(phase0) || 1, ai.characterName || "AI", target, decision.question);
+  } catch (e) { /* 记账失败不影响对局 */ }
   const msg = await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI", text, phase0);
   io.to(roomCode).emit("chat_message", msg);
 

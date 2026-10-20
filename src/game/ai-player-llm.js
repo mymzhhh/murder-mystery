@@ -10,6 +10,7 @@ const { HARDENING_RULES } = safety;
 const { getClues, getChatMessages, getPlayers, getRoom } = require("./game-manager");
 const { visibleClues, clueVisibilityOf } = require("./game-engine");
 const acts = require("../script/acts");
+const askHistory = require("./ask-history");
 
 /**
  * 构造 AI 玩家的"已知信息"（信息隔离封装）
@@ -257,10 +258,11 @@ function turnStrategy(k) {
  * ⚠️ 不再接受 `context`（最近公屏）：它和 knowledgePrompt 里的 transcript 是同一份数据，
  * 重复投喂每次要多付最多 2500 字。公屏信息由 transcript 一次提供即可。
  */
-async function turnLLM(k, candidates, searchOpts) {
+async function turnLLM(k, candidates, searchOpts, askHint) {
   const list = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
   const user = `现在是搜证与讨论阶段，轮到你出手一次。你**只能做一件事**：要么发言，要么向某一位玩家提问。
 可提问的对象（只能选一个，不要选自己）：${list.join("、") || "（暂无可问的人）"}
+${askHint && askHint.ledger ? askHistory.askHintText(askHint.ledger, askHint.askerName, list) : ""}${askHint && askHint.forcedTarget ? `\n- **这一次必须问「${askHint.forcedTarget}」**（其他人刚被问过太多次，再问同一人会被判为重复）：不要换人。` : ""}
 
 怎么选：
 - 手上有具体的线索或矛盾要说（能指出谁的什么说法有问题）→ **发言**：摆事实、指人、给结论。
