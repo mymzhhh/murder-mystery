@@ -49,6 +49,13 @@ def load_targets():
     return [r for r in rows if r["档位"] == "B" and r["标题"] not in skip]
 
 
+def pdf_pages(p):
+    try:
+        from pypdf import PdfReader
+        return len(PdfReader(p).pages)
+    except Exception:
+        return 999
+
 def collect_pdfs(script_dir):
     out = []
     for dp, _dn, fn in os.walk(script_dir):
@@ -62,6 +69,10 @@ def collect_pdfs(script_dir):
                 except OSError:
                     continue
                 if mb > MAX_MB_PER_PDF:
+                    continue
+                # 页数上限：实测一本 305-空A1774 的 PDF 让服务端单次请求跑了 25 分钟还没完，
+                # 直接把整批堵死。超过 40 页的先跳过（那是"整本扫描"的形态，属 C 档）。
+                if pdf_pages(p) > 40:
                     continue
                 out.append((p, mb))
     # 大文件优先（通常是完整角色本/手册），但控制在 MAX_PDF_PER_SCRIPT 个
