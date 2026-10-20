@@ -135,13 +135,16 @@ def main():
         "角色本最长": role_lens[0] if role_lens else 0,
         "角色本最短": role_lens[-1] if role_lens else 0,
         "时间线时刻数": sum(len(TIME_RE.findall(t)) for t in role),
-        "线索条数": len(NUM_ITEM.findall(clue)),
+        # 生成格式的线索是 `### A1：…` 标题，不是编号行；两种都要认
+        "线索条数": (len(NUM_ITEM.findall(clue)) if is_corpus
+                    else len(re.findall(r"^#{3,4}\s*[ABC]\d{1,3}\s*[：:]", clue, re.M))),
         "线索分组数": len(clue_groups(clue)),
         "线索轮数": len(set(ROUND_RE.findall(clue))),
         "线索字数": chars_of(clue),
         "隐藏线索标记": len(HIDDEN_RE.findall(clue)),
         "真相字数": chars_of(truth),
-        "手册字数": chars_of(manual),
+        # 手册里含真相复盘 → 算手册时要扣掉，否则和"真相字数"重复计算（会把手册推到 100 分位以上）
+        "手册字数": max(0, chars_of(manual) - chars_of(truth)),
         "手册首段字数": 0,  # 生成格式下不统计
         "分幕数": len({m for t in role for m in ACT_RE.findall(t)}),
         # 这里数的是正文里的图片引用（我方机制）；语料是独立 jpg 文件，故口径不同，不参与比对
