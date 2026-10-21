@@ -90,3 +90,49 @@ test("空输入安全", () => {
   assert.strictEqual(checkRoundPurpose({ clues: [], characters: CHARS, murderer: "甲" }).ok, true);
   assert.strictEqual(checkRoundPurpose({ clues: [c("A1", "x")], characters: CHARS, murderer: "甲" }).ok, true);
 });
+
+// ===== 2026-10-20 新增：第一轮不得给"可区分身份的物证细节" =====
+// 用户要求："结合每个人的剧本和所有线索才能推出" —— 第一轮只给看不懂的那一半。
+
+test("第一轮出现尺码 → 告警（尺码属于第二轮的区分性物证）", () => {
+  const clues = [
+    c("A1", "账本记着甲欠死者三十块大洋"),
+    c("A2", "乙的当票压着死者名字"),
+    c("A3", "丙与死者争吵过"),
+    c("A4", "甲床底下有一双42码黑布鞋，鞋边沾着后院青苔"),  // ← 违规
+    c("B1", "死者头部有凹陷创口"),
+    c("B2", "门闩铁环上绕着锦纶钓线，通向河边"),
+  ];
+  const r = checkRoundPurpose({ clues, characters: CHARS, murderer: "甲" });
+  assert.strictEqual(r.ok, false);
+  assert.ok(r.issues.some((s) => s.includes("第一轮给了归属")), r.issues.join(" | "));
+  assert.deepStrictEqual(r.stats.round1Giveaway.map((s) => s.slice(0, 2)), ["A4"]);
+});
+
+test("第一轮把姓名与比对结论直连 → 告警", () => {
+  const clues = [
+    c("A1", "账本记着甲欠死者三十块大洋"),
+    c("A2", "乙的当票压着死者名字"),
+    c("A3", "丙与死者争吵过"),
+    c("A4", "甲的布鞋鞋底纹路与水窗泥印完全一致"),  // ← 违规
+    c("B1", "死者头部有凹陷创口"),
+    c("B2", "门闩铁环上绕着锦纶钓线，通向河边"),
+  ];
+  const r = checkRoundPurpose({ clues, characters: CHARS, murderer: "甲" });
+  assert.ok(r.issues.some((s) => s.includes("第一轮给了归属")), r.issues.join(" | "));
+});
+
+test("第一轮用职业/位置代替姓名（看不懂的那一半）→ 通过", () => {
+  const clues = [
+    c("A1", "账本记着甲欠死者三十块大洋"),
+    c("A2", "乙的当票压着死者名字"),
+    c("A3", "丙与死者争吵过"),
+    c("A4", "在跑堂住处的床底下藏着一个小木箱，箱里有半坛花雕"),  // 不写是谁、不写尺码
+    c("A5", "死者的辞退函压在砚台底下，落款处被撕掉了一半"),
+    c("B1", "死者头部有凹陷创口"),
+    c("B2", "门闩铁环上绕着锦纶钓线，从墙根排水洞通向河边"),
+    c("B3", "水窗插销上沾着青苔"),
+  ];
+  const r = checkRoundPurpose({ clues, characters: CHARS, murderer: "甲" });
+  assert.strictEqual(r.stats.round1Giveaway.length, 0, `不该报归属，实际：${r.stats.round1Giveaway.join("、")}`);
+});

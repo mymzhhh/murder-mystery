@@ -112,6 +112,17 @@ const KILLING_RE = /血迹|血痕|喷溅|创口|伤口|尸斑|尸僵|勒痕|钝�
 // 手法/机关类词：真实剧本里"怎么做到的"往往不写成血迹，而写成"线/闩/机关/撬/换"
 const METHOD_RE = /钓线|鱼线|绳索|绳子|麻绳|绳结|机关|闩|插销|锁舌|锁扣|撬|钳|螺丝|铁钉|钉|钩|滑轮|配重|冰块|冰锥|蜡|胶|缝|换|调换|伪装|伪造|布置|移尸|拖|擦|刷|洗|水渍|纤维|粉末|残渣/;
 
+// ===== 「看不懂的那一半」判据（2026-10-20 用户要求）=====
+// 用户原话：第一轮应该用来揭露每个人的杀机，第二轮的线索才指向凶手，
+// 但线索要"结合每个人的剧本和所有线索才能推出"。
+// 实测《水窗灯影》：第一轮 A3 写「沈墨床底下的 42 码黑布鞋，鞋边沾青苔」——
+//   "42 码 + 拖鞋 + 姓名"三样凑齐，等于第一轮就把物证归到了人头上，
+//   第二轮的隐藏线索只是把同一件事重说一遍，"最后一块拼图"于是名存实亡。
+// 因此：第一轮**不许出现可区分身份的物证细节**（尺码/编号/指纹），
+//      也不许出现「姓名 + 比对结论」的直连（纹路吻合/完全一致/只有他…）。
+const SIZE_RE = /\d{2}\s*码|尺码|鞋号|码数|寸长|身高|左撇子|惯用右手|惯用左手/;
+const LINK_RE = /纹路.{0,6}(一致|吻合|相同|相符)|(一致|吻合|相同|相符).{0,6}纹路|完全一致|完全吻合|专属|编号|指纹|比对|只有他|唯独他|正是他|与.{1,8}的.{0,6}(相同|一致|吻合)/;
+
 function roundOf(clue) {
   const r = Number((clue && (clue.round || clue.roundNo)) || 0);
   if (r === 1 || r === 2) return r;
@@ -205,10 +216,34 @@ function checkRoundPurpose({ clues, characters, murderer }) {
     );
   }
 
+  // ⑤ 第一轮不得给出"可区分身份的物证细节"或"姓名 + 比对结论"的直连
+  //    （否则第一轮就把物证归到人头上，第二轮的隐藏线索沦为重复）
+  const r1Giveaway = [];
+  for (const c of r1) {
+    const t = textOf(c);
+    const sizeHit = SIZE_RE.exec(t);
+    const named = chars.some((n) => n && t.includes(n));
+    const linkHit = LINK_RE.exec(t);
+    if (sizeHit) {
+      r1Giveaway.push(`${c.id || "?"}（尺码/体征「${sizeHit[0]}」）`);
+    } else if (named && linkHit) {
+      r1Giveaway.push(`${c.id || "?"}（「${linkHit[0]}」把物证直连到人）`);
+    }
+  }
+  stats.round1Giveaway = r1Giveaway;
+  if (r1Giveaway.length) {
+    issues.push(
+      `【轮次分工·第一轮给了归属】第一轮有 ${r1Giveaway.length} 条线索直接给出可区分身份的物证细节：` +
+      `${r1Giveaway.slice(0, 4).join("、")}。第一轮只该给"看不懂的那一半"——` +
+      `物件的存在、位置、外观都可以写，但**尺码/编号/指纹/比对结论**必须留给第二轮（最好藏在深入调查里），` +
+      `否则玩家第一轮就能把物证归到人头上，第二轮的隐藏线索形同虚设。`
+    );
+  }
+
   return { ok: issues.length === 0, issues, stats };
 }
 
 module.exports = {
   checkEvidenceBalance, checkRoundPurpose, mentions, isHiddenChild, roundOf,
-  MOTIVE_RE, KILLING_RE,
+  MOTIVE_RE, KILLING_RE, SIZE_RE, LINK_RE,
 };
