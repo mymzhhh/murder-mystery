@@ -96,4 +96,117 @@ function checkEvidenceBalance({ clues, characters, murderer }) {
   return { ok: issues.length === 0, issues, stats };
 }
 
-module.exports = { checkEvidenceBalance, mentions, isHiddenChild };
+// ==================== 两轮线索的"分工"校验 ====================
+// 2026-10-20 用户明确要求：
+//   · 第一轮 = **杀机轮**：揭露每个人的杀机与关系，不摆杀人物证；
+//   · 第二轮 = **指凶轮**：才出现尸体与手法证据，且必须结合各人剧本才能推出凶手；
+//   · 线索不能太明显：任何**单条**都不得同时含"凶手名 + 手法"，否则一眼定案。
+//
+// 轮次判定：A 系列 = 第一轮，B 系列 = 第二轮（与 play 端 parser 一致）；
+// 若线索自带 round 字段则以它为准。
+
+const MOTIVE_RE = /欠|债|借据|当票|威胁|勒索|争吵|争执|仇|恨|嫉妒|私情|秘密|把柄|辞退|扣|亏空|家产|继承|婚约|悔婚|丑闻|名声|旧怨|恩怨|分账|侵吞/;
+const KILLING_RE = /血迹|血痕|喷溅|创口|伤口|尸斑|尸僵|勒痕|钝器|锐器|凶器|毒|砒霜|吗啡|砒|锤|扳手|镇纸|刀|刃|溺|掐|窒息|骨裂|凹陷|致命|死于/;
+// 手法/机关类词：真实剧本里"怎么做到的"往往不写成血迹，而写成"线/闩/机关/撬/换"
+const METHOD_RE = /钓线|鱼线|绳索|绳子|麻绳|绳结|机关|闩|插销|锁舌|锁扣|撬|钳|螺丝|铁钉|钉|钩|滑轮|配重|冰块|冰锥|蜡|胶|缝|换|调换|伪装|伪造|布置|移尸|拖|擦|刷|洗|水渍|纤维|粉末|残渣/;
+
+function roundOf(clue) {
+  const r = Number((clue && (clue.round || clue.roundNo)) || 0);
+  if (r === 1 || r === 2) return r;
+  const id = String((clue && clue.id) || "").trim().toUpperCase();
+  if (/^A\d+/.test(id)) return 1;
+  if (/^B\d+/.test(id)) return 2;
+  return 0;
+}
+
+function textOf(clue) {
+  return String((clue && (clue.content || clue.text || clue)) || "");
+}
+
+/**
+ * @returns {{ok:boolean, issues:string[], stats:object}}
+ */
+function checkRoundPurpose({ clues, characters, murderer }) {
+  const list = Array.isArray(clues) ? clues : [];
+  const chars = (Array.isArray(characters) ? characters : []).filter(Boolean);
+  const killer = String(murderer || "").trim();
+  const issues = [];
+  const stats = { round1: 0, round2: 0, motivePerSuspect: {}, round1Killing: [], singleClueGiveaway: [], killerEvidenceCount: 0 };
+
+  if (!list.length) return { ok: true, issues: [], stats };
+
+  const r1 = [];
+  const r2 = [];
+  for (const c of list) {
+    const r = roundOf(c);
+    if (r === 1) r1.push(c);
+    else if (r === 2) r2.push(c);
+  }
+  stats.round1 = r1.length;
+  stats.round2 = r2.length;
+  if (!r1.length || !r2.length) return { ok: true, issues: [], stats };
+
+  // ① 第一轮不该出现杀人/尸体/凶器类证据
+  for (const c of r1) {
+    const m = KILLING_RE.exec(textOf(c));
+    if (m) stats.round1Killing.push(`${c.id || "?"}（「${m[0]}」）`);
+  }
+  if (stats.round1Killing.length > 1) {
+    issues.push(
+      `【轮次分工·第一轮提前给答案】第一轮里有 ${stats.round1Killing.length} 条线索含杀人/尸体/凶器类证据：` +
+      `${stats.round1Killing.slice(0, 5).join("、")}。第一轮只该揭露**杀机与关系**，` +
+      `尸体与手法证据一律留到第二轮——否则玩家第一轮就拿到物证，后面不用推理了。`
+    );
+  }
+
+  // ② 每个非凶手嫌疑人，第一轮至少要有一条揭示杀机的线索
+  const missing = [];
+  for (const name of chars) {
+    if (!name || name === killer) continue;
+    const hit = r1.some((c) => textOf(c).includes(name) && MOTIVE_RE.test(textOf(c)));
+    stats.motivePerSuspect[name] = hit ? 1 : 0;
+    if (!hit) missing.push(name);
+  }
+  if (missing.length) {
+    issues.push(
+      `【轮次分工·缺杀机】第一轮没有揭示 ${missing.join("、")} 的杀机线索 —— ` +
+      `第一轮的作用就是"人人都有动机"，把嫌疑人摊平。请给这些人各补一条能看出动机/关系的线索` +
+      `（欠债、威胁、旧怨、私情、把柄等），且不要写与杀人手法有关的内容。`
+    );
+  }
+
+  // ③ 第二轮：单条不得同时含"凶手名 + 手法"
+  for (const c of r2) {
+    const t = textOf(c);
+    if (killer && t.includes(killer) && KILLING_RE.test(t)) stats.singleClueGiveaway.push(String(c.id || "?"));
+  }
+  if (stats.singleClueGiveaway.length) {
+    issues.push(
+      `【轮次分工·线索太明显】第二轮有线索同时写出凶手姓名与手法/凶器（${stats.singleClueGiveaway.slice(0, 4).join("、")}），` +
+      `单条就能定案。请把"谁"和"怎么做的"拆到两条不同线索里，并且让"归属"这一步必须结合该角色的剧本` +
+      `（例如线索只写"账房抽屉夹层里有钓线"，谁能接触到账房抽屉要看角色剧本）。`
+    );
+  }
+
+  // ④ 第二轮的指凶证据必须分散在 ≥2 条
+  // 决定性线索：点名凶手、或含尸体/凶器词、或描述手法机关
+  const decisive = (c) => {
+    const t = textOf(c);
+    return (killer && t.includes(killer)) || KILLING_RE.test(t) || METHOD_RE.test(t);
+  };
+  const killerEvidence = r2.filter(decisive).length;
+  stats.killerEvidenceCount = killerEvidence;
+  if (killerEvidence < 2) {
+    issues.push(
+      `【轮次分工·证据太薄】第二轮只有 ${killerEvidence} 条线索指向真相 —— ` +
+      `要求"结合每个人的剧本 + 全部线索才能推出"，至少需要 2 条互相印证的证据。`
+    );
+  }
+
+  return { ok: issues.length === 0, issues, stats };
+}
+
+module.exports = {
+  checkEvidenceBalance, checkRoundPurpose, mentions, isHiddenChild, roundOf,
+  MOTIVE_RE, KILLING_RE,
+};

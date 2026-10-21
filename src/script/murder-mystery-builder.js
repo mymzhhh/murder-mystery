@@ -2591,21 +2591,33 @@ async function buildMurderMystery(userInput, onProgress, config) {
       const chars = Object.keys(report.characterScripts || {});
       const murdererName = (report.outline && report.outline.murderer && report.outline.murderer.name) || "";
       const dc = checkEvidenceBalance({ clues: clueObjs, characters: chars, murderer: murdererName });
-      report.difficulty = { issues: dc.issues, stats: dc.stats };
-      if (dc.issues.length) {
+      // 两轮分工：第一轮只揭杀机、第二轮才指凶，且单条不得同时含"凶手名 + 手法"
+      let rp = { ok: true, issues: [], stats: {} };
+      try {
+        const { checkRoundPurpose } = require("./difficulty-checks");
+        rp = checkRoundPurpose({ clues: clueObjs, characters: chars, murderer: murdererName });
+      } catch (e) { console.warn("[builder] 轮次分工校验异常:", e.message); }
+      const allIssues = [...dc.issues, ...rp.issues];
+      report.difficulty = { issues: allIssues, stats: dc.stats, roundStats: rp.stats };
+      if (allIssues.length) {
         report.crossCheck = report.crossCheck || { issues: [] };
-        report.crossCheck.issues = [...(report.crossCheck.issues || []), ...dc.issues];
-        console.warn(`[builder] 难度校验发现 ${dc.issues.length} 个问题：`, dc.issues.slice(0, 2).join("；"));
+        report.crossCheck.issues = [...(report.crossCheck.issues || []), ...allIssues];
+        console.warn(`[builder] 难度校验发现 ${allIssues.length} 个问题（证据平衡 ${dc.issues.length} / 轮次分工 ${rp.issues.length}）`,
+          allIssues.slice(0, 2).join("；"));
         if (onProgress) {
           const s = dc.stats || {};
+          const rs = rp.stats || {};
           onProgress("crosscheck",
-            `难度校验：${dc.issues.length} 个问题（指向凶手的线索 ${s.killer || 0} 条，其他人最多 ${s.maxOther || 0} 条，` +
-            `其中藏在隐藏线索里的 ${s.hiddenKillerClues || 0} 条）`);
+            `难度校验：${allIssues.length} 个问题（证据平衡 ${dc.issues.length}、轮次分工 ${rp.issues.length}）｜` +
+            `凶手 ${s.killer || 0} 条 / 其他人最多 ${s.maxOther || 0} 条｜` +
+            `第一轮 ${rs.round1 || 0} 条（含凶器类 ${(rs.round1Killing || []).length} 条）、第二轮 ${rs.round2 || 0} 条`);
         }
       } else if (onProgress) {
         const s = dc.stats || {};
+        const rs = rp.stats || {};
         onProgress("crosscheck",
-          `难度校验通过：凶手 ${s.killer || 0} 条 / 其他人最多 ${s.maxOther || 0} 条，隐藏线索 ${s.hiddenKillerClues || 0} 条`);
+          `难度校验通过：凶手 ${s.killer || 0} 条 / 其他人最多 ${s.maxOther || 0} 条，隐藏线索 ${s.hiddenKillerClues || 0} 条｜` +
+          `第一轮 ${rs.round1 || 0} 条只揭杀机、第二轮 ${rs.round2 || 0} 条指凶`);
       }
     } catch (e) {
       console.warn("[builder] 难度校验跳过:", e.message);
