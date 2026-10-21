@@ -1948,9 +1948,25 @@ async function buildMurderMystery(userInput, onProgress, config) {
     await bibleEnforce.ensureBibleExtras(bibleDeps, outline, onProgress);
   } catch (e) { console.warn("[builder] 权威表补齐异常（不阻塞）:", e.message); }
   let bible = sb.buildBible(outline);
+  // ===== 权威表矛盾的确定性修复（2026-10-20）=====
+  // 为什么在自检之前：自检原本只报警不修，矛盾会原样传进 4 个角色本与 DM 手册，
+  // 然后靠交叉校验 + 两轮修订去救 —— 实测救不干净（曾残留 11 处并触发 2 段整篇重写）。
+  // 这里只在源头做"删冗余/取权威"两种保守动作，不编造新内容。
+  let bibleRepair = { fixes: [] };
+  try {
+    bibleRepair = sb.repairBibleContradictions(outline, bible);
+    if (bibleRepair.fixes.length) {
+      bible = sb.buildBible(outline);   // 用修好的 outline 重建，下游全部读到一致版本
+      console.warn(`[builder] 权威表已自动修复 ${bibleRepair.fixes.length} 处矛盾：`,
+        bibleRepair.fixes.slice(0, 3).map((f) => f.text).join("；"));
+      if (onProgress) {
+        onProgress("outline", `权威表自动修复 ${bibleRepair.fixes.length} 处矛盾（同刻两地 / 事件归属不一致 / 死者死后活动）`);
+      }
+    }
+  } catch (e) { console.warn("[builder] 权威表修复失败（不阻塞）:", e.message); }
   try {
     const self = sb.checkBibleSelfConsistency(bible);
-    report.bibleCheck = { ok: self.ok, issues: self.issues, candidates: 0, fixed: 0 };
+    report.bibleCheck = { ok: self.ok, issues: self.issues, candidates: 0, fixed: (bibleRepair.fixes || []).length, fixes: bibleRepair.fixes || [] };
     for (const i of self.issues) {
       if (i.level !== "error") continue;
       console.warn("[builder] 权威表自检:", i.text);

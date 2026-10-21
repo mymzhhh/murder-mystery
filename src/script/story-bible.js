@@ -1310,12 +1310,128 @@ function extractTimeFromText(text) {
   return null;
 }
 
+/**
+ * 权威表矛盾的**确定性修复**（2026-10-20）。
+ *
+ * 为什么需要：checkBibleSelfConsistency 原本**只报警不修**。
+ * 实测（gen-v10 日志）一次生成就报出 7 处矛盾：
+ *   · 王福生 20:50 同时出现在「客栈大堂」与「账房门口」
+ *   · 21:10 同一件事，基准时间线写「陈桂香」、公开行踪写「沈默」
+ * 这些矛盾会**原样传进 4 个角色本和 DM 手册**，然后靠交叉校验 + 两轮修订去救 ——
+ * 实测救不干净（11 处残留 + 2 段整篇重写）。所以必须在源头改。
+ *
+ * 修复策略（保守，只做"删冗余/取权威"两种动作，绝不编造新内容）：
+ *   ① 同一角色同一时刻出现在两个地点：保留**基准时间线**那条，删掉冲突的**公开行踪**；
+ *      若冲突发生在基准时间线内部，保留先出现的一条。
+ *   ② 同一时刻被不同角色认领同一件事：以基准时间线为准，删掉公开行踪里那条。
+ *   ③ 死者死亡后仍有活动条目：删掉（这条最容易造成"死者死后活动"这类硬伤）。
+ *
+ * @param {object} outline 大纲对象（会被**就地修改**：timeline / publicEvents）
+ * @param {object} bible   由 outline 构建的权威表（用于取死者与身亡时刻）
+ * @returns {{fixes:Array<{code:string,text:string}>, outline:object}}
+ */
+function repairBibleContradictions(outline, bible) {
+  const fixes = [];
+  if (!outline || typeof outline !== "object") return { fixes, outline };
+  const timeline = Array.isArray(outline.timeline) ? outline.timeline : [];
+  const publicEvents = Array.isArray(outline.publicEvents) ? outline.publicEvents : [];
+  const victim = (bible && bible.victim && bible.victim.name) || "";
+  const deathTime = (bible && bible.victim && bible.victim.deathTime) || "";
+
+  const minOf = (t) => {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || "").trim());
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  };
+  const deathMin = minOf(deathTime);
+
+  // ① 基准时间线内部：同一 actor 同一时刻多地点 → 只留第一条
+  const seenTL = new Map();
+  const keptTL = [];
+  for (const e of timeline) {
+    const actor = String((e && (e.actor || e.who)) || "").trim();
+    const time = String((e && e.time) || "").trim();
+    const place = String((e && e.place) || "").trim();
+    if (actor && time && place) {
+      const key = `${actor}|${time}`;
+      if (seenTL.has(key)) {
+        const prev = seenTL.get(key);
+        if (prev.place && prev.place !== place) {
+          fixes.push({
+            code: "tl_dup_place",
+            text: `基准时间线里 ${actor} 在 ${time} 同时出现在「${prev.place}」与「${place}」——已保留前者、删除后者`,
+          });
+          continue; // 丢弃这一条
+        }
+      }
+      seenTL.set(key, { place });
+    }
+    keptTL.push(e);
+  }
+
+  // ③ 死者死亡后的活动条目 → 删
+  const keptTL2 = keptTL.filter((e) => {
+    const actor = String((e && (e.actor || e.who)) || "").trim();
+    const t = minOf(e && e.time);
+    if (victim && actor === victim && deathMin !== null && t !== null && t > deathMin) {
+      fixes.push({
+        code: "victim_after_death",
+        text: `死者 ${victim} 在 ${e.time} 还有动作（身亡于 ${deathTime}）——已删除该条`,
+      });
+      return false;
+    }
+    return true;
+  });
+
+  // ② 公开行踪与基准时间线冲突：同一人同时刻不同地点 → 删公开行踪那条
+  const tlKey = new Map();
+  for (const e of keptTL2) {
+    const actor = String((e && (e.actor || e.who)) || "").trim();
+    const time = String((e && e.time) || "").trim();
+    const place = String((e && e.place) || "").trim();
+    if (actor && time) tlKey.set(`${actor}|${time}`, place);
+  }
+  const keptPE = publicEvents.filter((e) => {
+    const actor = String((e && e.actor) || "").trim();
+    const time = String((e && e.time) || "").trim();
+    const place = String((e && e.place) || "").trim();
+    const key = `${actor}|${time}`;
+    if (tlKey.has(key) && tlKey.get(key) && place && tlKey.get(key) !== place) {
+      fixes.push({
+        code: "pe_conflict",
+        text: `公开行踪写 ${actor} 在 ${time} 位于「${place}」，基准时间线是「${tlKey.get(key)}」——已删除公开行踪这条`,
+      });
+      return false;
+    }
+    // ② 同一时刻同一件事被不同角色认领：基准时间线已有别人 → 删公开行踪这条
+    if (time && place) {
+      const sameSlot = keptTL2.find((t2) => {
+        const t2time = String((t2 && t2.time) || "").trim();
+        const t2place = String((t2 && t2.place) || "").trim();
+        const t2actor = String((t2 && (t2.actor || t2.who)) || "").trim();
+        return t2time === time && t2place === place && t2actor && t2actor !== actor;
+      });
+      if (sameSlot) {
+        fixes.push({
+          code: "pe_other_actor",
+          text: `${time}「${place}」这件事基准时间线记在 ${sameSlot.actor || sameSlot.who} 名下，公开行踪却写成 ${actor}——已删除公开行踪这条`,
+        });
+        return false;
+      }
+    }
+    return true;
+  });
+
+  outline.timeline = keptTL2;
+  outline.publicEvents = keptPE;
+  return { fixes, outline };
+}
+
 module.exports = {
   findPlaceholderResidues,
   repairPlaceholderResidues,
   findSelfPrefixEntries,
   buildBible, bibleFactsFor, bibleFactsToText,
-  checkBibleSelfConsistency, reconcileCharacterScript, findCrossCharacterConflicts, findObjectStateConflicts,
+  checkBibleSelfConsistency, repairBibleContradictions, reconcileCharacterScript, findCrossCharacterConflicts, findObjectStateConflicts,
   checkCluePlan, checkKnowledgeBounds, checkTimelineHealth, timelineEntries,
   alignCluePlan, clueLocationKind, normalizeClueLocation, matchPlace, isSamePlace, extractTimeFromText,
   checkShichenConsistency, shichenToMinutes, correctShichenFor, fixShichenByClock, nearestClock, expandShichenSpan,
