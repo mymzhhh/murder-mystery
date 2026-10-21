@@ -209,8 +209,7 @@ function validateTrickDesign(design) {
     ["mechanism", 30, "诡计机制（说清怎么做到的）"],
     ["conceal", 10, "隐藏方式"],
     ["breakPoint", 10, "破绽方向"],
-  ];
-  for (const [key, min, label] of required) {
+  ];  for (const [key, min, label] of required) {
     if (!nonEmpty(design[key], min)) {
       errors.push(`字段 ${key}（${label}）缺失或过短（至少 ${min} 字）`);
     }
@@ -220,6 +219,23 @@ function validateTrickDesign(design) {
   const type = String(design.type || "").trim();
   if (type && !TRICK_TYPES.includes(type)) {
     errors.push(`type「${type}」不在允许的类型内，必须是：${TRICK_TYPES.join(" / ")}`);
+  }
+
+  // ---- 误导解答（decoy）：难度的一半来自"玩家会先怀疑错人" ----
+  // 2026-10-20 用户需求："不能一眼看过去就知道凶手及手法"。
+  // 语义评审实测：三本自产稿「唯一锁定」都只有 2/3 分，缺的正是"看起来同样成立的错误答案"。
+  const decoy = design.decoy;
+  if (!decoy || typeof decoy !== "object" || Array.isArray(decoy)) {
+    errors.push("缺少 decoy 对象（谁会被先怀疑 / 为什么看起来成立 / 靠什么线索推翻）——"
+      + "没有误导解答的本子玩家会一眼看穿");
+  } else {
+    if (!nonEmpty(decoy.who, 2)) errors.push("decoy.who 缺失：要写明玩家第一眼会怀疑谁（不能是真凶）");
+    if (!nonEmpty(decoy.why, 15)) errors.push("decoy.why 太短：要说清这个人为什么看起来非常可疑（他有什么把柄/异常）");
+    if (!nonEmpty(decoy.brokeBy, 6)) errors.push("decoy.brokeBy 缺失：要写明靠哪一类线索推翻这个错误答案");
+  }
+  // 误导必须与真相"强度相当"：decoy.why 若比 coreTrick 还短，说明只是敷衍了一句
+  if (decoy && nonEmpty(decoy.why, 15) && String(decoy.why).length < String(design.mechanism || "").length * 0.3) {
+    errors.push("decoy.why 相对于 mechanism 太敷衍：误导解答要和真解答一样有细节，否则玩家一眼就能排除它");
   }
 
   // ---- 可行性三问 ----
@@ -344,6 +360,14 @@ function trickDesignToText(design) {
   L.push(`- 机制：${design.mechanism || ""}`);
   L.push(`- 隐藏方式：${design.conceal || ""}`);
   L.push(`- 破绽方向：${design.breakPoint || ""}`);
+  // 误导解答必须传给下游：线索阶段要为这个"错误答案"铺足证据，否则玩家不会先怀疑错人
+  if (design.decoy && typeof design.decoy === "object") {
+    L.push(`- **误导解答（玩家会先怀疑的人）**：${design.decoy.who || ""}`);
+    L.push(`  - 为什么看起来成立：${design.decoy.why || ""}`);
+    L.push(`  - 靠什么推翻：${design.decoy.brokeBy || ""}`);
+    L.push("  - 线索要求：至少要有一条线索**同时**支持这个错误答案（让他显得可疑），"
+      + "并且要有一条线索能**排除**他（但不是一眼就能排除）。");
+  }
   L.push(`- 物理可行性：${feas.physics || ""}`);
   L.push(`- 目击条件：${feas.witness || ""}`);
   L.push(`- 最易被识破处：${feas.weakest || ""}`);
@@ -390,7 +414,16 @@ function buildTrickPrompt(userInput, cfg, feedback, bannedTypes) {
 8. **类型多样性纪律**（用户实测反馈：连着几本全是时间诡计）：
    - 若「用户需求」没有明确要求时钟/时间要素，**优先选密室 / 身份错位 / 不在场证明 / 叙述性诡计**；
    - 时间诡计只在"其它类型确实做不到需求"时才允许，且必须在 coreTrick 里一句话说明为什么非它不可；
-   - 如果给了「本次禁止的类型」，那是硬约束，违反会被打回。`;
+   - 如果给了「本次禁止的类型」，那是硬约束，违反会被打回。
+9. **必须先设计一个"看起来同样成立"的错误答案（decoy）** —— 这是难度的一半：
+   - decoy.who：玩家第一眼会怀疑的人（不能是真凶）；
+   - decoy.why：这个人为什么可疑到"像是他干的"（要有具体把柄：欠债、被撞见、动机充分），
+     细节量和真解答（mechanism）相当，**不能只写一句敷衍**；
+   - decoy.brokeBy：真相靠哪一类线索推翻这个错误答案（物证/证词/书面记录/痕迹）。
+   - 反例（不合格）：decoy.why 写"他也有动机"；合格例：写清"他当晚确实去过现场、
+     手上还有死者的东西，但他离开时死者还活着——这一点由 XX 类线索证明"。
+10. **难度自检**：如果玩家只看 1 条线索就能锁定真凶，这个诡计不合格，请把关键证据拆到 2–3 条、
+    并让其中最强的一条藏在「深入调查」里。`;
 
   const banList = Array.isArray(bannedTypes) ? bannedTypes.filter((x) => TRICK_TYPES.includes(x)) : [];
   const user = `## 用户需求
@@ -415,6 +448,11 @@ ${banList.map((x) => `- ${x}`).join("\n")}
   "mechanism": "诡计具体运作原理：谁、何时、用什么物品、做了什么（100字内，物理可行）",
   "conceal": "凶手如何隐藏它（伪装身份/伪造时间线/布置现场）",
   "breakPoint": "会被哪 2-3 条线索逐步暴露",
+  "decoy": {
+    "who": "玩家第一眼会怀疑的人（不能是真凶）",
+    "why": "为什么这个错误答案看起来成立（他有什么可疑之处）",
+    "brokeBy": "靠哪一类线索推翻这个错误答案（物证/证词/书面记录/痕迹）"
+  },
   "feasibility": {
     "physics": "为什么在物理与时空上做得到",
     "witness": "关键动作可能被谁看到；确实无人目击则写明时段与原因",

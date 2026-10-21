@@ -114,17 +114,41 @@ function buildBible(outline) {
   };
 }
 
-/** 与某个角色相关的权威条目（供提示词注入与对账共用同一个口径） */
+/**
+ * 与某个角色相关的权威条目（供提示词注入与对账共用同一个口径）
+ *
+ * 2026-10-20 新增 coLocated：**同处一室的可见白名单**。
+ * 起因（真实错误）：林默在 19:40 写"听见沈砚秋的脚步声从后院过来"，
+ * 但权威表里沈砚秋 19:40 正在密室行凶 —— 两人不在同一地点，林默不可能听见他。
+ * 根因是角色只拿到"自己 + 公开"的条目，**不知道别人此刻在哪**，就自由发挥了。
+ *
+ * 为什么不直接给出"全场占位表"：那会把凶手的位置（密室）泄给所有角色，等于剧透。
+ * 只给"此刻和我在同一地点的人" —— 这些人本来就看得见，不算泄密，
+ * 同时明确告诉它"其他地点的人你不可能看见/听见"。
+ */
 function bibleFactsFor(bible, name) {
   const n = String(name || "").trim();
-  if (!n) return { timeline: [], publicEvents: [], objectStates: [], knowledge: [] };
+  if (!n) return { timeline: [], publicEvents: [], objectStates: [], knowledge: [], coLocated: [] };
   const involves = (e) => e.actor === n || (e.who || []).includes(n) || (e.witnesses || []).includes(n);
+
+  // 同处一室：同一时刻、同一地点里除自己以外的人
+  const coLocated = [];
+  for (const mine of bible.timeline.filter((e) => e.actor === n && e.time && e.place)) {
+    for (const other of bible.timeline) {
+      if (!other.time || !other.place || !other.actor) continue;
+      if (other.actor === n) continue;
+      if (other.time !== mine.time || other.place !== mine.place) continue;
+      coLocated.push({ time: mine.time, place: mine.place, name: other.actor });
+    }
+  }
+
   return {
     timeline: bible.timeline.filter(e => e.actor === n || e.kind === "public"),
     publicEvents: bible.publicEvents.filter(involves),
     // 物件状态是全体可见事实：主角所在场景的物件都相关，故全量给出（由提示词自行裁剪）
     objectStates: bible.objectStates,
     knowledge: bible.knowledge.filter(e => e.who === n),
+    coLocated,
   };
 }
 
@@ -147,6 +171,15 @@ function bibleFactsToText(facts) {
     L.push("【你知道的与知道的时间（不得提前知道）】");
     for (const e of facts.knowledge) L.push(`- ${e.since} 起你知道：${e.knows}${e.source ? `（来源：${e.source}）` : ""}`);
   }
+  // 可见边界：这条是"减少逻辑错误"的关键约束（实测错误：写听见了当时在别处的人）
+  if (facts.coLocated && facts.coLocated.length) {
+    L.push("【此刻与你同处一室的人（你只能看见/听见这些人）】");
+    for (const e of facts.coLocated) L.push(`- ${e.time} 你在「${e.place}」时，${e.name} 也在场`);
+  }
+  L.push("【可见性铁律】你只能看见、听见**与你同一地点**的人。"
+    + "不要写「你听到/看到某个当时不在同一地点的人」的细节——"
+    + "除非该情节在【角色级公开行踪】里明确写了在场者。"
+    + "需要表达「有人经过」时，写「有人」而不是指名道姓。");
   return L.join("\n");
 }
 

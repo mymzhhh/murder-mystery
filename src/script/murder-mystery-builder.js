@@ -2578,6 +2578,38 @@ async function buildMurderMystery(userInput, onProgress, config) {
     } catch (e) {
       console.warn("[builder] 逻辑校验跳过:", e.message);
     }
+    // ===== 难度校验：不能一眼看穿凶手（2026-10-20 用户需求）=====
+    // 语义评审 rubric 里「唯一锁定」三本都只有 2/3 分：删掉一两条关键线索仍能推出凶手，
+    // 说明证据过度集中在凶手身上。这里用三条确定性判据兜底，问题并入待修订队列。
+    try {
+      const { checkEvidenceBalance } = require("./difficulty-checks");
+      const parts = String(report.clues || "").split(/^###\s*/m);
+      const clueObjs = parts.slice(1).map((p) => {
+        const m = p.match(/^([AB]\d{1,3})\s*[：:]?/);
+        return m ? { id: m[1], content: p.slice(m[0].length) } : null;
+      }).filter(Boolean);
+      const chars = Object.keys(report.characterScripts || {});
+      const murdererName = (report.outline && report.outline.murderer && report.outline.murderer.name) || "";
+      const dc = checkEvidenceBalance({ clues: clueObjs, characters: chars, murderer: murdererName });
+      report.difficulty = { issues: dc.issues, stats: dc.stats };
+      if (dc.issues.length) {
+        report.crossCheck = report.crossCheck || { issues: [] };
+        report.crossCheck.issues = [...(report.crossCheck.issues || []), ...dc.issues];
+        console.warn(`[builder] 难度校验发现 ${dc.issues.length} 个问题：`, dc.issues.slice(0, 2).join("；"));
+        if (onProgress) {
+          const s = dc.stats || {};
+          onProgress("crosscheck",
+            `难度校验：${dc.issues.length} 个问题（指向凶手的线索 ${s.killer || 0} 条，其他人最多 ${s.maxOther || 0} 条，` +
+            `其中藏在隐藏线索里的 ${s.hiddenKillerClues || 0} 条）`);
+        }
+      } else if (onProgress) {
+        const s = dc.stats || {};
+        onProgress("crosscheck",
+          `难度校验通过：凶手 ${s.killer || 0} 条 / 其他人最多 ${s.maxOther || 0} 条，隐藏线索 ${s.hiddenKillerClues || 0} 条`);
+      }
+    } catch (e) {
+      console.warn("[builder] 难度校验跳过:", e.message);
+    }
     // ===== 配图（可选，2026-10-18 新增）=====
     // 真本《吉普赛女郎之死》带 24 张图（角色立绘/线索文档/真相时间线），生成稿是 0 张 ——
     // 这是"看起来不像真本"最直观的一块。用本机 ComfyUI（Qwen-Image 2.1 + 8step LoRA）出图。
