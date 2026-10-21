@@ -91,3 +91,27 @@ test("空输入安全", () => {
   const r = sb.repairBibleContradictions(o, { victim: {} });
   assert.strictEqual(r.fixes.length, 0);
 });
+
+// 2026-10-20 修误报：把"一个人做事、另一个人目击"判成矛盾是错的。
+// 实测 gen-v11 报了「21:50 基准写沈墨 / 公开行踪写王顺」，
+// 原文是"沈墨从库房正门走出，王顺擦桌子时瞥见他的背影" —— 两者都真。
+test("目击场景（A 做事 / B 看见）不应被判成矛盾", () => {
+  const o = mkOutline({
+    timeline: [{ id: "T1", time: "21:50", actor: "沈墨", place: "临河库房门外", doing: "伪装成周德海从库房正门走出" }],
+    publicEvents: [{ id: "P1", time: "21:50", actor: "王顺", place: "客栈大堂", doing: "擦桌子时瞥见从库房正门走出的人的背影" }],
+  });
+  const bible = sb.buildBible(o);
+  const r = sb.checkBibleSelfConsistency(bible);
+  assert.ok(!r.issues.some((i) => i.code === "same_instant_two_actors"),
+    `不该报同一事件冲突，实际：${r.issues.map((i) => i.code).join(",")}`);
+});
+
+test("真矛盾（同一动作被两人认领、无目击措辞）仍要报", () => {
+  const o = mkOutline({
+    timeline: [{ id: "T1", time: "18:30", actor: "张伟", place: "演播楼", doing: "与李萌核对脚本" }],
+    publicEvents: [{ id: "P1", time: "18:30", actor: "林晓", place: "演播楼", doing: "与李萌核对脚本" }],
+  });
+  const bible = sb.buildBible(o);
+  const r = sb.checkBibleSelfConsistency(bible);
+  assert.ok(r.issues.some((i) => i.code === "same_instant_two_actors"), "真矛盾必须抓住");
+});

@@ -242,14 +242,27 @@ function checkBibleSelfConsistency(bible) {
 
   // 同一时刻、同一件事，但**做的人不一样** → 权威表自相矛盾
   // 实测（1998 演播楼）：基准时间线 18:30「张伟与李萌核对脚本」vs 公开行踪 18:30「林晓与李萌核对脚本」。
+  //
+  // ⚠️ 2026-10-20 修误报：旧规则只看 bigram 重合，把**合法的双人事件**也判成矛盾 ——
+  //   实测 gen-v11 报了「21:50 基准时间线写沈墨 / 公开行踪写王顺」，
+  //   原文其实是"沈墨从库房正门走出，王顺擦桌子时瞥见他的背影"：
+  //   一个人做事、另一个人目击，两者都真，根本不是矛盾。
+  // 现在的判据（三条同时满足才算矛盾）：
+  //   ① 两边的 doing 高度重合（同一次动作）
+  //   ② 两边都**没有目击/听闻措辞**（看到/瞥见/听见/目击/透过…）
+  //   ③ 地点相同或至少一边没写地点
+  const WITNESS_RE = /看到|看见|瞥见|望见|听见|听到|目睹|目击|透过|隔着|隐约|远远|背影/;
   for (const t of bible.timeline) {
     if (!t.time || !t.actor) continue;
     for (const p of bible.publicEvents) {
       if (p.time !== t.time || !p.actor || p.actor === t.actor) continue;
       const a = `${t.doing}${t.place}`, b = `${p.doing}${p.place}`;
-      if (sharedBigrams(a, b) >= 3) {
-        add("same_instant_two_actors", "error", `权威表自相矛盾：${t.time} 同一件事，基准时间线写「${t.actor}」，公开行踪写「${p.actor}」（${a.slice(0, 18)} / ${b.slice(0, 18)}）`);
-      }
+      if (sharedBigrams(a, b) < 3) continue;
+      // ② 有任何一边是"我看见/听见某人做某事" → 双人事件，跳过
+      if (WITNESS_RE.test(String(t.doing || "")) || WITNESS_RE.test(String(p.doing || ""))) continue;
+      // ③ 地点不同且双方都写了地点 → 两条独立事件，跳过
+      if (t.place && p.place && !isSamePlace(t.place, p.place)) continue;
+      add("same_instant_two_actors", "error", `权威表自相矛盾：${t.time} 同一件事，基准时间线写「${t.actor}」，公开行踪写「${p.actor}」（${a.slice(0, 18)} / ${b.slice(0, 18)}）`);
     }
   }
 
