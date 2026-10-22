@@ -57,6 +57,20 @@ function buildArtifacts(report) {
   if (issues && issues.length) {
     out.crossCheck = { count: issues.length, issues: clipDeep(issues, STR_CAP.crossCheck).map(String) };
   }
+  // 难度 / 轮次分工 / 可玩性闸门（2026-10-20）：三项都是"这稿能不能玩、难不难"的判定依据，
+  // 只写进容器日志的话，事后想回看"它当时拦了哪几条"只能翻日志。
+  if (report.difficulty && typeof report.difficulty === "object") {
+    out.difficulty = clipDeep(report.difficulty, 600);
+  }
+  if (report.publishGate && typeof report.publishGate === "object") {
+    out.publishGate = clipDeep(report.publishGate, 600);
+  }
+  if (report.motiveCluesAdded && Array.isArray(report.motiveCluesAdded) && report.motiveCluesAdded.length) {
+    out.motiveCluesAdded = clipDeep(report.motiveCluesAdded, 300);
+  }
+  if (report.godTimelineRepair && Array.isArray(report.godTimelineRepair) && report.godTimelineRepair.length) {
+    out.godTimelineRepair = clipDeep(report.godTimelineRepair, 200);
+  }
   // 自动改写的留档：照着哪些问题、把哪几段换成了什么。
   // 驱动它的问题清单是 LLM 产的（有噪声），所以"改了什么"必须可复核——
   // 否则想核对"它对某条误报做了什么"时查不到任何痕迹。

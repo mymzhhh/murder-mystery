@@ -23,6 +23,40 @@ function isReachable(c) {
 }
 
 /**
+ * 从线索 markdown 提取结构化线索（供**生成期**提前跑闸门判据用）。
+ * 生成期的 report.clues 只有 markdown，没有 location/hiddenBehind 字段，
+ * 而"可搜到的线索够不够多""凶手是不是零证据"都依赖这两项 —— 所以在这里补出来。
+ *
+ * @param {string} md 线索全文（含 ## 第一轮线索 / ## 第二轮线索）
+ * @returns {Array<{id,content,location,round,hiddenBehind}>}
+ */
+function extractCluesFromMarkdown(md) {
+  const text = String(md || "");
+  const parts = text.split(/^###\s*/m);
+  const out = [];
+  let round = 1;
+  for (const p of parts) {
+    // 轮次标题可能出现在块前
+    if (/^##\s*第[二2]轮线索/m.test(p)) round = 2;
+    const m = p.match(/^([AB]\d{1,3})\s*[：:]/);
+    if (!m) continue;
+    const id = m[1].toUpperCase();
+    const body = p.slice(m[0].length);
+    const locM = body.match(/发现地点[：:]\s*([^\n\r]+)/);
+    const location = locM ? locM[1].replace(/^-+\s*/, "").trim() : "";
+    const parentId = require("./hidden-clue-re").parentIdOf(body);
+    out.push({
+      id,
+      content: body,
+      location,
+      round: id.startsWith("B") ? 2 : 1,
+      hiddenBehind: parentId || "",
+    });
+  }
+  return out;
+}
+
+/**
  * @param {object} p
  * @param {Array} p.clues       已切分线索（含 id/content/location/round/hiddenBehind）
  * @param {Array} p.characters  角色（含 name/isMurderer）
@@ -81,4 +115,4 @@ function checkPublishReady({ clues, characters, murderer } = {}) {
   return { ok: blockers.length === 0, blockers };
 }
 
-module.exports = { checkPublishReady, isReachable };
+module.exports = { checkPublishReady, isReachable, extractCluesFromMarkdown };

@@ -1,7 +1,7 @@
 // 上架闸门（2026-10-20）：硬缺陷不许带病上架
 const test = require("node:test");
 const assert = require("node:assert");
-const { checkPublishReady, isReachable } = require("../../src/script/publish-gate.js");
+const { checkPublishReady, isReachable, extractCluesFromMarkdown } = require("../../src/script/publish-gate.js");
 
 const mkClues = (n, loc = "账房") =>
   Array.from({ length: n }, (_, i) => ({ id: `A${i + 1}`, content: `桌上有茶杯${i}`, location: loc, round: 1 }));
@@ -62,4 +62,43 @@ test("隐藏子线索不计入「可搜」", () => {
   assert.strictEqual(isReachable({ id: "Y", content: "某物", location: "" }), false);
   assert.strictEqual(isReachable({ id: "Z", content: "某物", location: "账房", hiddenBehind: "A1" }), false);
   assert.strictEqual(isReachable({ id: "W", content: "某物", location: "账房" }), true);
+});
+
+// 生成期前置：从 markdown 提取结构化线索，供闸门提前判定（2026-10-20）
+test("extractCluesFromMarkdown：提取 id/地点/轮次/子线索关系", () => {
+  const md = [
+    "## 第一轮线索",
+    "",
+    "### A1：柜台账房｜文件",
+    "- 线索类型：文件",
+    "- 发现地点：柜台账房",
+    "- 线索内容：账册上记着一笔短款。",
+    "",
+    "## 第二轮线索",
+    "",
+    "### B13：炮制工具间｜物证",
+    "- 线索类型：物证",
+    "- 发现地点：炮制工具间",
+    "- 线索内容：毛刷上有粉末（发现隐藏线索，可深入调查）",
+    "",
+    "### B14：炮制工具间｜物证",
+    "- 线索类型：物证",
+    "- 发现地点：炮制工具间",
+    "- 线索内容：通过深入调查B13，粉末是草乌汁",
+  ].join("\n");
+  const cs = extractCluesFromMarkdown(md);
+  assert.strictEqual(cs.length, 3);
+  assert.strictEqual(cs[0].id, "A1");
+  assert.strictEqual(cs[0].location, "柜台账房");
+  assert.strictEqual(cs[0].round, 1);
+  assert.strictEqual(cs[1].round, 2);
+  assert.strictEqual(cs[2].hiddenBehind, "B13", "子线索要能提取出父编号");
+});
+
+test("提取出的线索可直接喂给 checkPublishReady", () => {
+  const md = ["## 第一轮线索", "", "### A1：账房｜文件", "- 发现地点：账房", "- 线索内容：甲欠死者三十两", ""].join("\n");
+  const cs = extractCluesFromMarkdown(md);
+  const r = checkPublishReady({ clues: cs, characters: [{ name: "甲", isMurderer: true }], murderer: "甲" });
+  assert.strictEqual(r.ok, false, "只有 1 条线索必然不合格");
+  assert.ok(r.blockers.some((b) => b.code === "too_few_reachable"), JSON.stringify(r.blockers));
 });

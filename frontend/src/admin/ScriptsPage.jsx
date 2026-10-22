@@ -285,6 +285,49 @@ export default function ScriptsPage() {
               <TrickPanel design={splitView.artifacts.trickDesign} />
             </div>
           )}
+          {/* 难度 / 轮次分工 / 可玩性闸门（2026-10-20）：这三项决定"这稿能不能玩、难不难"，
+              以前只写进容器日志，事后想回看"它当时拦了哪几条"只能翻日志。 */}
+          {(splitView.artifacts?.difficulty || splitView.artifacts?.publishGate) ? (
+            <section className="outline-sec" style={{ marginBottom: 16 }}>
+              <div className="kicker" style={{ marginBottom: 8 }}>
+                <span style={{ flex: "0 0 auto" }}>生成期检查（难度 / 轮次分工 / 可玩性）</span>
+                {splitView.artifacts?.publishGate?.ok === false ? (
+                  <span className="tag tag-danger">{splitView.artifacts.publishGate.blockers.length} 个可玩性问题</span>
+                ) : (
+                  <span className="tag tag-success">可玩性通过</span>
+                )}
+              </div>
+              {splitView.artifacts?.difficulty?.stats ? (
+                <div className="outline-row">
+                  <span className="text-dim">
+                    证据平衡：凶手 {splitView.artifacts.difficulty.stats.killer || 0} 条 / 其他人最多{" "}
+                    {splitView.artifacts.difficulty.stats.maxOther || 0} 条 / 藏在隐藏线索里{" "}
+                    {splitView.artifacts.difficulty.stats.hiddenKillerClues || 0} 条
+                  </span>
+                </div>
+              ) : null}
+              {splitView.artifacts?.difficulty?.roundStats ? (
+                <div className="outline-row">
+                  <span className="text-dim">
+                    轮次分工：第一轮 {splitView.artifacts.difficulty.roundStats.round1 || 0} 条（含凶器类{" "}
+                    {(splitView.artifacts.difficulty.roundStats.round1Killing || []).length} 条、给了归属{" "}
+                    {(splitView.artifacts.difficulty.roundStats.round1Giveaway || []).length} 条）｜第二轮{" "}
+                    {splitView.artifacts.difficulty.roundStats.round2 || 0} 条
+                  </span>
+                </div>
+              ) : null}
+              {(splitView.artifacts?.publishGate?.blockers || []).map((b, i) => (
+                <div key={i} className="outline-row">
+                  <span style={{ color: "var(--danger)" }}>· {b.text}</span>
+                </div>
+              ))}
+              {(splitView.artifacts?.motiveCluesAdded || []).map((a, i) => (
+                <div key={"m" + i} className="outline-row">
+                  <span className="text-dim">自动补的杀机线索：{a.id}（{a.for}）</span>
+                </div>
+              ))}
+            </section>
+          ) : null}
           {splitView.artifacts?.crossCheck?.issues?.length ? (
             <section className="outline-sec" style={{ marginBottom: 16 }}>
               <div className="kicker" style={{ marginBottom: 8 }}>

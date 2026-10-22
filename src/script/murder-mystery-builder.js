@@ -2672,7 +2672,25 @@ async function buildMurderMystery(userInput, onProgress, config) {
           }
         }
       } catch (e) { console.warn("[builder] 补杀机线索跳过:", e.message); }
-      const allIssues = [...dc.issues, ...rp.issues, ...hp.issues];
+      // 可玩性闸门前置（2026-10-20）：把上架时才检查的硬缺陷提前到生成期，进修订队列。
+      // 否则要等管理员点上架才被拦，发现时已经切分/发布流程走了一半，返工成本高。
+      let pg = { ok: true, blockers: [] };
+      try {
+        const { extractCluesFromMarkdown, checkPublishReady } = require("./publish-gate");
+        const parsedClues = extractCluesFromMarkdown(report.clues || "");
+        pg = checkPublishReady({
+          clues: parsedClues,
+          characters: chars.map((n) => ({ name: n, isMurderer: n === murdererName })),
+          murderer: murdererName,
+        });
+        if (!pg.ok) {
+          report.publishGate = { ok: false, blockers: pg.blockers };
+          console.warn(`[builder] 可玩性检查：${pg.blockers.length} 个问题（${pg.blockers.map((b) => b.code).join(",")}）`);
+          if (onProgress) onProgress("clues", `可玩性检查：${pg.blockers.length} 个问题（${pg.blockers.map((b) => b.code).join("、")}）`);
+        }
+      } catch (e) { console.warn("[builder] 可玩性检查跳过:", e.message); }
+      const gateIssues = (pg.blockers || []).map((b) => `【可玩性·${b.code}】${b.text}`);
+      const allIssues = [...dc.issues, ...rp.issues, ...hp.issues, ...gateIssues];
       report.difficulty = { issues: allIssues, stats: dc.stats, roundStats: rp.stats };
       if (allIssues.length) {
         report.crossCheck = report.crossCheck || { issues: [] };
