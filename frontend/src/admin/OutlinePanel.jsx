@@ -56,6 +56,17 @@ export default function OutlinePanel({ outline: o }) {
           <div className="text-xs text-muted">死者</div>
           <div style={{ fontFamily: "var(--font-serif)", fontSize: 16, margin: "2px 0 6px" }}>{v.name || "?"}</div>
           <div className="text-xs text-dim">{[v.identity, v.causeOfDeath, v.deathPlace].filter(Boolean).join(" · ")}</div>
+          {/* 身亡时刻缺失必须显式暴露：它一缺，"死者死后不得再活动"这层保护会**静默失效**
+              （实测《回春堂蜜影》就是 deathTime 为 undefined，生成日志里只有一句警告）。 */}
+          <div className="text-xs" style={{ marginTop: 4 }}>
+            {v.deathTime ? (
+              <span className="text-dim">身亡时刻：{v.deathTime}</span>
+            ) : (
+              <span style={{ color: "var(--warning)" }}>
+                ⚠ 身亡时刻缺失 —— 「死者死后不得再活动」校验会失效
+              </span>
+            )}
+          </div>
         </div>
         <div className="card card-static">
           <div className="text-xs text-muted">凶手</div>
