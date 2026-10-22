@@ -125,26 +125,55 @@ export default function OutlinePanel({ outline: o }) {
         </section>
       )}
 
-      {/* 时间线骨架 —— 每条必须写明"谁、几点、在哪、做什么"。
-          2026-10-20 用户反馈：面板只渲染 time + desc，把 actor 丢了，
-          看到的是"19:30 拿着煤油灯进入密室"这种没有主语的句子 ——
-          大纲没有主语，下游写角色本时就只能猜，幻觉就是这么来的。 */}
-      {o.timeline && o.timeline.length > 0 && (
-        <section className="outline-sec">
-          <div className="kicker" style={{ marginBottom: 8 }}>
-            <span style={{ flex: "0 0 auto" }}>时间线骨架（谁·几点·在哪·做什么）</span>
-            <span className="tag">{o.timeline.length} 条</span>
-          </div>
-          {(o.timeline || []).map((t, i) => (
-            <div key={i} className="outline-row" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
-              <strong style={{ color: "var(--brass)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{t.time}</strong>
-              <strong style={{ minWidth: 48 }}>{t.actor || "（缺主语）"}</strong>
-              {t.place ? <span className="text-muted" style={{ fontSize: 11 }}>📍{t.place}</span> : null}
-              <span style={{ flex: "1 1 320px" }}>{t.desc || t.doing || ""}</span>
+      {/* 时间线骨架 —— 同一时刻合并成一组，时刻只出现一次。
+          2026-10-20 用户反馈两轮：
+            ① 面板只渲染 time + desc，把 actor 丢了 → 看到的是没有主语的句子；
+            ② 同一时刻（19:30）被拆成好几行重复写同一时刻 → 要合并。
+          现在：时刻作为组头，组内每个角色一行（主语 · 📍地点 · 动作）。 */}
+      {o.timeline && o.timeline.length > 0 && (() => {
+        const groups = new Map();
+        for (const t of o.timeline) {
+          const k = String(t.time || "").trim();
+          if (!groups.has(k)) groups.set(k, []);
+          groups.get(k).push(t);
+        }
+        const times = [...groups.keys()].sort((a, b) => String(a).localeCompare(String(b)));
+        return (
+          <section className="outline-sec">
+            <div className="kicker" style={{ marginBottom: 8 }}>
+              <span style={{ flex: "0 0 auto" }}>时间线骨架（谁·几点·在哪·做什么）</span>
+              <span className="tag">{o.timeline.length} 条 · {times.length} 个时刻</span>
             </div>
-          ))}
-        </section>
-      )}
+            {times.map((time) => {
+              const rows = groups.get(time) || [];
+              return (
+                <div
+                  key={time}
+                  className="outline-row"
+                  style={{
+                    display: "flex", gap: 10, alignItems: "flex-start",
+                    padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.06)",
+                  }}
+                >
+                  <strong style={{
+                    color: "var(--brass)", fontFamily: "var(--font-mono)", fontSize: 12,
+                    flex: "0 0 44px", paddingTop: 1,
+                  }}>{time || "—"}</strong>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {rows.map((t, i) => (
+                      <div key={i} style={{ marginBottom: i === rows.length - 1 ? 0 : 2, lineHeight: 1.7 }}>
+                        <strong style={{ display: "inline-block", minWidth: 56 }}>{t.actor || "（缺主语）"}</strong>
+                        {t.place ? <span className="text-muted" style={{ fontSize: 11, marginRight: 6 }}>📍{t.place}</span> : null}
+                        <span>{t.desc || t.doing || ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </section>
+        );
+      })()}
 
       {/* 布局 */}
       {o.layout && o.layout.length > 0 && (
