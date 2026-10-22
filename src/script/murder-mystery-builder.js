@@ -2547,6 +2547,26 @@ async function buildMurderMystery(userInput, onProgress, config) {
   onProgress("assemble", "正在组装完整剧本...");
   let fullScript = assembleScript(report, userInput);
 
+  // 关掉配图时清掉正文里的图片引用（2026-10-20 实测《听雨书寓6月18日夜》）：
+  // 该轮 config.images.enabled=false，但线索正文仍写了「![线索图片](img:cluedoc-1)」，
+  // 验收直接报"碎图：cluedoc-1,cluedoc-2 ❌" —— 玩家端会看到两个裂图占位。
+  // 引用既然拿不到图，就不该留在交付文本里。
+  try {
+    const imgOn = !!(cfg && cfg.images && cfg.images.enabled);
+    if (!imgOn) {
+      const before = fullScript;
+      fullScript = fullScript
+        .replace(/!\[[^\]]*\]\(\s*img:[^)\s]+\s*\)/g, "")   // 整条 markdown 图片引用
+        .replace(/[（(]\s*(?:见|参见)?\s*\[?线索图片\]?\s*\d*\s*[)）]/g, "")  // 配套的中文提示
+        .replace(/[ \t]+$/gm, "");
+      if (before !== fullScript) {
+        const n = (before.match(/img:[^)\s]+/g) || []).length;
+        console.log(`[builder] 配图已关闭，清掉正文里的 ${n} 处图片引用（避免碎图）`);
+        if (onProgress) onProgress("assemble", `配图已关闭，清掉 ${n} 处图片引用（避免碎图）`);
+      }
+    }
+  } catch (e) { console.warn("[builder] 清理图片引用跳过:", e.message); }
+
   // 非法时刻的确定性修复（2026-10-18）：实测生成稿的真相里出现「手表显示22:60」——
   // 分钟位 ≥60 不是合法时刻，玩家一眼就看出错。这类可以纯字符串修好，不必回炉让模型改。
   try {
