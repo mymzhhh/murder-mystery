@@ -708,13 +708,29 @@ function extractAliasOfVictim(outline) {
   if (!identity) return "";
   // 只有明说"对外/伪装/扮作/自称"时才认为存在化名，否则不要乱抽
   if (!/对外|伪装|扮作|假称|自称|化名|代号/.test(identity)) return "";
-  const ROLE = "(?:伙计|掌柜|账房|小二|门房|学徒|杂役|仆役|下人|管家|朝奉|坐堂|琴师|宾客|客人|东家|老板|班主|掌柜的)";
-  // 形如「…对外伪装为迎客伙计阿庆」→ 取角色词后面的名字
-  const a = identity.match(new RegExp(ROLE + "([\\u4e00-\\u9fa5]{2,3})(?=[，,。；;、\\s]|$)"));
-  if (a && a[1] !== realName) return a[1];
-  // 形如「化名张三」「代号老七」
-  const b = identity.match(/(?:化名|代号|对外称[之为]?)([\u4e00-\u9fa5]{2,3})(?=的|[，,。；;\s]|$)/);
-  if (b && b[1] !== realName) return b[1];
+
+  // ① 引号包起来的别名最可靠：「对外以「账房老赵」的身份示人」
+  const quoted = identity.match(/[「『"《]([\u4e00-\u9fa5]{2,5})[」』"》]/);
+  if (quoted) {
+    // 「账房老赵」→「老赵」：去掉职务前缀，否则时间线里写的"老赵"匹配不上
+    const stripped = quoted[1].replace(/^(?:总镖头|镖头|镖师|伙计|掌柜|账房|小二|门房|学徒|杂役|仆役|下人|管家|朝奉|坐堂|琴师|班主|东家|老板|车夫|马夫|厨子|大夫|先生|把头|把式|管账)/, "");
+    const name = stripped.length >= 2 ? stripped : quoted[1];
+    if (name !== realName) return name;
+  }
+
+  // ② 职务词 + 名字。词表要足够宽 —— 实测《万安镖雪》写成「总镖头林奎」，
+  //    旧词表里没有"总镖头"，化名就抽不出来 → 自愈没被武装上（本次零混用是模型自己写对了，不是机制兜住的）。
+  const ROLE = "(?:总镖头|镖头|镖师|伙计|掌柜|账房|小二|门房|学徒|杂役|仆役|下人|管家|朝奉|坐堂|琴师|班主|东家|老板|车夫|马夫|厨子|大夫|先生|把头|把式|管账)";
+  const byRole = identity.match(new RegExp(ROLE + "\\s*([\\u4e00-\\u9fa5]{2,3})(?=[，,。；;、\\s]|$)"));
+  if (byRole && byRole[1] !== realName) return byRole[1];
+
+  // ③ 兜底：句末「…为/是/叫/扮作/自称 XXX」
+  const tail = identity.match(/(?:为|是|叫|扮作|自称|假称)\s*([\u4e00-\u9fa5]{2,3})\s*$/);
+  if (tail && tail[1] !== realName) return tail[1];
+
+  // ④ 「化名张三」「代号老七」
+  const byWord = identity.match(/(?:化名|代号|对外称[之为]?)\s*([\u4e00-\u9fa5]{2,3})(?=的|[，,。；;\s]|$)/);
+  if (byWord && byWord[1] !== realName) return byWord[1];
   return "";
 }
 
@@ -2825,6 +2841,18 @@ async function buildMurderMystery(userInput, onProgress, config) {
             addedMotive = fixed.added;
             report.motiveCluesAdded = fixed.added;
             console.warn(`[builder] 为 ${fixed.added.map((a) => a.for).join("、")} 补了 ${fixed.added.length} 条第一轮杀机线索`);
+            // 自检：补完必须真的能通过"每个嫌疑人都有杀机"的判定，否则等于没补
+            // （实测《万安镖雪》：补了 4 条，最终校验仍报 4 人缺杀机 —— 因为关系事实里没有动机关键词）
+            try {
+              const { checkRoundPurpose: crp } = require("./difficulty-checks");
+              const recheck = crp({ clues: require("./publish-gate").extractCluesFromMarkdown(report.clues), characters: chars, murderer: murdererName });
+              const stillMissing = Object.entries((recheck.stats && recheck.stats.motivePerSuspect) || {}).filter(([, v]) => !v).map(([n]) => n);
+              if (stillMissing.length) {
+                console.warn(`[builder] 补完后仍有 ${stillMissing.length} 人缺杀机：${stillMissing.join("、")}（关系事实里没有动机线索可用的关键词）`);
+                if (onProgress) onProgress("clues", `⚠ 仍有 ${stillMissing.join("、")} 缺第一轮杀机线索（关系网里的事实不够用）`);
+                report.motiveStillMissing = stillMissing;
+              }
+            } catch (e2) { /* 自检失败不影响主流程 */ }
             if (onProgress) onProgress("clues", `为 ${fixed.added.map((a) => a.for).join("、")} 自动补了第一轮杀机线索（源自关系网）`);
           }
         }
