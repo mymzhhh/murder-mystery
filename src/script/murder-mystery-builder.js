@@ -2253,11 +2253,42 @@ async function buildMurderMystery(userInput, onProgress, config) {
           onProgress
         );
         characterResults[ch.name] = withDates;
+        // ===== 时间线确定性自愈（2026-10-22）=====
+        // 用户实测"时间线对不上"的两个根因，在这里**直接改文本**，不再只依赖提示词：
+        //   ① 死者化名混用（顾松亭 / 阿庆 同时出现在时间线里 → 玩家以为是两个人）
+        //   ② 缺全员事件（actor=所有人的 21:20 看尸体、22:30 集合梳理线索）
+        // 两者都幂等，失败不影响主流程。
+        try {
+          const tfix = require("./timeline-autofix");
+          const aliasNow = extractAliasOfVictim(report.outline);
+          const realNow = String((report.outline && report.outline.victim && report.outline.victim.name) || "");
+          let fixedText = characterResults[ch.name] || "";
+          if (aliasNow && realNow) {
+            const u = tfix.unifyVictimAliasInTimeline(fixedText, { realName: realNow, alias: aliasNow });
+            if (u.changed) {
+              fixedText = u.text;
+              console.warn(`[builder] ${ch.name} 时间线称呼统一：${u.from} → ${u.to}（${u.changed} 处）`);
+              onProgress("player_script", `${ch.name} 时间线称呼统一为「${u.to}」（${u.changed} 处）`);
+            }
+          }
+          const collEvents = tfix.collectiveEventsOf(report.outline);
+          if (collEvents.length) {
+            const a = tfix.ensureCollectiveAnchors(fixedText, { events: collEvents, caseDate });
+            if (a.added.length) {
+              fixedText = a.text;
+              console.warn(`[builder] ${ch.name} 补齐全员事件 ${a.added.map((x) => x.time).join("、")}`);
+              onProgress("player_script", `${ch.name} 的时间线补齐全员事件 ${a.added.map((x) => x.time).join("、")}`);
+            }
+          }
+          characterResults[ch.name] = fixedText;
+        } catch (e) { console.warn("[builder] 时间线自愈跳过:", e.message); }
+        // 之后的校验一律读**自愈后**的文本（否则会把刚补上的全员事件又报成缺失）
+        const finalText = characterResults[ch.name] || withDates;
         // 公共事件锚点核对：只告警、不改写（"当事人未必逐条复述自己的每次走动"，缺失不等于错）
         try {
           const off = parseTimeOffset(report.outline);
           const deltaMin = off ? (off.slow ? -off.offsetMin : off.offsetMin) : 0;
-          const anc = checkPublicEventAnchors(ch.name, withDates, report.outline && report.outline.publicEvents, deltaMin);
+          const anc = checkPublicEventAnchors(ch.name, finalText, report.outline && report.outline.publicEvents, deltaMin);
           if (anc.needed && !anc.ok) {
             console.warn(`[builder] ${ch.name} 未复述自己的 ${anc.missing.length} 条公共事件（告警，不重写）：${anc.missing.map((m) => m.time).join(" ")}`);
             onProgress("player_script", `⚠️ ${ch.name} 的剧本未出现其 ${anc.missing.length} 条权威公开行踪（已记录，未改动）`);
@@ -2272,7 +2303,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
             .filter((r) => COLLECTIVE.test(String((r && r.actor) || "").trim()))
             .map((r) => String(r.time || "").trim())
             .filter(Boolean);
-          const missing = collective.filter((t) => !new RegExp(`(^|[^0-9])${t.replace(":", "[:：]")}([^0-9]|$)`).test(withDates));
+          const missing = collective.filter((t) => !new RegExp(`(^|[^0-9])${t.replace(":", "[:：]")}([^0-9]|$)`).test(finalText));
           if (missing.length) {
             console.warn(`[builder] ${ch.name} 缺少 ${missing.length} 条全员事件（${missing.join(" ")}）`);
             onProgress("player_script", `⚠️ ${ch.name} 的时间线缺少全员事件 ${missing.join("、")}（与权威表对不上）`);
@@ -2283,7 +2314,7 @@ async function buildMurderMystery(userInput, onProgress, config) {
           const alias = extractAliasOfVictim(report.outline);
           const real = String((report.outline && report.outline.victim && report.outline.victim.name) || "");
           if (alias && real) {
-            const tlText = (withDates.match(/^-\s*\*\*\d{1,2}月\d{1,2}日[^\n]*/gm) || []).join("\n");
+            const tlText = (finalText.match(/^-\s*\*\*\d{1,2}月\d{1,2}日[^\n]*/gm) || []).join("\n");
             const hasReal = tlText.includes(real);
             const hasAlias = tlText.includes(alias);
             if (hasReal && hasAlias) {
