@@ -1882,11 +1882,22 @@ async function buildMurderMystery(userInput, onProgress, config) {
   // 大纲是"人数锁定"的唯一权威：解析失败或人数不符都要重试，绝不回退到 framework 提取
   // （framework 自解历史上会出现超限 NPC，导致无谓重写）。
   onProgress("outline", "正在设计剧本大纲（锁定角色人数与核心设定）...");
+  // 名字去重（2026-10-20 用户反馈）：连着几本出现同名角色（林默/小栓/沈砚秋），
+  // 玩家串戏。先把最近剧本用过的名字捞出来，作为禁用名单注入大纲提示词。
+  let usedNames = [];
+  try {
+    const { collectUsedNames } = require("./name-registry");
+    usedNames = await collectUsedNames({ limit: 40, excludeSessionId: cfg.sessionId || "" });
+    if (usedNames.length) {
+      console.log(`[builder] 名字去重：最近剧本已用 ${usedNames.length} 个角色名，将禁止重复`);
+      if (onProgress) onProgress("outline", `名字去重：已收集 ${usedNames.length} 个历史角色名，本次禁止重复`);
+    }
+  } catch (e) { console.warn("[builder] 收集历史名字失败（忽略）:", e.message); }
   let outline = null;
   let outlineError = null;
   for (let oa = 0; oa < 3; oa++) {
     try {
-      const cand = await buildOutline(userInput, cfg, trickDesign);
+      const cand = await buildOutline(userInput, cfg, trickDesign, usedNames);
       const op = (cand.players || []).length;
       const on_ = (cand.npcs || []).length;
       if (cand && op === cfg.playerCount && on_ === cfg.npcCount) {
@@ -1901,11 +1912,28 @@ async function buildMurderMystery(userInput, onProgress, config) {
       console.warn(`[builder] 大纲第${oa + 1}次生成失败：${e.message}，重试...`);
     }
   }
-  if (!outline) {
-    // 大纲无效直接抛错——由上层（script-writer / script-reviewer）整体重试，
+  if (!outline) {    // 大纲无效直接抛错——由上层（script-writer / script-reviewer）整体重试，
     // 而不是回退到 framework 提取产生超限角色。
     throw new Error(`剧本大纲生成失败（3次尝试）：${outlineError?.message || "未知原因"}`);
   }
+  // 撞名检查（2026-10-20 用户反馈）：提示词里已经禁用了历史名字，但模型不保证遵守。
+  // 这里做确定性核对，命中就**告警 + 记进产物**（不自动改名：改名会牵动时间线/线索/真相里
+  // 所有引用，风险大于收益，留给人工判断）。
+  try {
+    const { checkNameCollisions } = require("./name-registry");
+    const fresh = [
+      ...(outline.players || []).map((p) => p && p.name),
+      ...(outline.npcs || []).map((p) => p && p.name),
+    ];
+    const cc = checkNameCollisions({ names: fresh, usedNames });
+    if (cc.hit.length) {
+      report.nameCollisions = cc.hit;
+      report.crossCheck = report.crossCheck || { issues: [] };
+      report.crossCheck.issues = [...(report.crossCheck.issues || []), cc.text];
+      console.warn(`[builder] ⚠ 取名撞车：${cc.hit.map((h) => `${h.name}≈${h.similar}`).join("、")}`);
+      if (onProgress) onProgress("outline", `⚠ 取名撞车：${cc.hit.map((h) => h.name).join("、")} 与历史剧本重复，建议重生成或改名`);
+    }
+  } catch (e) { console.warn("[builder] 撞名检查跳过:", e.message); }
   // 案发日期来自大纲后立刻核一次并出声音：它是全剧唯一的时间基准，
   // 缺了它 → 每个角色都会收到"未设定绝对日期，严禁自创" → 实测挡不住 → 各角色编出多套日期
   // → 事后靠几十条补丁统一（1975 西安·俑坑案：76 条）。静默缺失的代价太大，必须可见。
@@ -2969,8 +2997,15 @@ ${userInput}`;
  *   非空时作为**最高优先级硬约束**注入：大纲的 coreTrick/trickSpec/murderer 必须与它一致。
  *   为 null（诡计阶段降级）时行为与改造前完全一致——不注入任何诡计约束。
  */
-async function buildOutline(userInput, cfg, trickDesign) {
+async function buildOutline(userInput, cfg, trickDesign, usedNames) {
   const { playerCount, npcCount, isPVE } = cfg;
+  // 名字去重（2026-10-20 用户反馈）：最近几本出现过同名角色（林默/小栓/沈砚秋），
+  // 玩家连着玩会串戏。把历史名字作为禁用名单注入提示词。
+  let avoidNamesBlock = "";
+  try {
+    const { buildAvoidNamesBlock } = require("./name-registry");
+    avoidNamesBlock = buildAvoidNamesBlock(usedNames);
+  } catch (e) { /* 忽略 */ }
   const npcLabel = isPVE ? "嫌疑人" : (npcCount > 0 ? "目击者/关系人" : "无NPC");
   const roleHint = isPVE
     ? `凶手可以是玩家或NPC（建议NPC更有挑战性）；NPC都是嫌疑人，各怀动机`
@@ -2989,7 +3024,7 @@ ${trickDesign ? "\n## 关于核心诡计\n本次的核心诡计**已经单独设
   const user = `## 用户需求
 ${userInput}
 
-${trickBlock}## 硬性人数约束（必须严格遵守，大纲中一个不多一个不少）
+${trickBlock}${avoidNamesBlock ? avoidNamesBlock + "\n\n" : ""}## 硬性人数约束（必须严格遵守，大纲中一个不多一个不少）
 - 玩家角色：恰好 ${playerCount} 人
 - NPC：恰好 ${npcCount} 人
 - 总角色数（不含死者）：${playerCount + npcCount} 人

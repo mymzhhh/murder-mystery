@@ -24,6 +24,8 @@ export default function ScriptsPage() {
   const [loading, setLoading] = useState(false);
   const [view, setView] = useState(null); // { title, markdown }
   const [splitView, setSplitView] = useState(null);
+  // 详情弹窗的页签：outline（生成大纲/产物）｜split（切分数据）。两个入口默认停在各自页签。
+  const [detailTab, setDetailTab] = useState("outline");
   const [job, setJob] = useState(null);   // { label, logs, running, done, error }
 
   async function load() {
@@ -82,10 +84,15 @@ export default function ScriptsPage() {
       setView({ id, title: d.title || "", markdown: d.markdown || d.fullScript || "" });
     } catch (e) { alert(e.message); }
   }
-  async function doSplitView(id) {
+  // 打开的是同一个详情弹窗，但**默认停在哪个页签**不同：
+  //   「大纲/产物」→ 生成大纲；「切分预览」→ 切分数据。
+  // 之前两个按钮都调同一个函数、弹窗里一次把所有内容从上到下铺出来，
+  // 于是"点大纲"和"点切分"看到的东西一模一样（用户实测反馈）。
+  async function doOpenDetail(id, tab) {
     try {
       const d = await apiJson(`/api/admin/scripts/${id}/split-view`);
       setSplitView(d);
+      setDetailTab(tab || "outline");
     } catch (e) { alert(e.message); }
   }
 
@@ -199,9 +206,10 @@ export default function ScriptsPage() {
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button className="btn btn-outline btn-xs" onClick={() => doView(s.sessionId || s.id)}>查看</button>
-                  {/* 大纲/产物：生成完就能查"当初是按什么大纲写的"；外部导入的会显示明确提示 */}
-                  <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>大纲/产物</button>
-                  <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>切分预览</button>
+                  {/* 两个入口打开同一个详情弹窗，但默认页签不同：
+                      「大纲/产物」→ 生成大纲；「切分预览」→ 切分数据（以前两者内容完全一样） */}
+                  <button className="btn btn-outline btn-xs" onClick={() => doOpenDetail(s.sessionId || s.id, "outline")}>大纲/产物</button>
+                  <button className="btn btn-outline btn-xs" onClick={() => doOpenDetail(s.sessionId || s.id, "split")}>切分预览</button>
                   <button className="btn btn-success btn-xs" disabled={busy} onClick={() => doReviewSplit(s.sessionId || s.id)}>评测并切分</button>
                   <button className="btn btn-outline btn-xs" onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
                   <button className="btn btn-outline btn-xs" onClick={() => doTogglePublic(s)}>
@@ -230,7 +238,26 @@ export default function ScriptsPage() {
 
       {/* 切分预览 */}
       {splitView && (
-        <Modal title="切分数据" onClose={() => setSplitView(null)}>
+        <Modal title="剧本详情" onClose={() => setSplitView(null)}>
+          {/* 页签：以前两个入口都打开同一份"从上到下铺开"的内容，看起来完全一样。
+              现在「大纲/产物」只看生成侧、「切分数据」只看玩家实际拿到的数据（2026-10-20）。 */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
+            <button
+              className={detailTab === "outline" ? "btn btn-xs" : "btn btn-outline btn-xs"}
+              onClick={() => setDetailTab("outline")}
+            >生成大纲 / 产物</button>
+            <button
+              className={detailTab === "split" ? "btn btn-xs" : "btn btn-outline btn-xs"}
+              onClick={() => setDetailTab("split")}
+            >
+              切分数据（{(splitView.characters || []).length} 角色 / {(splitView.clues || []).length} 线索）
+            </button>
+          </div>
+
+          {detailTab === "split" ? (
+            <SplitDataPanel data={splitView} />
+          ) : (
+          <>
           {/* ===== 生成大纲（原始结构）=====
               用户需求：生成完之后要能看到"当初是按什么大纲写的"，方便排查问题。
               外部导入的剧本没有这一步，显示明确提示而不是空面板。 */}
@@ -406,9 +433,84 @@ export default function ScriptsPage() {
               该剧本没有中间产物（在本次改动之前生成的剧本不会记录推理链）。
             </div>
           )}
-          <pre style={{ fontSize: 12 }}>{JSON.stringify(splitView, null, 2)}</pre>
+          </>
+          )}
         </Modal>
       )}
+    </div>
+  );
+}
+
+/**
+ * 切分数据面板：玩家实际拿到的角色 / 线索 / DM 关键字段。
+ * 以前这里只是把整个 splitView 用 <pre>{JSON.stringify(...)}</pre> 倒出来，
+ * 和"大纲"页签长得几乎一样（用户实测：点两个按钮看到的内容一模一样）。
+ * 现在按"角色 / 第一轮线索 / 第二轮线索 / 隐藏线索 / DM"分组呈现，原始 JSON 收进折叠区。
+ */
+function SplitDataPanel({ data }) {
+  const chars = data.characters || [];
+  const clues = data.clues || [];
+  const r1 = clues.filter((c) => Number(c.round) === 1);
+  const r2 = clues.filter((c) => Number(c.round) === 2);
+  const hidden = clues.filter((c) => c.hiddenBehind || /通过深入调查/.test(String(c.content || "")));
+  const parents = clues.filter((c) => /发现隐藏线索|可深入调查/.test(String(c.content || "")) && !c.hiddenBehind);
+  const dm = data.dm || {};
+
+  const Row = ({ children }) => <div className="outline-row">{children}</div>;
+
+  return (
+    <div>
+      <section className="outline-sec" style={{ marginBottom: 14 }}>
+        <div className="kicker" style={{ marginBottom: 8 }}>
+          <span style={{ flex: "0 0 auto" }}>角色</span>
+          <span className="tag">{chars.length} 人</span>
+        </div>
+        {chars.map((c, i) => (
+          <Row key={i}>
+            <strong>{c.name || "?"}</strong>
+            {c.isMurderer ? <span className="tag tag-admin" style={{ marginLeft: 6 }}>凶手</span> : null}
+            {c.roleType && c.roleType !== "player" ? <span className="tag tag-npc" style={{ marginLeft: 6 }}>{c.roleType}</span> : null}
+            <span className="text-dim" style={{ marginLeft: 6 }}>
+              {c.occupation ? c.occupation + " ｜ " : ""}
+              剧本 {String(c.script || "").length} 字
+            </span>
+          </Row>
+        ))}
+      </section>
+
+      <section className="outline-sec" style={{ marginBottom: 14 }}>
+        <div className="kicker" style={{ marginBottom: 8 }}>
+          <span style={{ flex: "0 0 auto" }}>线索</span>
+          <span className="tag">第一轮 {r1.length}</span>
+          <span className="tag">第二轮 {r2.length}</span>
+          <span className="tag">隐藏父 {parents.length} / 子 {hidden.length}</span>
+        </div>
+        {[["第一轮", r1], ["第二轮", r2]].map(([label, list]) => (
+          <div key={label} style={{ marginBottom: 10 }}>
+            <div className="text-xs text-muted" style={{ margin: "6px 0 4px" }}>{label}</div>
+            {list.map((c, i) => (
+              <Row key={label + i}>
+                <strong style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{c.id}</strong>
+                <span className="text-muted" style={{ marginLeft: 6, fontSize: 11 }}>📍{c.location || "（无地点）"}</span>
+                {c.hiddenBehind ? <span className="tag tag-warning" style={{ marginLeft: 6 }}>隐藏←{c.hiddenBehind}</span> : null}
+                <span style={{ marginLeft: 6 }}>{String(c.content || "").replace(/\s+/g, " ").slice(0, 90)}</span>
+              </Row>
+            ))}
+          </div>
+        ))}
+      </section>
+
+      <section className="outline-sec" style={{ marginBottom: 14 }}>
+        <div className="kicker" style={{ marginBottom: 8 }}><span style={{ flex: "0 0 auto" }}>DM 关键字段</span></div>
+        <Row><span className="text-dim">凶手：{dm.murdererName || "（未记录）"}</span></Row>
+        <Row><span className="text-dim">动机：{String(dm.murdererMotive || "").slice(0, 120) || "（未记录）"}</span></Row>
+        <Row><span className="text-dim">真相复盘：{String(dm.truthReveal || "").length} 字</span></Row>
+      </section>
+
+      <details>
+        <summary className="text-xs text-muted" style={{ cursor: "pointer" }}>展开原始 JSON（排查用）</summary>
+        <pre style={{ fontSize: 11, maxHeight: 320, overflow: "auto", marginTop: 8 }}>{JSON.stringify(data, null, 2)}</pre>
+      </details>
     </div>
   );
 }
