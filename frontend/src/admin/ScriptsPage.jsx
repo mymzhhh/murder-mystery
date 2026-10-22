@@ -46,13 +46,34 @@ export default function ScriptsPage() {
   }
 
   // 上架/下架：下架后玩家大厅看不到、也不能凭 id 建房（管理端一切照旧）
+  // 上架会被后端「闸门」拦一次：隐藏线索父子不成对、子线索漏进搜证池、凶手零证据等
+  // 硬缺陷都会拒绝上架，并把逐条原因带回来（2026-10-20）。
   async function doTogglePublic(s) {
     const id = s.sessionId || s.id;
     const next = s.isPublic === false;   // 当前是下架 → 点了就是上架
     try {
       await api(`/api/admin/scripts/${id}/visibility`, { method: "PATCH", body: { isPublic: next } });
       load();
-    } catch (e) { alert(e.message); }
+    } catch (e) {
+      // api() 会把后端 JSON 的 error 抛出来；blockers 若一并带回，就把逐条原因列清楚，
+      // 并给一个"我知道有问题，仍要上架"的确认入口（走 force）。
+      const blockers = (e && e.blockers) || [];
+      if (next && blockers.length) {
+        const detail = blockers.map((b, i) => `${i + 1}. ${b.text}`).join("\n");
+        const force = window.confirm(
+          `上架检查未通过：\n\n${detail}\n\n仍然要上架吗？（玩家端可能直接坏掉）`
+        );
+        if (force) {
+          try {
+            await api(`/api/admin/scripts/${id}/visibility`, { method: "PATCH", body: { isPublic: true, force: true } });
+            load();
+            return;
+          } catch (e2) { alert(e2.message); return; }
+        }
+        return;
+      }
+      alert(e.message);
+    }
   }
 
   async function doView(id) {

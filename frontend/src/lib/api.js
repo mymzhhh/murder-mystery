@@ -48,11 +48,21 @@ export async function api(path, opts = {}) {
   }
   if (!res.ok) {
     let msg = `请求失败 (${res.status})`;
+    let payload = null;
     try {
       const d = await res.json();
+      payload = d;
       if (d && d.error) msg = d.error;
     } catch (e) { /* ignore */ }
-    throw new Error(msg);
+    const err = new Error(msg);
+    // 把结构化字段挂到异常上：上架闸门会把 blockers 逐条带回来，
+    // 只留一句 error 的话前端没法告诉用户"具体哪几条不通过"。
+    if (payload && typeof payload === "object") {
+      err.status = res.status;
+      if (Array.isArray(payload.blockers)) err.blockers = payload.blockers;
+      if (payload.hint) err.hint = payload.hint;
+    }
+    throw err;
   }
   return res;
 }

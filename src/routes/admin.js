@@ -237,9 +237,50 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
   // 上架/下架：is_public=false 时玩家大厅看不到、也建不了房；管理端一切照旧
   app.patch("/api/admin/scripts/:id/visibility", authMiddleware, adminMiddleware, async (req, res) => {
     try {
-      const { setScriptPublic } = require("../core/db");
+      const { setScriptPublic, getScript } = require("../core/db");
       const isPublic = req.body && req.body.isPublic;
       if (typeof isPublic !== "boolean") return res.status(400).json({ error: "isPublic 必须是布尔值" });
+
+      // ===== 上架闸门（2026-10-20）=====
+      // 下架永远放行；**上架**要先过确定性检查：隐藏线索父子成对、子线索没进搜证池、
+      // 可搜线索够多、凶手不是零证据。这些在生成期只是"进修订队列"，修订没补上就会带病上架。
+      // 管理端可以显式 force 覆盖（知道有问题仍要上架），但会写审计日志。
+      if (isPublic) {
+        const force = !!(req.body && req.body.force);
+        let gate = { ok: true, blockers: [] };
+        try {
+          const { getSplitData } = require("../script/script-splitter");
+          const { checkPublishReady } = require("../script/publish-gate");
+          const data = await getSplitData(req.params.id);
+          if (data && (data.clues || []).length) {
+            const chars = Object.entries(data.characters || {}).map(([name, c]) => ({
+              name, isMurderer: !!(c && (c.isMurderer || c.is_murderer)),
+            }));
+            const dm = data.dm || {};
+            gate = checkPublishReady({
+              clues: data.clues || [],
+              characters: chars,
+              murderer: dm.murdererName || "",
+            });
+          } else {
+            gate = { ok: false, blockers: [{ code: "not_split", text: "剧本还没切分：玩家端无法开局" }] };
+          }
+        } catch (e) {
+          console.warn("[admin] 上架闸门检查失败（放行并记录）:", e.message);
+        }
+        if (!gate.ok && !force) {
+          console.log(`[audit] 上架被闸门拦下 by=${(req.user && req.user.username) || "?"} id=${req.params.id} blockers=${gate.blockers.length}`);
+          return res.status(409).json({
+            error: "上架检查未通过：" + gate.blockers.map((b) => b.text).join("；"),
+            blockers: gate.blockers,
+            hint: "修好后重试；确实要带着问题上架，请带 force=true",
+          });
+        }
+        if (!gate.ok && force) {
+          console.warn(`[audit] 上架被强制放行 by=${(req.user && req.user.username) || "?"} id=${req.params.id} 问题：${gate.blockers.map((b) => b.code).join(",")}`);
+        }
+      }
+
       const row = await setScriptPublic(req.params.id, isPublic);
       if (!row) return res.status(404).json({ error: "剧本不存在" });
       console.log(`[audit] 剧本可见性 by=${(req.user && req.user.username) || "?"} id=${req.params.id} is_public=${row.is_public}`);
