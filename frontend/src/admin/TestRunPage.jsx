@@ -500,6 +500,17 @@ export default function TestRunPage() {
                                 <div className="text-xs" style={{ color: "var(--text-dim)", marginLeft: 14 }}>
                                   {d.reason || "（没有记录理由 —— 该票可能来自规则兜底或真人玩家）"}
                                 </div>
+                                {/* 依据线索编号（2026-10-22）：理由可以编得像模像样，编号对不对是硬判据 */}
+                                {(d.basis && d.basis.length) || (d.invalidBasis && d.invalidBasis.length) ? (
+                                  <div className="text-xs" style={{ marginLeft: 14, marginTop: 1 }}>
+                                    {d.basis && d.basis.length ? <span className="text-dim">依据：{d.basis.join("、")}</span> : null}
+                                    {d.invalidBasis && d.invalidBasis.length ? (
+                                      <span style={{ color: "var(--danger)" }}>
+                                        {d.basis && d.basis.length ? "　" : ""}⚠ 编造编号：{d.invalidBasis.join("、")}（不存在）
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ) : null}
                               </div>
                             ))}
                           </div>

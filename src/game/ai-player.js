@@ -945,11 +945,17 @@ async function actVote(io, roomCode, ai, allChars) {
   // 两条路都要带**理由**（2026-10-22 用户要求：测试房间/测试报告要能解释"为什么投这个人"）。
   let target = null;
   let reason = "";
+  let basis = null;
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
     const v = await llm.voteLLM(k, candidates);
-    if (v && v.target) { target = v.target; reason = v.reason || ""; }
+    if (v && v.target) {
+      target = v.target;
+      reason = v.reason || "";
+      // 依据线索编号（2026-10-22）：valid = 真实存在的，invalid = 它自己编的
+      basis = { valid: v.basis || [], invalid: v.invalidBasis || [] };
+    }
   } catch (e) { console.warn("[ai-player] vote LLM 失败:", e.message); }
   if (!target) {
     const fb = chooseVoteTargetWithReason(aiScript, publicClues, candidates);
@@ -961,7 +967,7 @@ async function actVote(io, roomCode, ai, allChars) {
   // 生成期间阶段已推进（voting 结束）→ 这一票作废：truth_reveal 前有 voteForAllPending 兜底补投，
   // 而把迟到的票写进真相阶段会让结算多出一票。
   if (await phaseChanged(roomCode, "voting")) return;
-  await recordVote(roomCode, ai.playerId, target, reason);
+  await recordVote(roomCode, ai.playerId, target, reason, basis);
   // 投满票 → 立即推进（用户实测：全员投完后房间会卡在投票阶段）
   setImmediate(() => { try { require("../game/vote-advance").advanceIfAllVoted(io, roomCode).catch(() => {}); } catch (e) {} });
   recordTurn(roomCode, ai.characterName, "vote");

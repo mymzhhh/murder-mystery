@@ -87,6 +87,9 @@ async function buildKnowledge(roomCode, ai, parsed) {
     roomCode,
     myClues,
     otherClues,
+    // 可见线索的**编号清单**（2026-10-22 用户要求）：投票时让 AI 说明"依据哪几条线索"，
+    // 同时用于校验 —— 引用了不存在的编号就说明它在编，而不是真读了线索。
+    clueIds: [...new Set(visibleClues(allClues, ai.playerId).map((c) => String(c.id || "").trim()).filter(Boolean))],
     allChars: (parsed.characters || []).map(c => `${c.name}${c.occupation ? "（" + c.occupation + "）" : ""}`),
     selfName: ai.characterName || "",
     victim,
@@ -361,12 +364,21 @@ ${safety.wrapUntrusted(question, { label: "question", maxLen: 600 })}
  */
 async function voteLLM(k, candidates) {
   if (!candidates || !candidates.length) return null;
-  const user = `现在是投票阶段，请推理谁最可能是真凶，输出一行 JSON：{"target":"角色名","reason":"一句话理由"}
+  const ids = Array.isArray(k.clueIds) ? k.clueIds : [];
+  // 让模型自报"依据哪几条线索"（2026-10-22 用户要求）：
+  // 一句话理由可以写得像模像样，但**编号对不对**是硬判据 ——
+  // 引用了不存在的编号，就说明它在编，而不是真读了线索。
+  const idLine = ids.length
+    ? `- basis 必须从这些**真实存在的线索编号**里选（1-4 个，没有依据就给空数组）：${ids.slice(0, 60).join("、")}`
+    : "- basis 给空数组（本局还没有任何可见线索）";
+  const user = `现在是投票阶段，请推理谁最可能是真凶，输出一行 JSON：{"target":"角色名","reason":"一句话理由","basis":["线索编号"]}
 要求：
 - target 必须是候选之一：${candidates.join("、")}
 - 先在内部推理：把【全场已经公开的线索】逐条对照每个人的时间线，找出谁说法的破绽
 - 只依据你的角色信息、已公开的线索和公开讨论判断；允许存在不确定性，选择你"相对怀疑"的一位
 - 不要投给自己
+${idLine}
+- **禁止编造线索编号**：basis 里写了不存在的编号，会被程序判为"没读线索、凭空断言"
 - 只输出 JSON，不要解释
 如果完全无法判断，也请选一个你觉得行为可疑的人。`;
   const raw = await agnes.chat(systemPrompt(k), knowledgePrompt(k) + "\n\n" + user, {
@@ -386,7 +398,19 @@ async function voteLLM(k, candidates) {
     // 理由一并带回去（2026-10-22 用户要求）：测试房间/测试报告要能解释"为什么投这个人"。
     // 以前这里只 return target，把模型给的 reason 丢掉了 —— 于是报告只能看到"谁投了谁"。
     const reason = String((parsed && parsed.reason) || "").trim();
-    return { target, reason: reason || "（模型未给出理由）" };
+    // 依据编号：拆出"真实存在"与"编造的"两组
+    const cited = (Array.isArray(parsed && parsed.basis) ? parsed.basis : [])
+      .map((x) => String(x || "").trim().toUpperCase().replace(/^【|】$/g, ""))
+      .filter(Boolean);
+    const known = new Set(ids.map((x) => String(x).toUpperCase()));
+    const valid = [...new Set(cited.filter((x) => known.has(x)))];
+    const invalid = [...new Set(cited.filter((x) => !known.has(x)))];
+    return {
+      target,
+      reason: reason || "（模型未给出理由）",
+      basis: valid,
+      invalidBasis: invalid,
+    };
   } catch (e) { return null; }
 }
 

@@ -90,12 +90,16 @@ function buildTestReport(input) {
   // 投票理由（2026-10-22 用户要求）：管理员要能回答"每个 AI 为什么投给这个人"。
   // 键同样是 playerId，报告里换成角色名一起展示。
   const voteReasons = input.voteReasons || {};
+  const voteBasis = input.voteBasis || {};
   const tally = {};
   for (const target of Object.values(votes)) tally[target] = (tally[target] || 0) + 1;
   const byVoter = Object.entries(votes).map(([pid, target]) => ({
     voter: voters[pid] || pid,
     target,
     reason: String(voteReasons[pid] || "").trim(),
+    // 依据线索编号 + 编造的编号（2026-10-22）：理由可以写得像模像样，编号对不对是硬判据
+    basis: ((voteBasis[pid] || {}).valid || []).slice(0, 6),
+    invalidBasis: ((voteBasis[pid] || {}).invalid || []).slice(0, 6),
   }));
 
   const findings = [];

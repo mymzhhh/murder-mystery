@@ -105,9 +105,9 @@ test("票型按角色名汇总，不出现内部 playerId（管理员看不懂 a
   assert.deepStrictEqual(r.voting.tally, { 宋砚生: 2, 陈国斌: 1 });
   // 2026-10-22：byVoter 增加 reason 字段（用户要求报告能说明"每个 AI 为什么投这个人"）
   assert.deepStrictEqual(r.voting.byVoter, [
-    { voter: "何秀云", target: "宋砚生", reason: "" },
-    { voter: "宋砚生", target: "陈国斌", reason: "" },
-    { voter: "文小满", target: "宋砚生", reason: "" },
+    { voter: "何秀云", target: "宋砚生", reason: "", basis: [], invalidBasis: [] },
+    { voter: "宋砚生", target: "陈国斌", reason: "", basis: [], invalidBasis: [] },
+    { voter: "文小满", target: "宋砚生", reason: "", basis: [], invalidBasis: [] },
   ]);
   const shown = JSON.stringify(r.voting.byVoter) + JSON.stringify(r.voting.tally);
   assert.ok(!shown.includes("ai_E7_"), "内部 id 不能出现在给管理员看的字段里");

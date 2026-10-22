@@ -439,13 +439,32 @@ async function getWhispersFor(code, playerId, limit = 120) {
 
 // ==================== 投票 ====================
 
-async function recordVote(code, playerId, target, reason) {
+async function recordVote(code, playerId, target, reason, basis) {
   const r = await ensureConn();
   await r.hset(`game:${code}:votes`, playerId, target);
   // 投票理由（2026-10-22 用户要求）：测试房间/测试报告要能看到"每个 AI 为什么投给这个人"。
   // 与票分开存：票是 {playerId: target}，理由是 {playerId: reason}，不影响既有结算逻辑。
   const why = String(reason || "").trim();
   if (why) await r.hset(`game:${code}:vote_reasons`, playerId, why.slice(0, 300));
+  // 依据线索编号 + 编造了什么（2026-10-22）：JSON 存，界面据此展示「依据：B13、B22」，
+  // 并把"引用了不存在的编号"标出来 —— 那是一句话理由看不出来的造假。
+  if (basis && (Array.isArray(basis.valid) || Array.isArray(basis.invalid))) {
+    await r.hset(`game:${code}:vote_basis`, playerId, JSON.stringify({
+      valid: (basis.valid || []).slice(0, 6),
+      invalid: (basis.invalid || []).slice(0, 6),
+    }));
+  }
+}
+
+/** 投票依据表：{playerId: {valid:[], invalid:[]}} */
+async function getVoteBasis(code) {
+  const r = await ensureConn();
+  const raw = await r.hgetall(`game:${code}:vote_basis`);
+  const out = {};
+  for (const [pid, s] of Object.entries(raw || {})) {
+    try { out[pid] = JSON.parse(s); } catch (e) { /* 忽略坏值 */ }
+  }
+  return out;
 }
 
 /** 投票理由表：{playerId: reason} */
@@ -465,6 +484,7 @@ async function clearVotes(code) {
   const r = await ensureConn();
   await r.del(`game:${code}:votes`);
   await r.del(`game:${code}:vote_reasons`);
+  await r.del(`game:${code}:vote_basis`);
 }
 
 // ==================== 搜证配额 ====================
@@ -656,7 +676,7 @@ module.exports = {
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
   loadClues, getClues, assignClue, getPlayerClues, revealClue, digClue, markClueDug, shareClue,
   claimClue, claimCharacter, releaseCharacterClaim, releaseCharacterClaims,
-  recordVote, getVotes, getVoteReasons, clearVotes,
+  recordVote, getVotes, getVoteReasons, getVoteBasis, clearVotes,
   SEARCH_MAX_PER_ROUND, getSearchQuota, consumeSearchQuota, clearSearchQuota, hasSearchBudget,
   addIntroduction, getIntroductions,
   addChatMessage, getChatMessages,

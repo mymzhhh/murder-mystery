@@ -173,6 +173,17 @@ export default function TestReportsPage() {
                               <div className="text-xs" style={{ color: "var(--text-dim)", marginLeft: 12 }}>
                                 {v.reason || "（没有记录理由 —— 可能是真人玩家，或这一局早于「记录理由」功能上线）"}
                               </div>
+                              {/* 依据线索编号（2026-10-22）：理由像模像样不算数，编号对不对才是硬判据 */}
+                              {(v.basis && v.basis.length) || (v.invalidBasis && v.invalidBasis.length) ? (
+                                <div className="text-xs" style={{ marginLeft: 12, marginTop: 1 }}>
+                                  {v.basis && v.basis.length ? <span className="text-dim">依据：{v.basis.join("、")}</span> : null}
+                                  {v.invalidBasis && v.invalidBasis.length ? (
+                                    <span style={{ color: "var(--danger)" }}>
+                                      {v.basis && v.basis.length ? "　" : ""}⚠ 编造编号：{v.invalidBasis.join("、")}（不存在）
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
                             </div>
                           ))}
                         </div>

@@ -44,13 +44,16 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
     // voteDetail 逐票给出 投票人 → 被投者 → 理由；votes 仍保留（按被投者汇总）。
     let voteDetail = [];
     try {
-      const { getVoteReasons } = require("../game/game-manager");
+      const { getVoteReasons, getVoteBasis } = require("../game/game-manager");
       const reasons = await getVoteReasons(roomCode);
+      const basisMap = await getVoteBasis(roomCode);
       const findP = (pid) => players.find((x) => x.playerId === pid) || {};
       voteDetail = Object.entries(votes || {}).map(([pid, target]) => ({
         voter: findP(pid).characterName || findP(pid).name || pid,
         target,
         reason: (reasons && reasons[pid]) || "",
+        basis: (basisMap && basisMap[pid] && basisMap[pid].valid) || [],
+        invalidBasis: (basisMap && basisMap[pid] && basisMap[pid].invalid) || [],
         isAI: !!findP(pid).isAI,
       }));
     } catch (e) { console.warn("[ai-dm] 读取投票理由失败（不阻塞）:", e.message); }

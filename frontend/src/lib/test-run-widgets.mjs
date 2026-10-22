@@ -220,6 +220,9 @@ export function voteRows(truth) {
         voter: String(d.voter),
         target: String(d.target || ""),
         reason: String(d.reason || "").trim(),
+        // 依据线索编号（2026-10-22）：valid=真实存在，invalid=模型编的
+        basis: Array.isArray(d.basis) ? d.basis.map(String) : [],
+        invalidBasis: Array.isArray(d.invalidBasis) ? d.invalidBasis.map(String) : [],
         isAI: !!d.isAI,
       }))
       .sort((a, b) => String(a.voter).localeCompare(String(b.voter), "zh"));

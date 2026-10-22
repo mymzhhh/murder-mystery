@@ -346,7 +346,7 @@ test("voteLLM：非法目标返回 null，合法目标带理由返回", async ()
   stubs.agnesReply = '```json\n{"target":"张三","reason":"时间线矛盾"}\n```';
   // 2026-10-22 改：返回 {target, reason}（用户要求测试房间/报告能显示"为什么投这个人"），
   // 以前只 return target，把模型给的理由丢掉了。
-  assert.deepStrictEqual(await voteLLM(baseK(), ["张三", "李四"]), { target: "张三", reason: "时间线矛盾" });
+  assert.deepStrictEqual(await voteLLM(baseK(), ["张三", "李四"]), { target: "张三", reason: "时间线矛盾", basis: [], invalidBasis: [] });
 
   stubs.agnesReply = '{"target":"赵六"}';
   assert.strictEqual(await voteLLM(baseK(), ["张三", "李四"]), null);
@@ -387,4 +387,23 @@ test("AI 出手：传入可搜地点时才允许搜证，地点必须在名单�
   assert.strictEqual(bad, null, "编造的地点必须拒绝，回退规则引擎");
   const off = parseTurnOutput('{"action":"search","place":"顶层客厅"}', [], []);
   assert.strictEqual(off, null, "调用方没给地点时，搜证一律无效（线上行为不变）");
+});
+test("voteLLM：会区分「真实依据」和「编造的编号」（用户要求：验证 AI 有没有真读线索）", async () => {
+  resetStubs();
+  // 模型引用 B13（真实存在）与 B99（不存在）
+  stubs.agnesReply = '{"target":"张三","reason":"袖口纤维吻合","basis":["B13","B99"]}';
+  const k = Object.assign(baseK(), { clueIds: ["A1", "B13"] });
+  const r = await voteLLM(k, ["张三", "李四"]);
+  assert.strictEqual(r.target, "张三");
+  assert.deepStrictEqual(r.basis, ["B13"], "真实存在的编号保留");
+  assert.deepStrictEqual(r.invalidBasis, ["B99"], "不存在的编号必须被标出来");
+});
+
+test("voteLLM：小写/带括号的编号也能归一化识别", async () => {
+  resetStubs();
+  stubs.agnesReply = '{"target":"张三","reason":"x","basis":["b13","【A1】"]}';
+  const k = Object.assign(baseK(), { clueIds: ["A1", "B13"] });
+  const r = await voteLLM(k, ["张三", "李四"]);
+  assert.deepStrictEqual(r.basis.sort(), ["A1", "B13"]);
+  assert.deepStrictEqual(r.invalidBasis, []);
 });
