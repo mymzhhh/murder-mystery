@@ -32,32 +32,47 @@ function computeAiFillers(humans, characters) {
  * @param {Array} candidates 候选目标角色名数组（不含自己）
  * @returns {string} 目标角色名
  */
-function chooseVoteTarget(aiScript, publicClues, candidates) {
-  if (!Array.isArray(candidates) || candidates.length === 0) return "";
+/**
+ * 规则兜底的投票（LLM 失败时用），并把"为什么"一起返回。
+ * 2026-10-22 用户要求：测试房间/测试报告要能解释每个 AI 的投票。
+ * 这个兜底路径以前只返回目标名，报告里只能写"投了谁"；现在给出可读的理由。
+ *
+ * @returns {{target:string, reason:string}}
+ */
+function chooseVoteTargetWithReason(aiScript, publicClues, candidates) {
+  const empty = { target: "", reason: "" };
+  if (!Array.isArray(candidates) || candidates.length === 0) return empty;
   // 30% 概率完全随机（模拟真人随意/甩票）
   if (Math.random() < 0.3) {
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    return { target: pick, reason: "这轮没想清楚，凭直觉甩了一票（规则兜底：随机）" };
   }
   // 线索指向加权：角色名在公开线索内容/地点中出现次数
   const weights = {};
-  for (const c of candidates) weights[c] = Math.random() * 1.5; // 噪声底分
+  const hits = {};
+  for (const c of candidates) { weights[c] = Math.random() * 1.5; hits[c] = 0; }
   for (const clue of publicClues) {
     const text = ((clue.content || "") + " " + (clue.location || "") + " " + (clue.id || "")).toLowerCase();
     for (const c of candidates) {
-      if (text.includes(c.toLowerCase())) weights[c] += 2;
+      if (text.includes(c.toLowerCase())) { weights[c] += 2; hits[c] += 1; }
     }
   }
-  // 候选列表已排除自己（voteCandidates 传入 selfName），无需额外凶手压制逻辑。
-  // 对手里权重最高的施加轻微随机，模拟真人"疑邻盗斧"的倾向。
   let best = candidates[0];
   let bestW = -Infinity;
   for (const c of candidates) {
-    // 略偏"疑邻盗斧"：权重越高越可能投
-    const noise = weights[c];
-    const v = noise + Math.random() * 1.2;
+    const v = weights[c] + Math.random() * 1.2;   // 略偏"疑邻盗斧"
     if (v > bestW) { bestW = v; best = c; }
   }
-  return best;
+  const n = hits[best] || 0;
+  const reason = n > 0
+    ? `已公开的线索里有 ${n} 条提到他，相比之下他的嫌疑最重（规则兜底：线索加权）`
+    : `线索里没有直接指向谁，只能挑一个相对可疑的人（规则兜底：无有效指向）`;
+  return { target: best, reason };
+}
+
+/** 兼容旧调用：只要目标名 */
+function chooseVoteTarget(aiScript, publicClues, candidates) {
+  return chooseVoteTargetWithReason(aiScript, publicClues, candidates).target;
 }
 
 /** 从候选里挑一个"非自己"的角色名列表（含真人/AI/审讯NPC），供投票用 */
@@ -926,20 +941,27 @@ async function actVote(io, roomCode, ai, allChars) {
   if (!candidates.length) return;
 
   const publicClues = (await getClues(roomCode) || []).filter(c => c.foundBy && c.foundBy.length);
-  // 优先 LLM 推理投票（只读自己的知识），失败回退规则加权
+  // 优先 LLM 推理投票（只读自己的知识），失败回退规则加权。
+  // 两条路都要带**理由**（2026-10-22 用户要求：测试房间/测试报告要能解释"为什么投这个人"）。
   let target = null;
+  let reason = "";
   try {
     const parsed = JSON.parse(room.parsedScript || "{}");
     const k = await llm.buildKnowledge(roomCode, ai, parsed);
-    target = await llm.voteLLM(k, candidates);
+    const v = await llm.voteLLM(k, candidates);
+    if (v && v.target) { target = v.target; reason = v.reason || ""; }
   } catch (e) { console.warn("[ai-player] vote LLM 失败:", e.message); }
-  if (!target) target = chooseVoteTarget(aiScript, publicClues, candidates);
+  if (!target) {
+    const fb = chooseVoteTargetWithReason(aiScript, publicClues, candidates);
+    target = fb.target;
+    reason = fb.reason;
+  }
   if (!target) return;
 
   // 生成期间阶段已推进（voting 结束）→ 这一票作废：truth_reveal 前有 voteForAllPending 兜底补投，
   // 而把迟到的票写进真相阶段会让结算多出一票。
   if (await phaseChanged(roomCode, "voting")) return;
-  await recordVote(roomCode, ai.playerId, target);
+  await recordVote(roomCode, ai.playerId, target, reason);
   // 投满票 → 立即推进（用户实测：全员投完后房间会卡在投票阶段）
   setImmediate(() => { try { require("../game/vote-advance").advanceIfAllVoted(io, roomCode).catch(() => {}); } catch (e) {} });
   recordTurn(roomCode, ai.characterName, "vote");
@@ -948,7 +970,7 @@ async function actVote(io, roomCode, ai, allChars) {
   const humans = players.filter(p => !p.isNPC);
   io.to(roomCode).emit("vote_update", { count: Object.keys(afterVotes).length, total: humans.length + players.filter(p => p.isAI).length, aiVoted: true });
   io.to(roomCode).emit("chat_message", await addChatMessage(roomCode, ai.playerId, "AI:" + (ai.characterName || ""), ai.characterName || "AI",
-    `🤖 我投票给 ${target}`, room.phase));
+    `🤖 我投票给 ${target}${reason ? "：" + reason : ""}`, room.phase));
   console.log(`[ai-player] ${ai.characterName} 投票给 ${target}`);
 }
 
@@ -976,7 +998,7 @@ async function voteForAllPending(io, roomCode) {
 }
 
 module.exports = {
-  computeAiFillers, chooseVoteTarget, voteCandidates, buildAiSpeech, buildAiIntro,
+  computeAiFillers, chooseVoteTarget, chooseVoteTargetWithReason, voteCandidates, buildAiSpeech, buildAiIntro,
   syncAiFillers, scheduleRoom, cancelRoom, voteForAllPending,
   maybeAnswerMention,
   reserveSlot, // 时间片预约（纯函数，供测试）

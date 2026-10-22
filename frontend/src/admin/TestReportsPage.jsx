@@ -156,8 +156,27 @@ export default function TestReportsPage() {
                       : null}
                   </div>
                   {rep.voting && rep.voting.byVoter && rep.voting.byVoter.length ? (
-                    <div className="text-dim" style={{ marginTop: 3 }}>
-                      谁投了谁：{rep.voting.byVoter.map((v, i) => `${v.voter}→${v.target}`).join("、")}
+                    <div style={{ marginTop: 4 }}>
+                      <div className="text-dim">谁投了谁：{rep.voting.byVoter.map((v) => `${v.voter}→${v.target}`).join("、")}</div>
+                      {/* 逐票理由（2026-10-22 用户要求）：报告要能回答"每个 AI 为什么投给这个人"。
+                          没有理由的票也列出来并标注原因（真人玩家 / 规则兜底 / 早期局未记录）。 */}
+                      <details style={{ marginTop: 4 }}>
+                        <summary className="text-xs" style={{ cursor: "pointer" }}>
+                          投票理由（{rep.voting.byVoter.length} 票）
+                        </summary>
+                        <div style={{ marginTop: 3 }}>
+                          {rep.voting.byVoter.map((v, i) => (
+                            <div key={i} style={{ marginBottom: 6, lineHeight: 1.55 }}>
+                              <span>{v.voter}</span>
+                              <span className="text-dim"> → 投 </span>
+                              <strong style={{ color: v.target === (rep.voting.murdererName || "") ? "var(--wax-bright, #d64d50)" : "var(--text)" }}>{v.target}</strong>
+                              <div className="text-xs" style={{ color: "var(--text-dim)", marginLeft: 12 }}>
+                                {v.reason || "（没有记录理由 —— 可能是真人玩家，或这一局早于「记录理由」功能上线）"}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
                     </div>
                   ) : null}
                 </div>

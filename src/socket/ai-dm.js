@@ -40,13 +40,27 @@ async function autoAdvancePhase(io, roomCode, parsed, preGenNarrative) {
     //   ② LLM 版叙述异步生成，好了再补发一条 `narrative`（客户端已监听该事件）。
     // 于是"真相页立刻出现"与"叙述仍然戏剧化"两件事不再互相牺牲。
     const immediateNarrative = fallbackTruthReveal(parsed, outcome);
+    // 投票理由（2026-10-22 用户要求）：测试房间/测试报告要能看到"每个 AI 为什么投这个人"。
+    // voteDetail 逐票给出 投票人 → 被投者 → 理由；votes 仍保留（按被投者汇总）。
+    let voteDetail = [];
+    try {
+      const { getVoteReasons } = require("../game/game-manager");
+      const reasons = await getVoteReasons(roomCode);
+      const findP = (pid) => players.find((x) => x.playerId === pid) || {};
+      voteDetail = Object.entries(votes || {}).map(([pid, target]) => ({
+        voter: findP(pid).characterName || findP(pid).name || pid,
+        target,
+        reason: (reasons && reasons[pid]) || "",
+        isAI: !!findP(pid).isAI,
+      }));
+    } catch (e) { console.warn("[ai-dm] 读取投票理由失败（不阻塞）:", e.message); }
 
     await updateRoom(roomCode, { phase: "truth_reveal", phaseStartedAt: Date.now(), aiNarrative: immediateNarrative, status: "finished" });
     const { getRedis: gr } = require("../game/game-manager");
     (await (await gr())).del(`game:${roomCode}:ready`);
     // 只发送 truth_revealed，不发送 phase_changed（避免前端 renderGame 覆盖真相数据）
     io.to(roomCode).emit("truth_revealed", {
-      murdererName: room.murdererName, votes: tallied,
+      murdererName: room.murdererName, votes: tallied, voteDetail,
       outcome: outcome.outcome, description: outcome.description, narrative: immediateNarrative,
       phase: "truth_reveal",
     });

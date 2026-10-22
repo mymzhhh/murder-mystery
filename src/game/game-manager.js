@@ -1,4 +1,4 @@
-﻿// 游戏房间管理 — Redis 持久化（并发安全版）
+// 游戏房间管理 — Redis 持久化（并发安全版）
 // 使用 WATCH+MULTI 乐观锁 + 独立 key 设计避免误冲突
 const { getRedis, scanKeys, ensureRedis } = require("../core/redis-client");
 const { v4: uuidv4 } = require("uuid");
@@ -439,9 +439,20 @@ async function getWhispersFor(code, playerId, limit = 120) {
 
 // ==================== 投票 ====================
 
-async function recordVote(code, playerId, target) {
+async function recordVote(code, playerId, target, reason) {
   const r = await ensureConn();
   await r.hset(`game:${code}:votes`, playerId, target);
+  // 投票理由（2026-10-22 用户要求）：测试房间/测试报告要能看到"每个 AI 为什么投给这个人"。
+  // 与票分开存：票是 {playerId: target}，理由是 {playerId: reason}，不影响既有结算逻辑。
+  const why = String(reason || "").trim();
+  if (why) await r.hset(`game:${code}:vote_reasons`, playerId, why.slice(0, 300));
+}
+
+/** 投票理由表：{playerId: reason} */
+async function getVoteReasons(code) {
+  const r = await ensureConn();
+  const raw = await r.hgetall(`game:${code}:vote_reasons`);
+  return raw || {};
 }
 
 async function getVotes(code) {
@@ -453,6 +464,7 @@ async function getVotes(code) {
 async function clearVotes(code) {
   const r = await ensureConn();
   await r.del(`game:${code}:votes`);
+  await r.del(`game:${code}:vote_reasons`);
 }
 
 // ==================== 搜证配额 ====================
@@ -644,7 +656,7 @@ module.exports = {
   addPlayer, getPlayers, getPlayer, updatePlayer, removePlayer,
   loadClues, getClues, assignClue, getPlayerClues, revealClue, digClue, markClueDug, shareClue,
   claimClue, claimCharacter, releaseCharacterClaim, releaseCharacterClaims,
-  recordVote, getVotes, clearVotes,
+  recordVote, getVotes, getVoteReasons, clearVotes,
   SEARCH_MAX_PER_ROUND, getSearchQuota, consumeSearchQuota, clearSearchQuota, hasSearchBudget,
   addIntroduction, getIntroductions,
   addChatMessage, getChatMessages,

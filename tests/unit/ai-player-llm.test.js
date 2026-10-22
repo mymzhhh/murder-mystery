@@ -341,13 +341,23 @@ test("turnLLM：凶手与非凶手拿到不同的出手策略（误导 vs 补推
   assert.ok(innocentPrompt.includes("不要问") && innocentPrompt.includes("空泛"), "要挡住空泛问题");
 });
 
-test("voteLLM：非法目标返回 null，合法目标通过", async () => {
+test("voteLLM：非法目标返回 null，合法目标带理由返回", async () => {
   resetStubs();
   stubs.agnesReply = '```json\n{"target":"张三","reason":"时间线矛盾"}\n```';
-  assert.strictEqual(await voteLLM(baseK(), ["张三", "李四"]), "张三");
+  // 2026-10-22 改：返回 {target, reason}（用户要求测试房间/报告能显示"为什么投这个人"），
+  // 以前只 return target，把模型给的理由丢掉了。
+  assert.deepStrictEqual(await voteLLM(baseK(), ["张三", "李四"]), { target: "张三", reason: "时间线矛盾" });
 
   stubs.agnesReply = '{"target":"赵六"}';
   assert.strictEqual(await voteLLM(baseK(), ["张三", "李四"]), null);
+});
+
+test("voteLLM：模型没给理由时也要有占位说明（报告里不能留空让人猜）", async () => {
+  resetStubs();
+  stubs.agnesReply = '{"target":"张三"}';
+  const r = await voteLLM(baseK(), ["张三", "李四"]);
+  assert.strictEqual(r.target, "张三");
+  assert.ok(r.reason && r.reason.length > 0, "理由不能为空");
 });
 
 test("systemPrompt 对缺失字段容错（一个字段缺失不该让整轮发言崩掉）", () => {

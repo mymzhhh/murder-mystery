@@ -480,6 +480,31 @@ export default function TestRunPage() {
                           {r.isTop ? <span className="text-dim">最高票</span> : null}
                         </div>
                       )) : <div className="text-dim">这一局没有票（无人投票）</div>}
+                      {/* 逐票理由（2026-10-22 用户要求）：每个 AI 为什么投这个人。
+                          以前只能看到"谁投了谁"，看不到判断依据，无法判断 AI 是真推理还是瞎投。 */}
+                      {votes.detail && votes.detail.length ? (
+                        <details style={{ marginTop: 6 }}>
+                          <summary className="text-xs" style={{ cursor: "pointer" }}>
+                            投票理由（{votes.detail.length} 票{votes.detail.filter((d) => !d.reason).length ? `，其中 ${votes.detail.filter((d) => !d.reason).length} 票没记理由` : ""}）
+                          </summary>
+                          <div style={{ marginTop: 4 }}>
+                            {votes.detail.map((d, i) => (
+                              <div key={i} style={{ marginBottom: 5, lineHeight: 1.55 }}>
+                                <span style={{ color: d.isAI ? "var(--brass)" : "var(--text)" }}>
+                                  {d.isAI ? "🤖 " : "👤 "}{d.voter}
+                                </span>
+                                <span className="text-dim"> → 投 </span>
+                                <strong style={{ color: truth && d.target === truth.murdererName ? "var(--wax-bright, #d64d50)" : "var(--text)" }}>
+                                  {d.target || "（未记录）"}
+                                </strong>
+                                <div className="text-xs" style={{ color: "var(--text-dim)", marginLeft: 14 }}>
+                                  {d.reason || "（没有记录理由 —— 该票可能来自规则兜底或真人玩家）"}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      ) : null}
                     </>
                   ) : (
                     <>

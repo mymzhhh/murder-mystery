@@ -206,11 +206,24 @@ export const OUTCOME_TEXT = {
  */
 export function voteRows(truth) {
   const v = truth && truth.votes;
-  const out = { hasVotes: false, rows: [], top: null, outcome: "", outcomeText: "", desc: "" };
+  const out = { hasVotes: false, rows: [], top: null, outcome: "", outcomeText: "", desc: "", detail: [] };
   if (!truth) return out;
   out.outcome = String(truth.outcome || "");
   out.outcomeText = OUTCOME_TEXT[truth.outcome] || String(truth.outcome || "");
   out.desc = String(truth.description || "");
+  // 逐票理由（2026-10-22 用户要求）：服务端在 truth_revealed 里带 voteDetail，
+  // 形如 [{voter, target, reason, isAI}]。这里原样透出，供界面回答"他为什么投这个人"。
+  if (Array.isArray(truth.voteDetail)) {
+    out.detail = truth.voteDetail
+      .filter((d) => d && d.voter)
+      .map((d) => ({
+        voter: String(d.voter),
+        target: String(d.target || ""),
+        reason: String(d.reason || "").trim(),
+        isAI: !!d.isAI,
+      }))
+      .sort((a, b) => String(a.voter).localeCompare(String(b.voter), "zh"));
+  }
   if (!v || typeof v !== "object" || Array.isArray(v)) return out;
   const rows = Object.entries(v)
     .filter(([, n]) => typeof n === "number" && Number.isFinite(n))

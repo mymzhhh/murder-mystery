@@ -382,7 +382,11 @@ async function voteLLM(k, candidates) {
     cleaned = cleaned.substring(start, end + 1);
     const parsed = JSON.parse(cleaned);
     const target = parsed && parsed.target;
-    return candidates.includes(target) ? target : null;
+    if (!candidates.includes(target)) return null;
+    // 理由一并带回去（2026-10-22 用户要求）：测试房间/测试报告要能解释"为什么投这个人"。
+    // 以前这里只 return target，把模型给的 reason 丢掉了 —— 于是报告只能看到"谁投了谁"。
+    const reason = String((parsed && parsed.reason) || "").trim();
+    return { target, reason: reason || "（模型未给出理由）" };
   } catch (e) { return null; }
 }
 

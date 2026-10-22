@@ -136,12 +136,14 @@ async function finishTestRun(roomCode, reason, io) {
   if (meta.reportId) return meta.reportId;
 
   const room = await getRoom(roomCode).catch(() => null);
-  const [clues, votes, players, turns, errors] = await Promise.all([
+  const [clues, votes, players, turns, errors, voteReasons] = await Promise.all([
     getClues(roomCode).catch(() => []),
     getVotes(roomCode).catch(() => ({})),
     getPlayers(roomCode).catch(() => []),
     readTurns(roomCode),
     readErrors(roomCode),
+    // 投票理由（2026-10-22 用户要求）：报告里要能回答"每个 AI 为什么投给这个人"
+    (require("../game/game-manager").getVoteReasons(roomCode) || Promise.resolve({})).catch(() => ({})),
   ]);
   const aiNames = (players || []).filter(p => p.isAI && p.characterName).map(p => p.characterName);
   // playerId → 角色名：报告里的票型要按角色名显示（ai_E7Y3TK_何秀云 这种内部 id 对管理员没有意义）
@@ -162,6 +164,7 @@ async function finishTestRun(roomCode, reason, io) {
     errors,
     votes: votes || {},
     voters,
+    voteReasons,
     murdererName: (room && room.murdererName) || "",
     truthRevealed: !!(room && /truth_reveal|finished/.test(room.phase || "")),
     reason,
