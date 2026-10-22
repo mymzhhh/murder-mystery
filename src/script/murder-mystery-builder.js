@@ -1947,6 +1947,23 @@ async function buildMurderMystery(userInput, onProgress, config) {
   try {
     await bibleEnforce.ensureBibleExtras(bibleDeps, outline, onProgress);
   } catch (e) { console.warn("[builder] 权威表补齐异常（不阻塞）:", e.message); }
+  // ===== ② 死者身亡时刻推断（2026-10-20）=====
+  // 实测《回春堂蜜影》victim.deathTime 为 undefined →「死者死后不得再活动」这层保护**静默失效**。
+  // 这里从时间线/真相里确定性推断；唯一候选才写回，多候选不动。
+  try {
+    const { inferVictimDeathTime } = require("./outline-fixes");
+    const inf = inferVictimDeathTime(outline);
+    if (inf.deathTime) {
+      if (!(outline.victim && outline.victim.deathTime)) {
+        outline.victim = { ...(outline.victim || {}), deathTime: inf.deathTime };
+        console.warn(`[builder] 死者身亡时刻推断为 ${inf.deathTime}（来源：${inf.source}）`);
+        if (onProgress) onProgress("outline", `死者身亡时刻缺失，已按时间线推断为 ${inf.deathTime}`);
+      }
+    } else if (inf.source === "ambiguous") {
+      console.warn(`[builder] 死者身亡时刻有多个候选（${inf.candidates.join("、")}），不猜测`);
+      if (onProgress) onProgress("outline", `⚠ 死者身亡时刻有 ${inf.candidates.length} 个候选（${inf.candidates.join("、")}），未写回 ——「死者死后不得再活动」校验会失效`);
+    }
+  } catch (e) { console.warn("[builder] 身亡时刻推断跳过:", e.message); }
   let bible = sb.buildBible(outline);
   // ===== 权威表矛盾的确定性修复（2026-10-20）=====
   // 为什么在自检之前：自检原本只报警不修，矛盾会原样传进 4 个角色本与 DM 手册，
@@ -2629,7 +2646,33 @@ async function buildMurderMystery(userInput, onProgress, config) {
         const { checkRoundPurpose } = require("./difficulty-checks");
         rp = checkRoundPurpose({ clues: clueObjs, characters: chars, murderer: murdererName });
       } catch (e) { console.warn("[builder] 轮次分工校验异常:", e.message); }
-      const allIssues = [...dc.issues, ...rp.issues];
+      // ① 隐藏线索父子成对（2026-10-20）：实测出过「父 1 条、子 0 条」，
+      // 那层深入调查内容玩家永远搜不到，而流程只是提示、不进修订队列。
+      let hp = { ok: true, issues: [], stats: {} };
+      try {
+        const { checkHiddenCluePairs } = require("./outline-fixes");
+        hp = checkHiddenCluePairs({ clues: clueObjs });
+      } catch (e) { console.warn("[builder] 隐藏线索校验异常:", e.message); }
+      // ③ 关系网有杀机但第一轮没写线索 → 确定性补一条证言类线索
+      // （实测《回春堂蜜影》小栓：关系里写着"打碎老山参要被送官"，第一轮却没他的杀机线索）
+      let addedMotive = [];
+      try {
+        const missingMotive = Object.entries((rp.stats && rp.stats.motivePerSuspect) || {})
+          .filter(([, v]) => !v).map(([n]) => n);
+        if (missingMotive.length && report.clues) {
+          const { appendMotiveClues } = require("./outline-fixes");
+          const rels = (report.outline && report.outline.relations) || [];
+          const fixed = appendMotiveClues(report.clues, { missing: missingMotive, relations: rels });
+          if (fixed.added.length) {
+            report.clues = fixed.text;
+            addedMotive = fixed.added;
+            report.motiveCluesAdded = fixed.added;
+            console.warn(`[builder] 为 ${fixed.added.map((a) => a.for).join("、")} 补了 ${fixed.added.length} 条第一轮杀机线索`);
+            if (onProgress) onProgress("clues", `为 ${fixed.added.map((a) => a.for).join("、")} 自动补了第一轮杀机线索（源自关系网）`);
+          }
+        }
+      } catch (e) { console.warn("[builder] 补杀机线索跳过:", e.message); }
+      const allIssues = [...dc.issues, ...rp.issues, ...hp.issues];
       report.difficulty = { issues: allIssues, stats: dc.stats, roundStats: rp.stats };
       if (allIssues.length) {
         report.crossCheck = report.crossCheck || { issues: [] };

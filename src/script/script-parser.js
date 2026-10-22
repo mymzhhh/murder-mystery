@@ -629,7 +629,10 @@ function parseClueSection(text, prefix, roundNum) {
         || /发现隐藏线索/.test(whole)) {
         clue.diggable = true;
       }
-      const behind = whole.match(/（\s*通过深入调查\s*([A-CM]\d{1,3})/);
+      // 括号**是可选的**：实测《回春堂蜜影》写成「通过深入调查B13，残留粉末…」（没有括号），
+      // 旧正则要求前面必须有全角「（」，于是子线索没被认出来 ——
+      // 它既没进隐藏机制，又落进了普通搜证池（等于把答案直接摆在明面上）。
+      const behind = whole.match(/[（(]?\s*通过深入调查\s*[:：]?\s*([A-CM]\d{1,3})/);
       if (behind) clue.hiddenBehind = behind[1];
       // 只要真的有隐藏内容可挖，就一定标成可挖掘 —— 否则前端不会显示「深入调查」按钮，
       // 玩家永远拿不到那条隐藏线索（旧格式 `- 隐藏线索：` 走的就是这条路）。
