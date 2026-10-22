@@ -625,15 +625,17 @@ function parseClueSection(text, prefix, roundNum) {
     // 平时不在搜证池里，只有对父线索做「深入调查」才拿到。
     {
       const whole = `${clue.content || ""}`;
-      if (/（\s*发现隐藏线索\s*[，,]?\s*可深入调查\s*）/.test(whole)
-        || /发现隐藏线索/.test(whole)) {
+      // 统一走 hidden-clue-re（2026-10-20：同一判定散落 4 处写法不一致，出过剧透事故）
+      // ⚠️ 必须先声明再用：写成"先用后声明"会触发 TDZ，整个解析直接抛错、返回 0 条线索。
+      const hc = require("./hidden-clue-re");
+      // 父线索：带"可深入调查"标记、且自己不是别人的子线索
+      if (hc.isParentText(whole) && hc.parentIdOf(whole) === "") {
         clue.diggable = true;
       }
-      // 括号**是可选的**：实测《回春堂蜜影》写成「通过深入调查B13，残留粉末…」（没有括号），
-      // 旧正则要求前面必须有全角「（」，于是子线索没被认出来 ——
-      // 它既没进隐藏机制，又落进了普通搜证池（等于把答案直接摆在明面上）。
-      const behind = whole.match(/[（(]?\s*通过深入调查\s*[:：]?\s*([A-CM]\d{1,3})/);
-      if (behind) clue.hiddenBehind = behind[1];
+      // 子线索：括号**是可选的** —— 实测《回春堂蜜影》写成「通过深入调查B13，残留粉末…」（无括号），
+      // 旧正则要求前面必须有全角「（」，于是子线索没被认出来，既丢了隐藏机制又混进普通搜证池（剧透）。
+      const behindId = hc.parentIdOf(whole);
+      if (behindId) clue.hiddenBehind = behindId;
       // 只要真的有隐藏内容可挖，就一定标成可挖掘 —— 否则前端不会显示「深入调查」按钮，
       // 玩家永远拿不到那条隐藏线索（旧格式 `- 隐藏线索：` 走的就是这条路）。
       if (clue.hiddenContent && String(clue.hiddenContent).trim()) clue.diggable = true;

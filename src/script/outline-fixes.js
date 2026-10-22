@@ -12,7 +12,7 @@
  */
 
 const HIDDEN_PARENT_RE = /发现隐藏线索|可深入调查|可深挖/;
-const HIDDEN_CHILD_RE = /通过深入调查\s*([A-Za-z]?\d+)/;
+const { CHILD_RE: HIDDEN_CHILD_RE, PARENT_RE: HIDDEN_PARENT_RE_SHARED } = require("./hidden-clue-re");
 
 function textOf(c) {
   return String((c && (c.content || c.text || c)) || "");

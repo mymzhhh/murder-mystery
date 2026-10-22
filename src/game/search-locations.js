@@ -156,7 +156,15 @@ function availableClues(clues, round, opts) {
     // 隐藏子线索（真本格式：正文标「通过深入调查 A6…获取」）不进普通搜证池 ——
     // 它只能通过「深入调查」父线索拿到，否则玩家不花额外行动点就白拿（344 共 45 条里 8 条是这种）。
     // 测试局例外：那里要一次性把全部线索摊开（用户明确要求），见 game/auto-search。
-    if (c.hiddenBehind && !includeHidden) return false;
+    //
+    // ⚠️ 2026-10-20 纵深防御：**不能只信 hiddenBehind 标记**。
+    // 实测《回春堂蜜影》的子线索写成「通过深入调查B13，…」（无括号），旧正则会漏标 hiddenBehind，
+    // 这条答案级线索就直接进了普通搜证池 —— 玩家一搜就拿到真相。
+    // 现在同时看正文：只要写了「通过深入调查 + 编号」，就一律按隐藏子线索处理。
+    if (!includeHidden) {
+      if (c.hiddenBehind) return false;
+      if (require("../script/hidden-clue-re").isChildText(String(c.content || ""))) return false;
+    }
     return !(c.foundBy && c.foundBy.length > 0);
   });
 }

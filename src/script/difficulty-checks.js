@@ -31,7 +31,7 @@ function isHiddenChild(clue) {
   const own = String((clue.content || clue.text || clue) || "");
   // 子线索的标记写在**它自己的正文**里：「（通过深入调查A1「…」获取）」
   // 反过来，若别的线索引用了本条的编号，说明本条是**父线索**，不能算隐藏子线索。
-  return /通过深入调查\s*[A-Za-z]?\d+/.test(own);
+  return require("./hidden-clue-re").isChildText(own);
 }
 
 /**

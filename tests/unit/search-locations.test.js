@@ -182,3 +182,25 @@ test("只有红鲱鱼时也能拿到（不会卡死）", () => {
   const onlyHerring = [{ id: "R1", location: "书房", round: "1", foundBy: [], isRedHerring: true }];
   assert.strictEqual(pickClueAtLocation(onlyHerring, "书房", 1).id, "R1");
 });
+
+// 2026-10-20 纵深防御：即使 hiddenBehind 漏标，子线索也不能进普通搜证池。
+// 事故：《回春堂蜜影》写成「通过深入调查B13，残留粉末…」（无括号），旧正则漏标 →
+// 这条答案级线索直接进搜证池，玩家一搜就拿到真相。
+test("正文写着「通过深入调查X」但 hiddenBehind 漏标 → 仍然不进搜证池", () => {
+  const clues = [
+    { id: "B13", content: "毛刷上有淡褐色粉末（发现隐藏线索，可深入调查）", round: 2, hiddenBehind: "" },
+    { id: "B14", content: "通过深入调查B13，残留粉末经检测为草乌汁痕迹", round: 2, hiddenBehind: "" },
+  ];
+  const pool = availableClues(clues, 2);
+  assert.deepStrictEqual(pool.map((c) => c.id), ["B13"], "只有父线索能搜，子线索不能");
+});
+
+test("测试局 includeHidden=true 时仍可全部给出", () => {
+  const clues = [{ id: "B14", content: "通过深入调查B13，草乌汁痕迹", round: 2, hiddenBehind: "" }];
+  assert.strictEqual(availableClues(clues, 2, { includeHidden: true }).length, 1);
+});
+
+test("普通线索（没提深入调查）不受影响", () => {
+  const clues = [{ id: "A1", content: "账册上记着一笔短款", round: 1, hiddenBehind: "" }];
+  assert.strictEqual(availableClues(clues, 1).length, 1);
+});
