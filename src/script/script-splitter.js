@@ -138,10 +138,14 @@ if (!rawScript) continue;
   }
 
   // 2. 线索（直接使用，无需LLM纯化）
+  // ⚠️ 必须净化：实测生成时会把「## 推理链说明」整段并进**最后一条线索**的正文，
+  // 那里面有动机链/手法链/时间链的完整推演 —— 玩家搜到这一条就等于拿到答案。
+  const { stripReasoningChain } = require("./clue-sanitize");
+  const clean = (c) => ({ ...c, content: stripReasoningChain(c.content) });
   const allClues = [
-    ...(parsed.clues?.round1 || []).map(c => ({ ...c, round: 1 })),
-    ...(parsed.clues?.round2 || []).map(c => ({ ...c, round: 2 })),
-    ...(parsed.clues?.round3 || []).map(c => ({ ...c, round: 3 })),
+    ...(parsed.clues?.round1 || []).map(c => ({ ...clean(c), round: 1 })),
+    ...(parsed.clues?.round2 || []).map(c => ({ ...clean(c), round: 2 })),
+    ...(parsed.clues?.round3 || []).map(c => ({ ...clean(c), round: 3 })),
   ];
 
   if (allClues.length > 0) {
