@@ -186,6 +186,71 @@ function bibleFactsToText(facts) {
 // ==================== 检查 1：权威表自洽 ====================
 
 /**
+ * DM 手册"上帝视角时间线"补主语（2026-10-20 用户反馈）。
+ *
+ * 现象（用户贴出来的原文）：
+ *   「19:30 拿着煤油灯进入密室，从内部锁上铜锁，开始盘点当物」
+ *   「19:30 坐到账桌前，开始核对当月的当物流水账」
+ *   —— 只有时刻和动作，**没有主语**。下游写角色本/线索时只能猜是谁做的，
+ *   这正是"同一时刻两人做同一件事""角色写出了不属于自己的动作"这类幻觉的来源。
+ *   交叉校验其实早就报过「上帝时间线缺主语：所有 35 条动作条目均未标注对应角色」，
+ *   但那只是报警，文本已经生成完了。
+ *
+ * 做法（确定性、保守）：
+ *   · 只处理"以 HH:MM 开头、且不含任何已知角色名"的行；
+ *   · 用**时刻**在权威时间线里找候选；若该时刻只有一个人有动作，直接补上；
+ *   · 若该时刻有多个候选，再用**地点**（行内出现的地点名）缩小；
+ *   · 仍无法唯一确定就**不动**（宁可留空，也不猜错主语）。
+ */
+function repairGodTimeline(dmText, bible) {
+  const text = String(dmText || "");
+  const events = (bible && bible.timeline) || [];
+  // 已知人名：角色表 + 死者 + **时间线里出现过的 actor**。
+  // 只认 bible.characters 是不够的 —— 有些调用方（单测、早期数据）没有 characters，
+  // 会退化成"不认识任何人"，于是给已经有主语的句子又加一遍主语。
+  const names = [...new Set([
+    ...((bible && bible.characters) || []),
+    ((bible && bible.victim && bible.victim.name) || ""),
+    ...events.map((e) => (e && e.actor) || ""),
+  ].filter(Boolean))];
+  if (!text || !events.length || !names.length) return { text, fixed: [] };
+
+  const fixes = [];
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const m = /^(\s*[-*]?\s*)(\d{1,2}:\d{2})(.*)$/.exec(line);
+    if (!m) continue;
+    const time = m[2].padStart(5, "0");
+    const rest = m[3] || "";
+    // 已经有角色名 → 不用补
+    if (names.some((n) => rest.includes(n))) continue;
+
+    // 该时刻在权威表里的候选
+    let cands = events.filter((e) => e.time === time && e.actor);
+    if (cands.length > 1) {
+      const byPlace = cands.filter((e) => e.place && rest.includes(e.place));
+      if (byPlace.length === 1) cands = byPlace;
+    }
+    // 地点也分不开时，用**动作文本重合**消歧（"核对当月的当物流水账" vs "核对流水账"）
+    if (cands.length > 1) {
+      const scored = cands
+        .map((e) => ({ e, s: sharedBigrams(String(e.doing || e.desc || ""), rest) }))
+        .sort((x, y) => y.s - x.s);
+      if (scored.length && scored[0].s >= 3 && (!scored[1] || scored[0].s > scored[1].s)) {
+        cands = [scored[0].e];
+      }
+    }
+    if (cands.length !== 1) continue;   // 无法唯一确定 → 不动
+
+    const actor = cands[0].actor;
+    lines[i] = `${m[1]}${time} ${actor}　${rest.trim()}`;
+    fixes.push({ line: i + 1, time, actor });
+  }
+  return { text: lines.join("\n"), fixed: fixes };
+}
+
+/**
  * 权威表自身的自洽性（跨表比对，不重复 validateObjectStates 已做的"状态描述含秘密动作"）。
  * @returns {{ok:boolean, issues:Array<{code:string, level:string, text:string}>}}
  */
@@ -196,6 +261,29 @@ function checkBibleSelfConsistency(bible) {
 
   if (!bible.caseDate) {
     add("no_case_date", "error", "大纲没有给出案发日期（caseDate）——它是全剧唯一时间基准，缺了各角色会各编一套日期");
+  }
+  // 时间线必须写明主语（2026-10-20 用户反馈：没有主语下游只能猜，幻觉就是从这来的）
+  // 名字可能被写成简称（"安格斯·莫罗" → "莫罗"），两种形式都算命中
+  const nameForms = (n) => {
+    const s = String(n || "").trim();
+    if (!s) return [];
+    const parts = s.split(/[·・.]/).map((x) => x.trim()).filter((x) => x.length >= 2);
+    return [...new Set([s, ...parts])];
+  };
+  const knownNames = [...new Set([...(bible.characters || []), (bible.victim && bible.victim.name) || ""].filter(Boolean))]
+    .flatMap(nameForms);
+  // 只有"字段没 actor + 正文里也没点名"才算真缺主语；
+  // 有些大纲把主语写进句子（"老哈罗兰在西侧书房被勒杀"），那种不算。
+  const noActor = (bible.timeline || []).filter((e) => {
+    if (e.actor) return false;
+    const body = String(e.doing || e.desc || "");
+    if (!body) return false;
+    return !knownNames.some((n) => body.includes(n));
+  });
+  if (noActor.length) {
+    add("timeline_no_actor", "error",
+      `权威时间线有 ${noActor.length} 条动作条目没有主语（例如「${String(noActor[0].time || "")} ${String(noActor[0].doing || noActor[0].desc || "").slice(0, 24)}」）——` +
+      `必须写明"谁"在做，否则各角色写自己的时间线时只能猜，容易写出不属于自己的动作`);
   }
   if (!bible.victim.name) {
     add("no_victim", "error", "大纲没有给出死者姓名");
@@ -1444,7 +1532,7 @@ module.exports = {
   repairPlaceholderResidues,
   findSelfPrefixEntries,
   buildBible, bibleFactsFor, bibleFactsToText,
-  checkBibleSelfConsistency, repairBibleContradictions, reconcileCharacterScript, findCrossCharacterConflicts, findObjectStateConflicts,
+  checkBibleSelfConsistency, repairBibleContradictions, repairGodTimeline, reconcileCharacterScript, findCrossCharacterConflicts, findObjectStateConflicts,
   checkCluePlan, checkKnowledgeBounds, checkTimelineHealth, timelineEntries,
   alignCluePlan, clueLocationKind, normalizeClueLocation, matchPlace, isSamePlace, extractTimeFromText,
   checkShichenConsistency, shichenToMinutes, correctShichenFor, fixShichenByClock, nearestClock, expandShichenSpan,

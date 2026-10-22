@@ -2518,6 +2518,22 @@ async function buildMurderMystery(userInput, onProgress, config) {
     }
   } catch (e) { console.warn("[builder] 非法时刻修正跳过:", e.message); }
 
+  // ===== DM 上帝时间线补主语（2026-10-20 用户反馈）=====
+  // 实测原文：「19:30 拿着煤油灯进入密室，从内部锁上铜锁」—— 只有时刻和动作，没有主语。
+  // 下游写角色本/线索时只能猜是谁做的，这正是"同刻两人同做一件事"这类幻觉的来源。
+  // 这里用权威时间线做确定性回填：时刻 →（必要时用地点/动作）唯一确定是谁才补，否则不动。
+  try {
+    if (report.dmGuide) {
+      const gt = sb.repairGodTimeline(report.dmGuide, bible);
+      if (gt.fixed.length) {
+        report.dmGuide = gt.text;
+        report.godTimelineRepair = gt.fixed;
+        console.warn(`[builder] DM 上帝时间线补主语 ${gt.fixed.length} 处`);
+        if (onProgress) onProgress("assemble", `DM 上帝时间线补主语 ${gt.fixed.length} 处（按权威时间线回填）`);
+      }
+    }
+  } catch (e) { console.warn("[builder] 上帝时间线补主语跳过:", e.message); }
+
   // 组装后是**交付文本**（DM 手册 + 线索 + 各角色本都在里面），时辰换算在这里再查一次：
   // 线索与 DM 复盘是角色本之外最容易写错的地方（实测 4 处真问题里有 2 处在线索正文）。
   try {

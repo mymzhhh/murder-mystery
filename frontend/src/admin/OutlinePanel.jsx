@@ -84,15 +84,25 @@ export default function OutlinePanel({ outline: o }) {
         </section>
       )}
 
-      {/* 关系网 */}
+      {/* 关系网 —— 每条要有"关系"和"具体冲突事实"，光写"旧识"没有用。
+          用户反馈：关系那块要写清楚，越清楚下游越不容易编。 */}
       {o.relations && o.relations.length > 0 && (
         <section className="outline-sec">
-          <div className="kicker" style={{ marginBottom: 8 }}><span style={{ flex: "0 0 auto" }}>人物关系网</span></div>
+          <div className="kicker" style={{ marginBottom: 8 }}>
+            <span style={{ flex: "0 0 auto" }}>人物关系网（关系 + 具体冲突）</span>
+            <span className="tag">{o.relations.length} 条</span>
+          </div>
           {(o.relations || []).map((r, i) => (
-            <div key={i} className="outline-row">
-              <strong>{r.a}</strong> <span className="text-muted">↔</span> <strong>{r.b}</strong>
-              <span className="text-dim">：{r.link || ""}</span>
-              {r.tension ? <span className="tag tag-warning" style={{ marginLeft: 8 }}>{r.tension}</span> : null}
+            <div key={i} className="outline-row" style={{ display: "block", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,.06)" }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                <strong>{r.a}</strong>
+                <span className="text-muted">↔</span>
+                <strong>{r.b}</strong>
+                <span className="text-dim" style={{ fontSize: 12 }}>{r.link || ""}</span>
+              </div>
+              <div className="text-xs" style={{ marginTop: 3, color: r.tension ? "var(--warning)" : "var(--text-dim)" }}>
+                冲突/杀机：{r.tension || "（未写明——下游只能自己编）"}
+              </div>
             </div>
           ))}
         </section>
@@ -115,14 +125,22 @@ export default function OutlinePanel({ outline: o }) {
         </section>
       )}
 
-      {/* 时间线骨架 */}
+      {/* 时间线骨架 —— 每条必须写明"谁、几点、在哪、做什么"。
+          2026-10-20 用户反馈：面板只渲染 time + desc，把 actor 丢了，
+          看到的是"19:30 拿着煤油灯进入密室"这种没有主语的句子 ——
+          大纲没有主语，下游写角色本时就只能猜，幻觉就是这么来的。 */}
       {o.timeline && o.timeline.length > 0 && (
         <section className="outline-sec">
-          <div className="kicker" style={{ marginBottom: 8 }}><span style={{ flex: "0 0 auto" }}>时间线骨架</span></div>
+          <div className="kicker" style={{ marginBottom: 8 }}>
+            <span style={{ flex: "0 0 auto" }}>时间线骨架（谁·几点·在哪·做什么）</span>
+            <span className="tag">{o.timeline.length} 条</span>
+          </div>
           {(o.timeline || []).map((t, i) => (
-            <div key={i} className="outline-row">
+            <div key={i} className="outline-row" style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
               <strong style={{ color: "var(--brass)", fontFamily: "var(--font-mono)", fontSize: 12 }}>{t.time}</strong>
-              <span style={{ marginLeft: 8 }}>{t.desc}</span>
+              <strong style={{ minWidth: 48 }}>{t.actor || "（缺主语）"}</strong>
+              {t.place ? <span className="text-muted" style={{ fontSize: 11 }}>📍{t.place}</span> : null}
+              <span style={{ flex: "1 1 320px" }}>{t.desc || t.doing || ""}</span>
             </div>
           ))}
         </section>
