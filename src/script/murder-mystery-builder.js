@@ -552,9 +552,26 @@ function buildObjectStateTable(outline) {
 function characterAnchors(outline, name) {
   const n = String(name || "").trim();
   if (!n) return [];
+  // 2026-10-22 修（用户实测《听雨书寓6月18日夜》"时间线对不上"）：
+  // 原实现只认"desc 里出现该角色名"的条目，于是权威表里
+  //   21:20 | 所有人 | 化妆间内 | 众人看到尸体
+  //   22:30 | 所有人 | 前台书场 | 众人集合，开始梳理线索
+  // 这类 **actor=所有人** 的条目从来不会成为任何角色的锚点 ——
+  // 结果苏晚晴的时间线停在 22:00，别人都有 22:30，读起来就是"她缺席了那场戏"。
+  // 现在：actor 是"所有人/全员/众人/大家/全体"的条目，对**每个**角色都是必覆盖锚点；
+  //       另外 actor 恰好是本人、或 who 数组里点了本人，也算。
+  const COLLECTIVE = /^(所有人|全员|众人|大家|全体|全场)$/;
   return ((outline && outline.timeline) || [])
-    .filter((r) => String((r && r.desc) || "").includes(n))
-    .map((r) => ({ time: String(r.time || "").trim(), desc: String(r.desc || "").trim() }));
+    .filter((r) => {
+      const actor = String((r && r.actor) || "").trim();
+      const desc = String((r && (r.desc || r.doing)) || "");
+      if (COLLECTIVE.test(actor)) return true;          // 全员事件 → 人人都要写
+      if (actor && actor === n) return true;            // 自己的动作
+      if (desc.includes(n)) return true;                // 正文提到我
+      if (Array.isArray(r && r.who) && r.who.includes(n)) return true;  // 在场名单点了我
+      return false;
+    })
+    .map((r) => ({ time: String(r.time || "").trim(), desc: String((r.desc || r.doing) || "").trim() }));
 }
 
 /**
@@ -666,7 +683,39 @@ function buildSharedFacts(outline, ch) {
     L.push(`- **你的【时间线】必须逐条覆盖下列 ${anchors.length} 条**（不是"参考"，是骨架）：时刻、地点、在场者照抄，行为可补细节，但**不得增删时刻、不得换地点、不得自行换算成别的时刻**。写完后自查一遍：少一条、或某条的时刻/地点与这里不同，都会在生成后被程序查出并要求你重写。`);
     for (const a of anchors) L.push(`  - ${a.time}　${a.desc}`);
   }
+  // 死者有伪装身份时，**同一本内必须统一称呼**（2026-10-22 用户实测《听雨书寓6月18日夜》）：
+  // 死者顾松亭对外伪装成伙计「阿庆」，但各角色本的时间线里混用两个名字
+  // （江砚 12 次真名、柳文昭 6 次化名、周阿贵 7 真 1 假混用）——
+  // 玩家读到"顾松亭"和"阿庆"会当成两个人，时间线自然"对不上"。
+  const alias = extractAliasOfVictim(outline);
+  if (alias) {
+    L.push(`- **对死者的称呼必须全文统一**：死者真名「${victimName}」，对外化名「${alias}」。` +
+      `你的剧本里只能用**其中一个**，不许混用（混用会让玩家以为是两个人）。` +
+      `若你的背景/秘密明确交代过你知道他的真实身份，用「${victimName}」；否则一律用「${alias}」。`);
+  }
   return L.join("\n");
+}
+
+/**
+ * 从大纲里抽死者的"对外化名"。
+ * 实测写法：「听雨书寓真班主，对外伪装为迎客伙计阿庆」→ 阿庆。
+ * 抽不出来就返回空（宁可不注入，也不要乱猜一个名字）。
+ */
+function extractAliasOfVictim(outline) {
+  const v = (outline && outline.victim) || {};
+  const identity = String(v.identity || v.alias || "").trim();
+  const realName = String(v.name || "").trim();
+  if (!identity) return "";
+  // 只有明说"对外/伪装/扮作/自称"时才认为存在化名，否则不要乱抽
+  if (!/对外|伪装|扮作|假称|自称|化名|代号/.test(identity)) return "";
+  const ROLE = "(?:伙计|掌柜|账房|小二|门房|学徒|杂役|仆役|下人|管家|朝奉|坐堂|琴师|宾客|客人|东家|老板|班主|掌柜的)";
+  // 形如「…对外伪装为迎客伙计阿庆」→ 取角色词后面的名字
+  const a = identity.match(new RegExp(ROLE + "([\\u4e00-\\u9fa5]{2,3})(?=[，,。；;、\\s]|$)"));
+  if (a && a[1] !== realName) return a[1];
+  // 形如「化名张三」「代号老七」
+  const b = identity.match(/(?:化名|代号|对外称[之为]?)([\u4e00-\u9fa5]{2,3})(?=的|[，,。；;\s]|$)/);
+  if (b && b[1] !== realName) return b[1];
+  return "";
 }
 
 /**
@@ -2214,6 +2263,35 @@ async function buildMurderMystery(userInput, onProgress, config) {
             onProgress("player_script", `⚠️ ${ch.name} 的剧本未出现其 ${anc.missing.length} 条权威公开行踪（已记录，未改动）`);
           }
         } catch (e) { /* 纯告警，失败不影响主流程 */ }
+        // 全员事件覆盖核对（2026-10-22）：权威表里 actor=「所有人」的事件（看尸体、集合梳理线索）
+        // 每个角色的时间线都必须出现，否则读起来就是"这场戏他缺席了"。
+        // 实测《听雨书寓6月18日夜》：苏晚晴停在 22:00、陈阿婆缺 21:20/22:30，而别人都有。
+        try {
+          const COLLECTIVE = /^(所有人|全员|众人|大家|全体|全场)$/;
+          const collective = ((report.outline && report.outline.timeline) || [])
+            .filter((r) => COLLECTIVE.test(String((r && r.actor) || "").trim()))
+            .map((r) => String(r.time || "").trim())
+            .filter(Boolean);
+          const missing = collective.filter((t) => !new RegExp(`(^|[^0-9])${t.replace(":", "[:：]")}([^0-9]|$)`).test(withDates));
+          if (missing.length) {
+            console.warn(`[builder] ${ch.name} 缺少 ${missing.length} 条全员事件（${missing.join(" ")}）`);
+            onProgress("player_script", `⚠️ ${ch.name} 的时间线缺少全员事件 ${missing.join("、")}（与权威表对不上）`);
+          }
+        } catch (e) { /* 纯告警 */ }
+        // 死者化名混用核对（2026-10-22）：同一本里既写真名又写化名，玩家会当成两个人。
+        try {
+          const alias = extractAliasOfVictim(report.outline);
+          const real = String((report.outline && report.outline.victim && report.outline.victim.name) || "");
+          if (alias && real) {
+            const tlText = (withDates.match(/^-\s*\*\*\d{1,2}月\d{1,2}日[^\n]*/gm) || []).join("\n");
+            const hasReal = tlText.includes(real);
+            const hasAlias = tlText.includes(alias);
+            if (hasReal && hasAlias) {
+              console.warn(`[builder] ${ch.name} 的时间线混用了死者真名「${real}」与化名「${alias}」`);
+              onProgress("player_script", `⚠️ ${ch.name} 的时间线混用「${real}」和「${alias}」——玩家会以为是两个人`);
+            }
+          }
+        } catch (e) { /* 纯告警 */ }
       }
     }
   }
