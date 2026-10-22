@@ -14,13 +14,19 @@ export default function OutlinePanel({ outline: o }) {
     name: n.name, tag: "NPC", clazz: "tag-npc", meta: (n.identity || "") + (n.isMurderer ? " 🔪" : ""),
   }));
 
+  // 人数兜底：历史产物里的 outline 不一定带 playerCount/npcCount 字段（实测《临河客栈桐油案》
+  // 的 artifacts.outline 里这两个字段是 undefined，面板只能显示"?"）。
+  // 数组是有的，从数组长度兜底，免得排查时看到一个无意义的问号。
+  const playerCount = o.playerCount != null ? o.playerCount : ((o.players || []).length || "?");
+  const npcCount = o.npcCount != null ? o.npcCount : ((o.npcs || []).length || 0);
+
   return (
     <div className="panel">
       <div className="panel-head">
         <strong>🎭 剧本大纲</strong>
         <span className="tag tag-admin">{o.isPVE ? "PVE" : "PVP"}</span>
-        <span className="tag">{o.playerCount || "?"} 玩家</span>
-        <span className="tag tag-npc">{o.npcCount || 0} NPC</span>
+        <span className="tag">{playerCount} 玩家</span>
+        <span className="tag tag-npc">{npcCount} NPC</span>
       </div>
 
       {/* 标题 + 核心诡计 */}

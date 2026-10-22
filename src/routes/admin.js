@@ -618,12 +618,29 @@ function setupAdminRoutes(app, authMiddleware, adminMiddleware, io) {
       }
 
       if (!meta || !meta.title) return res.status(404).json({ error: "切分数据不存在" });
+      // 兜底：**未切分**的生成稿，大纲只存在会话产物里（split meta 里还没有）。
+      // 用户要"生成完就能看到原始大纲"，所以这里补一次会话产物读取。
+      if (!artifacts || !artifacts.outline) {
+        try {
+          const { getSessionArtifacts } = require("../core/history-manager");
+          const sess = await getSessionArtifacts(req.params.id);
+          if (sess && sess.outline) {
+            artifacts = sess;
+            console.log(`[admin] 大纲来自会话产物（该剧本尚未切分）：${req.params.id}`);
+          }
+        } catch (e) { console.warn("[admin] 读取会话产物失败（忽略）:", e.message); }
+      }
       // artifacts 单独返回：Redis 路径下 meta 是原始 hash，里面那串 JSON 若跟着展开
       // 会在响应里出现两份（一份字符串、一份对象），白白把响应撑大一倍。
       const { artifacts: _rawArtifacts, ...metaRest } = meta;
+      // 来源标记：**外部导入的剧本没有生成大纲**，详情页要据此显示"无大纲"而不是一块空面板。
+      // 判定口径：有 artifacts 且含 outline → 生成稿；否则按"非生成稿"处理（含早期数据）。
+      const hasOutline = !!(artifacts && artifacts.outline);
+      const source = hasOutline ? "generated" : "external";
       res.json({
         meta: { ...metaRest, characterNames: JSON.parse(meta.characterNames || "[]") },
         characters, clues, dm: dmData || {}, artifacts,
+        source, hasOutline,
       });
     } catch (e) { res.status(500).json({ error: e.message }); }
   });

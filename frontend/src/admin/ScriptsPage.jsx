@@ -3,6 +3,7 @@ import { api, apiJson } from "../lib/api.js";
 import { readSSE } from "../lib/sse.js";
 import { getToken } from "../lib/api.js";
 import TrickPanel from "./TrickPanel.jsx";
+import OutlinePanel from "./OutlinePanel.jsx";
 import { ScriptBody } from "../components/ScriptBody.jsx";
 
 // 体检结论的人话映射。
@@ -177,6 +178,8 @@ export default function ScriptsPage() {
                 </div>
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button className="btn btn-outline btn-xs" onClick={() => doView(s.sessionId || s.id)}>查看</button>
+                  {/* 大纲/产物：生成完就能查"当初是按什么大纲写的"；外部导入的会显示明确提示 */}
+                  <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>大纲/产物</button>
                   <button className="btn btn-outline btn-xs" onClick={() => doSplitView(s.sessionId || s.id)}>切分预览</button>
                   <button className="btn btn-success btn-xs" disabled={busy} onClick={() => doReviewSplit(s.sessionId || s.id)}>评测并切分</button>
                   <button className="btn btn-outline btn-xs" onClick={() => doSplit(s.sessionId || s.id)}>仅切分</button>
@@ -207,6 +210,46 @@ export default function ScriptsPage() {
       {/* 切分预览 */}
       {splitView && (
         <Modal title="切分数据" onClose={() => setSplitView(null)}>
+          {/* ===== 生成大纲（原始结构）=====
+              用户需求：生成完之后要能看到"当初是按什么大纲写的"，方便排查问题。
+              外部导入的剧本没有这一步，显示明确提示而不是空面板。 */}
+          <section className="outline-sec" style={{ marginBottom: 16 }}>
+            <div className="kicker" style={{ marginBottom: 8 }}>
+              <span style={{ flex: "0 0 auto" }}>生成大纲（原始结构）</span>
+              {/* 只有真的有生成大纲时才显示落盘时间；外部剧本显示时间会误导 */}
+              {splitView.hasOutline ? (
+                <span className="tag tag-admin">
+                  {splitView.artifacts && splitView.artifacts.savedAt
+                    ? new Date(splitView.artifacts.savedAt).toLocaleString()
+                    : "生成时落盘"}
+                </span>
+              ) : (
+                <span className="tag">外部导入</span>
+              )}
+            </div>
+            {splitView.hasOutline ? (
+              <>
+                <OutlinePanel outline={splitView.artifacts.outline} />
+                {/* 排查问题常常要直接把结构贴给别人看 —— 给一份可复制的原始 JSON */}
+                <details style={{ marginTop: 10 }}>
+                  <summary className="text-xs text-muted" style={{ cursor: "pointer" }}>
+                    展开原始 JSON（复制给他人排查用）
+                  </summary>
+                  <pre style={{ maxHeight: 320, overflow: "auto", fontSize: 11, lineHeight: 1.5, marginTop: 8, padding: 10, background: "var(--bg-inset, rgba(0,0,0,.18))", borderRadius: 6 }}>
+                    {JSON.stringify(splitView.artifacts.outline, null, 2)}
+                  </pre>
+                </details>
+              </>
+            ) : (
+              <div className="alert alert-info">
+                <span className="alert-body">
+                  该剧本没有生成大纲：它是<strong>外部导入</strong>的，或属于早期生成、未留存中间产物。
+                  外部导入的剧本本来就没有「生成大纲」这一步，属正常情况。
+                </span>
+              </div>
+            )}
+          </section>
+
           {/* 推理链 + 交叉校验问题：这稿的诡计怎么设计的、弱在哪。
               此前它们只在生成进程的内存里——刷新即失，事后无从复核（见"改动 4 的另一半"）。 */}
           {splitView.artifacts?.trickDesign && (
